@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FocusMed.Data/FocusMed.Data.csproj" />
+    <Project Path="src/FocusMed.Dicom/FocusMed.Dicom.csproj" />
+    <Project Path="src/FocusMed.Worker/FocusMed.Worker.csproj" />
+  </Folder>
+</Solution>
