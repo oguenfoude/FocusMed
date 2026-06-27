@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using FellowOakDicom;
 using FocusMed.Data;
 using FocusMed.Data.Entities;
@@ -13,32 +12,52 @@ public class DicomUpsertService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<DicomUpsertService> _logger;
     private readonly string _archivePath;
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
+    private readonly string _imagesPath;
 
     public DicomUpsertService(IServiceScopeFactory scopeFactory, ILogger<DicomUpsertService> logger, IConfiguration configuration)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
         _archivePath = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("ArchivePath") ?? "%FOCUSMED_DATA%/archive");
+        _imagesPath = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("ImagesPath") ?? "%FOCUSMED_DATA%/images");
         Directory.CreateDirectory(_archivePath);
+        Directory.CreateDirectory(_imagesPath);
     }
 
     public async Task ProcessDicomFileAsync(DicomFile dicomFile)
     {
         var dataset = dicomFile.Dataset;
-        var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
-        var seriesUid = dataset.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty);
-        var sopUid = dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
-        var patientId = dataset.GetSingleValueOrDefault(DicomTag.PatientID, "UNKNOWN");
-
-        if (string.IsNullOrEmpty(studyUid) || string.IsNullOrEmpty(seriesUid) || string.IsNullOrEmpty(sopUid))
+        var patientId = dataset.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
+        if (string.IsNullOrWhiteSpace(patientId))
         {
-            _logger.LogError("DICOM file is missing essential UIDs. Study: {StudyUid}, Series: {SeriesUid}, SOP: {SopUid}", studyUid, seriesUid, sopUid);
-            return;
+            patientId = $"UNKNOWN_{Guid.NewGuid():N}";
+            dataset.AddOrUpdate(DicomTag.PatientID, patientId);
+            _logger.LogWarning("DICOM file missing PatientID. Synthesized fallback: {PatientId}", patientId);
         }
 
-        var semaphore = _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
-        await semaphore.WaitAsync();
+        var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
+        if (string.IsNullOrWhiteSpace(studyUid))
+        {
+            studyUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+            dataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
+            _logger.LogWarning("DICOM file missing StudyInstanceUID. Synthesized fallback: {StudyUid}", studyUid);
+        }
+
+        var seriesUid = dataset.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty);
+        if (string.IsNullOrWhiteSpace(seriesUid))
+        {
+            seriesUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+            dataset.AddOrUpdate(DicomTag.SeriesInstanceUID, seriesUid);
+            _logger.LogWarning("DICOM file missing SeriesInstanceUID. Synthesized fallback: {SeriesUid}", seriesUid);
+        }
+
+        var sopUid = dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
+        if (string.IsNullOrWhiteSpace(sopUid))
+        {
+            sopUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+            dataset.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
+            _logger.LogWarning("DICOM file missing SOPInstanceUID. Synthesized fallback: {SopUid}", sopUid);
+        }
 
         try
         {
@@ -125,16 +144,46 @@ public class DicomUpsertService
             };
             db.DicomImages.Add(dicomImage);
 
+            try
+            {
+                if (dataset.Contains(DicomTag.PixelData))
+                {
+                    var imagesDir = Path.Combine(_imagesPath, studyHash, seriesUid);
+                    Directory.CreateDirectory(imagesDir);
+
+                    var image = new FellowOakDicom.Imaging.DicomImage(dataset);
+                    for (int frameIndex = 0; frameIndex < image.NumberOfFrames; frameIndex++)
+                    {
+                        var pngPath = Path.Combine(imagesDir, $"{sopUid}_{frameIndex:D4}.png");
+
+                        using var renderedImage = image.RenderImage(frameIndex);
+                        using var sharpImage = renderedImage.As<SixLabors.ImageSharp.Image>();
+                        await SixLabors.ImageSharp.ImageExtensions.SaveAsPngAsync(sharpImage, pngPath);
+
+                        if (frameIndex == 0)
+                        {
+                            dicomImage.PngPath = pngPath;
+                        }
+
+                        dicomImage.Frames.Add(new DicomFrame
+                        {
+                            FrameIndex = frameIndex,
+                            PngPath = pngPath
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to extract PNG for SOP {SopUid}. DICOM will still be saved.", sopUid);
+            }
+
             await db.SaveChangesAsync();
             _logger.LogInformation("Successfully ingested image {SopUid} for study {StudyUid}", sopUid, studyUid);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error processing DICOM file with SOP {SopUid}", sopUid);
-        }
-        finally
-        {
-            semaphore.Release();
         }
     }
 

@@ -9,10 +9,14 @@ public class FocusMedDbContext : DbContext
     {
     }
 
-    public DbSet<Patient> Patients => Set<Patient>();
-    public DbSet<Study> Studies => Set<Study>();
-    public DbSet<Series> Series => Set<Series>();
-    public DbSet<DicomImage> DicomImages => Set<DicomImage>();
+    public DbSet<Patient> Patients { get; set; } = null!;
+    public DbSet<Study> Studies { get; set; } = null!;
+    public DbSet<Series> Series { get; set; } = null!;
+    public DbSet<DicomImage> DicomImages { get; set; } = null!;
+    public DbSet<DicomFrame> DicomFrames { get; set; } = null!;
+    public DbSet<PrintJob> PrintJobs { get; set; } = null!;
+    public DbSet<FilmBox> FilmBoxes { get; set; } = null!;
+    public DbSet<PrintImageBox> PrintImageBoxes { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -38,5 +42,27 @@ public class FocusMedDbContext : DbContext
 
         modelBuilder.Entity<Patient>()
             .HasIndex(p => p.PatientId);
+
+        modelBuilder.Entity<PrintJob>()
+            .HasIndex(p => p.SopInstanceUid)
+            .IsUnique();
+
+        modelBuilder.Entity<FilmBox>()
+            .HasIndex(f => f.SopInstanceUid)
+            .IsUnique();
+
+        modelBuilder.Entity<PrintImageBox>()
+            .HasIndex(i => i.SopInstanceUid)
+            .IsUnique();
+
+        modelBuilder.Entity<FilmBox>()
+            .HasOne(f => f.PrintJob)
+            .WithMany(p => p.FilmBoxes)
+            .HasForeignKey(f => f.PrintJobId);
+
+        modelBuilder.Entity<PrintImageBox>()
+            .HasOne(i => i.FilmBox)
+            .WithMany(f => f.ImageBoxes)
+            .HasForeignKey(i => i.FilmBoxId);
     }
 }

@@ -1,5 +1,3 @@
-using FocusMed.Data.Interceptors;
-using FocusMed.Data.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -7,21 +5,14 @@ namespace FocusMed.Data;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddFocusMedData(this IServiceCollection services, string dbPath)
+    public static IServiceCollection AddFocusMedData(this IServiceCollection services, string connectionString)
     {
-        services.AddScoped<SqliteWalInterceptor>();
-
-        services.AddDbContext<FocusMedDbContext>((sp, options) =>
+        services.AddDbContext<FocusMedDbContext>((_, options) =>
         {
-            var interceptor = sp.GetRequiredService<SqliteWalInterceptor>();
-            options.UseSqlite($"Data Source={dbPath}")
-                   .AddInterceptors(interceptor);
+            options.UseNpgsql(connectionString);
         });
 
-        services.AddScoped<IPatientRepository, PatientRepository>();
-        services.AddScoped<IStudyRepository, StudyRepository>();
-        services.AddScoped<ISeriesRepository, SeriesRepository>();
-        services.AddScoped<IDicomImageRepository, DicomImageRepository>();
+        services.AddSingleton<Messaging.IStudyEventBus, Messaging.InMemoryStudyEventBus>();
 
         return services;
     }

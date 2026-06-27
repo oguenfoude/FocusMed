@@ -37,7 +37,7 @@ public class DicomListenerService : BackgroundService
             }
 
             _logger.LogInformation("DICOM listener successfully starting on {BindAddress}:{Port} as AE Title '{AETitle}'", _bindAddress, _port, _aeTitle);
-            _server = _serverFactory.Create<CStoreScp>(_bindAddress, _port);
+            _server = _serverFactory.Create<FocusMedScp>(_bindAddress, _port);
         }
         catch (Exception ex)
         {

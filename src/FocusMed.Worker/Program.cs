@@ -27,16 +27,17 @@ try
         .UseSerilog()
         .ConfigureServices((hostContext, services) =>
         {
-            var dbPathRaw = hostContext.Configuration.GetValue<string>("DatabasePath") ?? "%FOCUSMED_DATA%/db/focusmed.db";
-            var dbPath = Environment.ExpandEnvironmentVariables(dbPathRaw);
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            
+            var connectionString = hostContext.Configuration.GetValue<string>("ConnectionString")
+                ?? "Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=postgres";
+
             // Register Data & Dicom logic
-            services.AddFocusMedData(dbPath);
+            services.AddFocusMedData(connectionString);
             services.AddFocusMedDicom();
 
             // Register fo-dicom DI integration
-            services.AddFellowOakDicom();
+            services.AddFellowOakDicom()
+                .AddImageManager<FellowOakDicom.Imaging.ImageSharpImageManager>()
+                .AddTranscoderManager<FellowOakDicom.Imaging.NativeCodec.NativeTranscoderManager>();
             
             services.AddHostedService<DicomListenerService>();
         })
@@ -44,6 +45,13 @@ try
 
     // Initialize fo-dicom to use our DI container
     DicomSetupBuilder.UseServiceProvider(host.Services);
+
+    using (var scope = host.Services.CreateScope())
+    {
+        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+        Microsoft.EntityFrameworkCore.RelationalDatabaseFacadeExtensions.Migrate(db.Database);
+        Log.Information("Database migrations applied successfully.");
+    }
 
     await host.RunAsync();
 }

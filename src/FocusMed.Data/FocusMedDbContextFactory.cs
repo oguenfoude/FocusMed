@@ -8,9 +8,7 @@ public class FocusMedDbContextFactory : IDesignTimeDbContextFactory<FocusMedDbCo
     public FocusMedDbContext CreateDbContext(string[] args)
     {
         var optionsBuilder = new DbContextOptionsBuilder<FocusMedDbContext>();
-        var dbPath = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "data", "db", "focusmed.db");
-        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        optionsBuilder.UseSqlite($"Data Source={dbPath}");
+        optionsBuilder.UseNpgsql("Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=postgres");
 
         return new FocusMedDbContext(optionsBuilder.Options);
     }
