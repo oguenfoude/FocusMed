@@ -3,9 +3,11 @@ using FellowOakDicom;
 using FellowOakDicom.Network;
 using FocusMed.Data;
 using FocusMed.Data.Entities;
+using FocusMed.Dicom.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace FocusMed.Dicom;
 
@@ -20,6 +22,23 @@ public class FocusMedScp : DicomService,
     private readonly DicomUpsertService _upsertService;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger _logger;
+    private readonly IOptions<DicomNetworkingOptions> _networkingOptions;
+    private readonly DicomTransferSyntax[] _acceptedTransferSyntaxes;
+    private DateTime _associationStartTime;
+
+    private static readonly Dictionary<string, DicomTransferSyntax> TransferSyntaxMap = new()
+    {
+        ["ImplicitVRLittleEndian"] = DicomTransferSyntax.ImplicitVRLittleEndian,
+        ["ExplicitVRLittleEndian"] = DicomTransferSyntax.ExplicitVRLittleEndian,
+        ["JPEGLSLossless"] = DicomTransferSyntax.JPEGLSLossless,
+        ["JPEG2000Lossless"] = DicomTransferSyntax.JPEG2000Lossless,
+        ["RLELossless"] = DicomTransferSyntax.RLELossless,
+        ["JPEGProcess1"] = DicomTransferSyntax.JPEGProcess1,
+        ["JPEGProcess2_4"] = DicomTransferSyntax.JPEGProcess2_4,
+        ["JPEGProcess14"] = DicomTransferSyntax.JPEGProcess14,
+        ["MPEG2"] = DicomTransferSyntax.MPEG2,
+        ["MPEG4AVCH264HighProfileLevel41"] = DicomTransferSyntax.MPEG4AVCH264HighProfileLevel41,
+    };
 
     public FocusMedScp(
         INetworkStream stream,
@@ -27,16 +46,46 @@ public class FocusMedScp : DicomService,
         ILogger logger,
         DicomServiceDependencies dependencies,
         DicomUpsertService upsertService,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        IOptions<DicomNetworkingOptions> networkingOptions)
         : base(stream, fallbackEncoding, logger, dependencies)
     {
         _upsertService = upsertService;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _networkingOptions = networkingOptions;
+
+        _acceptedTransferSyntaxes = _networkingOptions.Value.SupportedTransferSyntaxes
+            .Select(name => TransferSyntaxMap.TryGetValue(name, out var ts) ? ts : null)
+            .Where(ts => ts != null)
+            .ToArray()!;
     }
 
-    public Task OnReceiveAssociationRequestAsync(DicomAssociation association)
+    public async Task OnReceiveAssociationRequestAsync(DicomAssociation association)
     {
+        _associationStartTime = DateTime.UtcNow;
+        _logger.LogInformation("Association request received from {CallingAET} to {CalledAET}", association.CallingAE, association.CalledAE);
+
+        if (_networkingOptions.Value.EnforceAeWhitelist)
+        {
+            var callingAe = association.CallingAE;
+            var remoteIp = association.RemoteHost;
+
+            var allowed = _networkingOptions.Value.AllowedCallingAETitles
+                .Any(ae => ae.AETitle == callingAe && ae.IPAddress == remoteIp);
+
+            if (!allowed)
+            {
+                _logger.LogWarning("Association REJECTED - {CallingAET} from {RemoteIp} not on whitelist", callingAe, remoteIp);
+                await WriteAuditEntryAsync(association, remoteIp, AssociationOutcome.Rejected);
+                SendAssociationRejectAsync(
+                    DicomRejectResult.Permanent,
+                    DicomRejectSource.ServiceUser,
+                    DicomRejectReason.NoReasonGiven);
+                return;
+            }
+        }
+
         foreach (var pc in association.PresentationContexts)
         {
             var syntax = pc.AbstractSyntax;
@@ -48,22 +97,68 @@ public class FocusMedScp : DicomService,
                 || syntax == DicomUID.StudyRootQueryRetrieveInformationModelFind
                 || syntax == DicomUID.StudyRootQueryRetrieveInformationModelMove
                 || syntax == DicomUID.BasicGrayscalePrintManagementMeta
-                || syntax == DicomUID.BasicColorPrintManagementMeta)
+                || syntax == DicomUID.BasicColorPrintManagementMeta
+                || syntax == DicomUID.ModalityWorklistInformationModelFind
+                || syntax == DicomUID.Parse("1.2.840.10008.1.20.1"))
             {
-                pc.AcceptTransferSyntaxes(pc.GetTransferSyntaxes().ToArray());
+                var requestedSyntaxes = pc.GetTransferSyntaxes();
+                var syntaxesToAccept = requestedSyntaxes.Intersect(_acceptedTransferSyntaxes).ToArray();
+
+                if (syntaxesToAccept.Any())
+                {
+                    pc.AcceptTransferSyntaxes(syntaxesToAccept);
+                    _logger.LogInformation("Accepted Abstract Syntax: {AbstractSyntax} with Transfer Syntaxes: {TransferSyntaxes}", syntax.Name, string.Join(", ", syntaxesToAccept.Select(s => s.UID.Name)));
+                }
+                else
+                {
+                    pc.SetResult(DicomPresentationContextResult.RejectTransferSyntaxesNotSupported);
+                    _logger.LogWarning("Rejected Abstract Syntax: {AbstractSyntax} due to unsupported Transfer Syntaxes.", syntax.Name);
+                }
             }
             else
             {
                 pc.SetResult(DicomPresentationContextResult.RejectAbstractSyntaxNotSupported);
+                _logger.LogWarning("Rejected Abstract Syntax: {AbstractSyntax} (Not Supported)", syntax.Name);
             }
         }
 
-        return SendAssociationAcceptAsync(association);
+        var remoteIpForAudit = association.RemoteHost;
+        await WriteAuditEntryAsync(association, remoteIpForAudit, AssociationOutcome.Success);
+        await SendAssociationAcceptAsync(association);
     }
 
     public Task OnReceiveAssociationReleaseRequestAsync()
     {
+        var duration = (DateTime.UtcNow - _associationStartTime).TotalMilliseconds;
+        _logger.LogInformation("Association release request received. Duration: {DurationMs}ms. Association closing normally.", (int)duration);
         return SendAssociationReleaseResponseAsync();
+    }
+
+    private async Task WriteAuditEntryAsync(DicomAssociation association, string remoteIp, AssociationOutcome outcome)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+            var sopClasses = string.Join(",", association.PresentationContexts.Select(pc => pc.AbstractSyntax.Name));
+            var durationMs = (int)(DateTime.UtcNow - _associationStartTime).TotalMilliseconds;
+
+            db.AssociationAuditEntries.Add(new AssociationAuditEntry
+            {
+                CallingAeTitle = association.CallingAE,
+                RemoteIp = remoteIp,
+                CalledAeTitle = association.CalledAE,
+                RequestedSopClasses = sopClasses,
+                Outcome = outcome,
+                DurationMs = durationMs,
+                Timestamp = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to write association audit entry");
+        }
     }
 
     public void OnReceiveAbort(DicomAbortSource source, DicomAbortReason reason)
@@ -102,7 +197,54 @@ public class FocusMedScp : DicomService,
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
-        var level = request.Dataset.GetSingleValue<DicomTag>(DicomTag.QueryRetrieveLevel);
+        var level = request.Dataset.GetSingleValueOrDefault<string>(DicomTag.QueryRetrieveLevel, string.Empty);
+
+        if (level == string.Empty || request.Dataset.Contains(DicomTag.ScheduledProcedureStepSequence))
+        {
+            var patientName = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientName, string.Empty);
+            var patientId = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
+
+            var query = db.WorklistEntries.AsQueryable();
+            if (!string.IsNullOrWhiteSpace(patientId)) query = query.Where(w => w.PatientId.Contains(patientId));
+            if (!string.IsNullOrWhiteSpace(patientName) && patientName != "*") query = query.Where(w => w.PatientName.Contains(patientName.Replace("*", "")));
+
+            var entries = await query.ToListAsync();
+
+            foreach (var entry in entries)
+            {
+                if (string.IsNullOrEmpty(entry.StudyInstanceUid))
+                {
+                    entry.StudyInstanceUid = $"2.25.{Guid.NewGuid():N}";
+                }
+
+                var responseDataset = new DicomDataset
+                {
+                    { DicomTag.PatientName, entry.PatientName },
+                    { DicomTag.PatientID, entry.PatientId },
+                    { DicomTag.AccessionNumber, entry.AccessionNumber },
+                    { DicomTag.StudyInstanceUID, entry.StudyInstanceUid },
+                    { DicomTag.RequestedProcedureID, entry.RequestedProcedureId }
+                };
+
+                var spsDataset = new DicomDataset
+                {
+                    { DicomTag.Modality, entry.Modality },
+                    { DicomTag.ScheduledProcedureStepID, entry.ScheduledProcedureStepId }
+                };
+                if (entry.ScheduledProcedureStepStartDate.HasValue)
+                {
+                    spsDataset.Add(DicomTag.ScheduledProcedureStepStartDate, entry.ScheduledProcedureStepStartDate.Value.ToString("yyyyMMdd"));
+                }
+
+                responseDataset.Add(new DicomSequence(DicomTag.ScheduledProcedureStepSequence, spsDataset));
+
+                yield return new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset };
+            }
+
+            await db.SaveChangesAsync();
+            yield return new DicomCFindResponse(request, DicomStatus.Success);
+            yield break;
+        }
 
         if (level?.ToString() == "PATIENT")
         {
@@ -400,14 +542,60 @@ public class FocusMedScp : DicomService,
 
         if (actionType == 1)
         {
-            var filmBox = await db.FilmBoxes.FirstOrDefaultAsync(f => f.SopInstanceUid == sopUid);
-            if (filmBox != null)
+            if (sopUid == "1.2.840.10008.1.20.1.1")
             {
-                var printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.Id == filmBox.PrintJobId);
-                if (printJob != null)
+                var transactionUid = request.Dataset.GetSingleValueOrDefault(DicomTag.TransactionUID, string.Empty);
+                var referencedSopSeq = request.Dataset.GetSequence(DicomTag.ReferencedSOPSequence);
+
+                var uids = new List<string>();
+                foreach (var item in referencedSopSeq.Items)
                 {
-                    printJob.Status = PrintStatus.Printing;
-                    await db.SaveChangesAsync();
+                    uids.Add(item.GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty));
+                }
+
+                var job = new StorageCommitmentJob
+                {
+                    TransactionUid = transactionUid,
+                    RequestedSopInstanceUids = string.Join(",", uids),
+                    CallingAet = Association.CallingAE,
+                    Status = "Pending"
+                };
+
+                db.StorageCommitmentJobs.Add(job);
+                await db.SaveChangesAsync();
+
+                _logger.LogInformation("Accepted Storage Commitment request for Transaction UID {TransactionUID}", transactionUid);
+                return new DicomNActionResponse(request, DicomStatus.Success);
+            }
+            else
+            {
+                var filmBox = await db.FilmBoxes.FirstOrDefaultAsync(f => f.SopInstanceUid == sopUid);
+                if (filmBox != null)
+                {
+                    var printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.Id == filmBox.PrintJobId);
+                    if (printJob != null)
+                    {
+                        printJob.Status = PrintStatus.Printing;
+                        await db.SaveChangesAsync();
+
+                        var printScu = scope.ServiceProvider.GetService<IPrintScuService>();
+                        var matchedPrinter = SelectPrinterForFilmBox(printScu, filmBox);
+
+                        if (matchedPrinter is null)
+                        {
+                            printJob.Status = PrintStatus.Failed;
+                            await db.SaveChangesAsync();
+
+                            _logger.LogError(
+                                "Print job {PrintJobId} has no matching enabled FilmPrinter configured. " +
+                                "Job will not be printed. Configure a FilmPrinter in appsettings.json.",
+                                printJob.Id);
+                            return new DicomNActionResponse(request, DicomStatus.ProcessingFailure);
+                        }
+
+                        var ct = CancellationToken.None;
+                        _ = printScu!.SendPrintJobAsync(printJob.Id, matchedPrinter, ct);
+                    }
                 }
             }
         }
@@ -454,5 +642,18 @@ public class FocusMedScp : DicomService,
     {
         _logger.LogInformation("N-EVENT-REPORT request for Instance {SopInstance}", request.SOPInstanceUID.UID);
         return Task.FromResult(new DicomNEventReportResponse(request, DicomStatus.Success));
+    }
+
+    private FilmPrinterConfig? SelectPrinterForFilmBox(IPrintScuService? printScu, FilmBox filmBox)
+    {
+        if (printScu is null) return null;
+
+        var printers = _networkingOptions.Value.FilmPrinters;
+        if (printers.Count == 0) return null;
+
+        var enabled = printers.Where(p => p.Enabled).ToList();
+        if (enabled.Count == 0) return null;
+
+        return enabled.FirstOrDefault();
     }
 }

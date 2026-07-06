@@ -43,3 +43,4 @@ appsettings.Production.json
 tools/
 *.txt
 node_modules/
+test-env/

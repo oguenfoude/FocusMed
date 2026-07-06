@@ -1,107 +1,180 @@
 # FocusMed
 
-FocusMed is a robust, multi-role DICOM Service Class Provider built on .NET 10. It handles C-STORE, C-ECHO, C-FIND, C-MOVE, and Print Management on a single TCP port with a PostgreSQL backend.
+Multi-role DICOM Service Class Provider (SCP) on .NET 10 / PostgreSQL. One TCP port handles C-STORE, C-ECHO, C-FIND, C-MOVE, Print Management, Storage Commitment, and Modality Worklist.
 
-## Quick Setup Plan
+> Looking for AI-agent context (file:line gotchas, scope-per-request, etc.)? See [`AGENTS.md`](AGENTS.md).
 
-1. **Install Prerequisites**: Ensure you have [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) and PostgreSQL running locally (`localhost:5432`, db: `focusmed`).
-2. **Build**: Run `dotnet build`.
-3. **Run**: Launch an Administrator terminal and run `dotnet run --project src/FocusMed.Worker`. (Requires Admin to bind to TCP port 11112).
-4. **Test**: Use DCMTK to test the service: `echoscu localhost 11112 -aet YOUR_AET -aec FOCUSMED_SCP`.
+## Quick Start
 
-## Architecture
-
-The solution is divided into three core projects:
-
-- **`FocusMed.Data`**: Data access layer. PostgreSQL with Entity Framework Core. Contains the schema, entities, and messaging infrastructure. No business logic.
-- **`FocusMed.Dicom`**: The DICOM receiver. `FocusMedScp` handles all service roles (C-STORE, C-ECHO, C-FIND, C-MOVE, Print Management). `DicomUpsertService` handles safe, parallelized DICOM ingestion with FNV-1a deterministic hashing.
-- **`FocusMed.Worker`**: The application entry point. A Generic Host background service that orchestrates the DICOM listener, configures dependency injection, and manages structured logging via Serilog.
-
-## Current Features
-- Listens on port `11112` for all DICOM service roles
-- **C-STORE**: Receives and archives DICOM images with automatic UID repair
-- **C-ECHO**: Responds to verification requests
-- **C-FIND**: Queries the database at Patient, Study, and Series levels
-- **C-MOVE**: Sends stored DICOM files to a move destination
-- **Print Management**: N-CREATE, N-SET, N-ACTION, N-DELETE for Film Session, Film Box, and Image Box entities
-- Extracts PNG equivalents dynamically into `data/images/`
-- Archives raw `.dcm` via FNV-1a deterministic hashing
-- Study completion tracking via background polling service
-
-## Strict Data Separation
-
-FocusMed enforces a strict separation between source code and runtime data.
-
-> [!WARNING]
-> **The `data/` directory is intentionally ignored by version control to protect patient health information (PHI) and avoid committing logs.**
-
-### Directory Layout
-```text
-FocusMed/
-├── data/
-│   ├── archive/        # Raw DICOM files sorted by <Hash>/<Series>/<SOP>
-│   ├── images/         # Extracted PNGs per frame, sorted by <Hash>/<Series>/<SOP>
-│   └── logs/           # Serilog rolling log files
-├── src/
-│   ├── FocusMed.Data/
-│   ├── FocusMed.Dicom/
-│   └── FocusMed.Worker/
-```
-
-## Prerequisites
+### Prerequisites
 
 - [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [PostgreSQL](https://www.postgresql.org/) running on `localhost:5432` with database `focusmed`
-- A DICOM testing tool (e.g., DCMTK: `storescu`, `echoscu`, `findscu`)
+- PostgreSQL on `localhost:5432`, database `focusmed` (created automatically)
+- [DCMTK](https://dcmtk.org/) for testing (optional)
+- Windows (Worker is `net10.0-windows`)
 
-## Building and Running
+### Run
 
-1. **Build the solution**:
-   ```powershell
-   dotnet build
-   ```
-
-2. **Run the Worker**:
-   > [!IMPORTANT]
-   > **You must run your terminal as Administrator.** The app binds to TCP port 11112. The `app.manifest` requesting UAC elevation is currently commented out for automated headless testing.
-
-   ```powershell
-   dotnet run --project src/FocusMed.Worker
-   ```
-
-   On first startup, the app automatically creates/migrates the PostgreSQL schema.
-
-## Testing
-
-### C-STORE
 ```powershell
-storescu -v localhost 11112 path/to/image.dcm -aet YOUR_AET -aec FOCUSMED_SCP
+dotnet build
+dotnet run --project src/FocusMed.Worker
 ```
 
-### C-ECHO
-```powershell
-echoscu localhost 11112 -aet YOUR_AET -aec FOCUSMED_SCP
+> **The terminal must run as Administrator.** The app binds to TCP port `11112`. The UAC manifest is currently commented out (`FocusMed.Worker.csproj:5`) for automated headless testing.
+
+On first startup, EF Core applies all migrations automatically via `Database.Migrate()`. No manual SQL step.
+
+## Architecture at a Glance
+
+```
+src/
+├── FocusMed.Data/      PostgreSQL + EF Core. 11 entities. No business logic. (net10.0)
+├── FocusMed.Dicom/     fo-dicom-based SCP. Ingestion, Mwl, Print, Storage Commitment. (net10.0)
+└── FocusMed.Worker/    Top-level Program.cs, Serilog, DI, listener. (net10.0-windows)
 ```
 
-### C-FIND
+Dependency direction: `Worker` → `Dicom` → `Data` (leaf). Solution is `FocusMed.slnx` (XML, not classic `.sln`).
+
+## Features
+
+| DICOM Role | Notes |
+|-----------|-------|
+| **C-STORE** | Acquire images; automatic UID repair; per-frame PNG extraction; FNV-1a archival |
+| **C-ECHO** | Verification |
+| **C-FIND** | Patient / Study / Series queries against PostgreSQL |
+| **C-FIND (MWL)** | Modality Worklist against `WorklistEntries` |
+| **C-MOVE** | Send stored `.dcm` files to a move destination AE |
+| **Storage Commitment** | N-ACTION received; N-EVENT-REPORT sent via reverse association with correct SOP Class UIDs from DB (requires per-site SCU mapping) |
+| **Print Management** | N-CREATE/SET/ACTION/DELETE for Film Session/Box/Image Box; multi-film-size support (A3, A4, 8INX10IN, 14INX17IN); rejects jobs when no FilmPrinter configured |
+
+Other:
+- Enriched association logging to `data/logs/dicom_associations.log`
+- Study completion detection via background polling
+- Graceful shutdown drain for storage forward queue
+- Startup config summary (AE title, port, printers, forward targets)
+- Print jobs rejected with clear error when no FilmPrinter configured
+
+## Testing with DCMTK
+
 ```powershell
-findscu -v localhost 11112 -k QueryRetrieveLevel=STUDY -k PatientName="*" -aet YOUR_AET -aec FOCUSMED_SCP
+echoscu  localhost 11112 -aet YOUR_AET -aec FOCUSMED_SCP
+storescu -v localhost 11112 path\to\image.dcm -aet YOUR_AET -aec FOCUSMED_SCP
+findscu  -v localhost 11112 -k QueryRetrieveLevel=STUDY -k PatientName="*" -aet YOUR_AET -aec FOCUSMED_SCP
+movescu  -v localhost 11112 -k QueryRetrieveLevel=STUDY -k StudyInstanceUID=<uid> -aet YOUR_AET -aec FOCUSMED_SCP -aem YOUR_AET
 ```
 
-### C-MOVE
-```powershell
-movescu -v localhost 11112 -k QueryRetrieveLevel=STUDY -k StudyInstanceUID=<uid> -aet YOUR_AET -aec FOCUSMED_SCP -aem YOUR_AET
+There are no automated tests. Synthetic DICOM generators live under `tools/` (gitignored): `tools/generator/` for build-it-yourself, `tools/burst/` with 50 pre-generated files, `tools/real_test/` with 178 real-world files.
+
+## Data Layout
+
+`data/` is gitignored — it contains patient PHI (when real files are used) and logs.
+
 ```
+data/
+├── archive/<FNV-1a-Hash>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
+├── images/<FNV-1a-Hash>/<SeriesUid>/<SopUid>_<FrameIdx>.png
+└── logs/{focusmed-*, dicom_associations-*}
+```
+
+The `<FNV-1a-Hash>` is a 64-bit FNV-1a of the Study's `StudyInstanceUID`, rendered as 16-char uppercase hex.
+
+Override the data directory with the `FOCUSMED_DATA` environment variable. `PathHelper.GetDataDirectory()` walks up from `AppContext.BaseDirectory` looking for `FocusMed.slnx`; published builds fall back to `./data`.
+
+## Entities
+
+```
+Patient (1) ──< Study (N) ──< Series (N) ──< DicomImage (N) ──< DicomFrame (N)
+PrintJob (1) ──< FilmBox (N) ──< PrintImageBox (N)
+StorageCommitmentJob (standalone) • WorklistEntry (standalone) • AssociationAuditEntry (standalone)
+```
+
+Unique indexes on every UID column (`StudyInstanceUid`, `SeriesInstanceUid`, `SopInstanceUid`).
+
+`DicomImage` includes `SopClassUid` (populated on ingest from DICOM `SOPClassUID` tag). `WorklistEntry` includes `StudyInstanceUid` (generated and persisted on first MWL query).
 
 ## Configuration
 
-Application settings are in `src/FocusMed.Worker/appsettings.json`:
+All non-default config goes in `src/FocusMed.Worker/appsettings.json`.
+
+### `DicomNetworking` section
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `ConnectionString` | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=postgres` | PostgreSQL connection |
-| `DicomPort` | `11112` | TCP port for DICOM listener |
-| `AETitle` | `FOCUSMED_SCP` | DICOM Application Entity title |
-| `BindAddress` | `0.0.0.0` | Network interface to bind |
-| `ArchivePath` | `%FOCUSMED_DATA%/archive` | Raw .dcm archive root |
+| `AETitle` | `FOCUSMED_SCP` | DICOM Application Entity title (called) |
+| `DicomPort` | `11112` | TCP port for listener |
+| `MaxPduSize` | `65536` | Maximum PDU length in bytes |
+| `BindAddress` | `0.0.0.0` | Network interface |
+| `EnforceAeWhitelist` | `false` | When true, only `AllowedCallingAETitles` can associate |
+| `SupportedTransferSyntaxes` | 10 entries | `ImplicitVRLittleEndian`, `ExplicitVRLittleEndian`, `JPEGLSLossless`, `JPEG2000Lossless`, `RLELossless`, `JPEGProcess1`, `JPEGProcess2_4`, `JPEGProcess14`, `MPEG2`, `MPEG4AVCH264HighProfileLevel41` |
+| `AllowedCallingAETitles` | `[]` | `{AETitle, IPAddress}` allowlist |
+| `StorageCommitmentScuMapping` | `{}` | Calling AE → `{Ip, Port}` for N-EVENT-REPORT callbacks |
+| `FilmPrinters` | `[]` | DICOM Print SCU targets (see below) |
+| `StorageForwardTargets` | `[]` | C-STORE SCU forward targets (see below) |
+
+### Other top-level keys
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `ConnectionString` | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=postgres` | PostgreSQL |
+| `ArchivePath` | `%FOCUSMED_DATA%/archive` | Raw `.dcm` archive root |
 | `StudyStabilizationSeconds` | `60` | Inactivity before study → Complete |
+| `TargetPrinterName` | `""` | Legacy spooler target (unused — kept for config compat) |
+
+### `FilmPrinters[]` (DICOM Print SCU)
+
+Each entry represents a DICOM Printer SCP that can receive print jobs via the Print Management protocol.
+
+| Property | Default | Purpose |
+|----------|---------|---------|
+| `Name` | `""` | Human-readable name (e.g. `"AlprintA3"`) |
+| `ScuAe` | `""` | Our AE title when connecting to this printer |
+| `PrinterIp` | `""` | Printer's IP address |
+| `PrinterPort` | `0` | Printer's DICOM port |
+| `PrinterAe` | `""` | Printer's AE title |
+| `FilmTarget` | `"PROCESSOR"` | `FilmDestination` attribute |
+| `FilmType` | `"PAPER"` | `MediumType` attribute |
+| `Priority` | `"HIGH"` | `PrintPriority` attribute |
+| `PrinterType` | `"GrayLevel"` | `"GrayLevel"` or `"Multicolor"` — selects SOP Class for Image Box |
+| `Enabled` | `true` | Whether this printer is active |
+
+If no `FilmPrinters` entry matches (or all are disabled), the print job is rejected with `ProcessingFailure` and logged as an error.
+
+### `StorageForwardTargets[]` (C-STORE SCU Auto-Forward)
+
+Each entry represents an external Storage SCP that receives a copy of every incoming C-STORE image.
+
+| Property | Default | Purpose |
+|----------|---------|---------|
+| `Name` | `""` | Human-readable name (e.g. `"ALCLOSE"`) |
+| `AeTitle` | `""` | Target's AE title |
+| `Ip` | `""` | Target's IP address |
+| `Port` | `0` | Target's DICOM port |
+| `ScuAe` | `""` | Our AE title when connecting (defaults to `AETitle` if empty) |
+| `Enabled` | `true` | Whether this target is active |
+
+Forwarding is queue-based and non-blocking. Failure on one target does not affect others.
+
+## Migrations
+
+Add a migration from `src/FocusMed.Data`:
+
+```powershell
+dotnet ef migrations add <Name> --project src/FocusMed.Data
+```
+
+Existing migrations are auto-applied on app startup. Current set:
+- `20260627140620_AddStorageCommitmentAndWorklist`
+- `20260627232933_AddAssociationAuditEntry`
+- `20260705102645_AddSopClassUidAndStudyInstanceUid`
+
+## Out of Scope (by design)
+
+Until explicitly requested, FocusMed does **not** include:
+- PDF generation
+- Installers / MSIs / deployment scripts
+- Web dashboard or any frontend
+- `.docx` watchers or converters
+
+## License
+
+Internal — not yet licensed for external distribution.

@@ -17,6 +17,9 @@ public class FocusMedDbContext : DbContext
     public DbSet<PrintJob> PrintJobs { get; set; } = null!;
     public DbSet<FilmBox> FilmBoxes { get; set; } = null!;
     public DbSet<PrintImageBox> PrintImageBoxes { get; set; } = null!;
+    public DbSet<WorklistEntry> WorklistEntries { get; set; } = null!;
+    public DbSet<StorageCommitmentJob> StorageCommitmentJobs { get; set; } = null!;
+    public DbSet<AssociationAuditEntry> AssociationAuditEntries { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -64,5 +67,8 @@ public class FocusMedDbContext : DbContext
             .HasOne(i => i.FilmBox)
             .WithMany(f => f.ImageBoxes)
             .HasForeignKey(i => i.FilmBoxId);
+
+        modelBuilder.Entity<AssociationAuditEntry>()
+            .HasIndex(e => e.Timestamp);
     }
 }

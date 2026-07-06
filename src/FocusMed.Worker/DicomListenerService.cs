@@ -1,9 +1,10 @@
 using FellowOakDicom;
 using FellowOakDicom.Network;
 using FocusMed.Dicom;
-using Microsoft.Extensions.Configuration;
+using FocusMed.Dicom.Options;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace FocusMed.Worker;
 
@@ -16,13 +17,13 @@ public class DicomListenerService : BackgroundService
     private readonly string _bindAddress;
     private IDicomServer? _server;
 
-    public DicomListenerService(ILogger<DicomListenerService> logger, IConfiguration configuration, IDicomServerFactory serverFactory)
+    public DicomListenerService(ILogger<DicomListenerService> logger, IDicomServerFactory serverFactory, IOptions<DicomNetworkingOptions> options)
     {
         _logger = logger;
         _serverFactory = serverFactory;
-        _port = configuration.GetValue<int>("DicomPort", 11112);
-        _aeTitle = configuration.GetValue<string>("AETitle", "FOCUSMED_SCP")!;
-        _bindAddress = configuration.GetValue<string>("BindAddress") ?? "0.0.0.0";
+        _port = options.Value.DicomPort;
+        _aeTitle = options.Value.AETitle;
+        _bindAddress = options.Value.BindAddress;
     }
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)

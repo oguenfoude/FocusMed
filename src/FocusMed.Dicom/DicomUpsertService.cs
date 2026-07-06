@@ -11,13 +11,15 @@ public class DicomUpsertService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<DicomUpsertService> _logger;
+    private readonly IStorageForwardQueue _forwardQueue;
     private readonly string _archivePath;
     private readonly string _imagesPath;
 
-    public DicomUpsertService(IServiceScopeFactory scopeFactory, ILogger<DicomUpsertService> logger, IConfiguration configuration)
+    public DicomUpsertService(IServiceScopeFactory scopeFactory, ILogger<DicomUpsertService> logger, IStorageForwardQueue forwardQueue, IConfiguration configuration)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _forwardQueue = forwardQueue;
         _archivePath = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("ArchivePath") ?? "%FOCUSMED_DATA%/archive");
         _imagesPath = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("ImagesPath") ?? "%FOCUSMED_DATA%/images");
         Directory.CreateDirectory(_archivePath);
@@ -140,7 +142,8 @@ public class DicomUpsertService
             {
                 Series = series,
                 SopInstanceUid = sopUid,
-                FilePath = filePath
+                FilePath = filePath,
+                SopClassUid = dataset.GetSingleValueOrDefault(DicomTag.SOPClassUID, string.Empty)
             };
             db.DicomImages.Add(dicomImage);
 
@@ -180,6 +183,16 @@ public class DicomUpsertService
 
             await db.SaveChangesAsync();
             _logger.LogInformation("Successfully ingested image {SopUid} for study {StudyUid}", sopUid, studyUid);
+
+            try
+            {
+                var sopClassUid = dataset.GetSingleValueOrDefault(DicomTag.SOPClassUID, string.Empty);
+                _forwardQueue.Enqueue(new StorageForwardRequest(filePath, sopUid, sopClassUid));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to enqueue storage forward request for {SopUid}. Forward skipped.", sopUid);
+            }
         }
         catch (Exception ex)
         {
