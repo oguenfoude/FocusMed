@@ -7,7 +7,7 @@
   <ItemGroup>
     <PackageReference Include="fo-dicom" Version="5.2.6" />
     <PackageReference Include="fo-dicom.Imaging.ImageSharp" Version="5.2.6" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.9" />
   </ItemGroup>
@@ -16,6 +16,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);NU1903</NoWarn>
   </PropertyGroup>
 
 </Project>

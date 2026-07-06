@@ -78,7 +78,7 @@ public class FocusMedScp : DicomService,
             {
                 _logger.LogWarning("Association REJECTED - {CallingAET} from {RemoteIp} not on whitelist", callingAe, remoteIp);
                 await WriteAuditEntryAsync(association, remoteIp, AssociationOutcome.Rejected);
-                SendAssociationRejectAsync(
+                await SendAssociationRejectAsync(
                     DicomRejectResult.Permanent,
                     DicomRejectSource.ServiceUser,
                     DicomRejectReason.NoReasonGiven);
