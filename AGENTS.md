@@ -10,8 +10,8 @@ Three projects, single dependency direction: `Worker` → `Dicom` → `Data` (le
 
 | Project | TFM | Role |
 |---------|-----|------|
-| `FocusMed.Data` | `net10.0` | EF Core (`FocusMedDbContext`), 11 entities. No business logic. |
-| `FocusMed.Dicom` | `net10.0` | `FocusMedScp` (single SCP), `DicomUpsertService`, hosted services, `PrintScuService`, `StorageForwardService`. |
+| `FocusMed.Data` | `net10.0` | EF Core (`FocusMedDbContext`), 11 entities, 1 enum (`StorageCommitmentStatus`). No business logic. |
+| `FocusMed.Dicom` | `net10.0` | `FocusMedScp` (single SCP), `DicomUpsertService`, hosted services, `PrintScuService`, `PrintExecutionService`, `StorageForwardService`. |
 | `FocusMed.Worker` | `net10.0` | `Program.cs`, Serilog, DI wiring, `DicomListenerService`. |
 
 Solution: `FocusMed.slnx` (XML, **not** classic `.sln`).
@@ -25,7 +25,7 @@ dotnet run --project src/FocusMed.Worker
 
 - Terminal **must be Administrator** — binds TCP port `11112`.
 - PostgreSQL on `localhost:5432`, database `focusmed`. `Database.Migrate()` runs on startup.
-- New EF migration (from `src/FocusMed.Data`): `dotnet ef migrations add <Name>`.
+- New EF migration (from `src/FocusMed.Data`): `dotnet ef migrations add <Name> --project src/FocusMed.Data --startup-project src/FocusMed.Worker`.
 - No automated tests. Manual verification via DCMTK and `tools/` generators.
 
 ```powershell
@@ -72,7 +72,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 6. **All DICOM roles live in `FocusMedScp`.** Do not invent separate SCP classes for C-STORE, C-FIND, C-MOVE, or Print Management.
 
-7. **Target framework: all projects are `net10.0`.** No Windows-specific APIs. fo-dicom uses ImageSharp (cross-platform).
+7. **Target framework: all projects are `net10.0`.** No Windows-specific APIs. fo-dicom uses ImageSharp (cross-platform). Build produces 0 warnings, 0 errors.
 
 8. **fo-dicom transfer syntax names are non-standard.** Always pull `DicomTransferSyntax` / `DicomUID` static fields, never hand-type UIDs. The map in `FocusMedScp.cs` uses `JPEGProcess1`, `JPEGProcess2_4`, `JPEGProcess14`, `MPEG4AVCH264HighProfileLevel41` — not the human-friendly aliases.
 
@@ -86,6 +86,10 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 13. **`Program.cs` re-binds `DicomNetworking` config** (`Program.cs:44-50`) into a fresh `DicomNetworkingOptions` so it can set `DicomServiceOptions.MaxPDULength`, instead of injecting `IOptions<DicomNetworkingOptions>` from DI. Works today; will silently diverge if the options class ever adds validation.
 
+14. **Print execution is decoupled.** N-ACTION returns `DicomStatus.Success` immediately; `PrintJob.Status` stays `Pending`. Physical printing is triggered by `PrintExecutionService.ExecutePendingPrintJobAsync(id)` — not wired to any endpoint yet (out of scope).
+
+15. **`StorageCommitmentJob.Status` is an enum** (`StorageCommitmentStatus`), not a string. Values: `Pending=0`, `Completed=1`, `Failed=2`. Stored as `int` via `HasConversion<int>()`.
+
 ## Quick File Index
 
 - `src/FocusMed.Worker/Program.cs` — entry, Serilog, DI wiring, startup config summary, migration.
@@ -96,11 +100,11 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 - `src/FocusMed.Dicom/DicomUpsertService.cs` — ingestion (UID repair, FNV-1a, PNG extract, forward queue enqueue).
 - `src/FocusMed.Dicom/StudyCompletionService.cs` — 5s polling loop.
 - `src/FocusMed.Dicom/StorageCommitmentScuService.cs` — 10s polling loop, N-EVENT-REPORT with DB-backed SOP Class lookup.
-- `src/FocusMed.Dicom/PrintScuService.cs` — DICOM Print SCU.
+- `src/FocusMed.Dicom/PrintScuService.cs` — DICOM Print SCU (N-CREATE/SET/ACTION/DELETE).
 - `src/FocusMed.Dicom/PrintExecutionService.cs` — decoupled print execution (pending→printing→completed/failed).
 - `src/FocusMed.Dicom/StorageForwardQueue.cs` — `Channel<T>`-based forward queue with `Complete()`/`PendingCount` for graceful shutdown.
 - `src/FocusMed.Dicom/StorageForwardService.cs` — hosted C-STORE SCU, drains queue on `StopAsync`.
-- `src/FocusMed.Dicom/ScalingEngine.cs` — print scaling with film size support (transient, has ILogger).
 - `src/FocusMed.Dicom/Options/DicomNetworkingOptions.cs` — `DicomNetworking` section binding + `FilmPrinters`, `StorageForwardTargets`.
-- `src/FocusMed.Data/FocusMedDbContext.cs` — 11 DbSets, fluent FK config.
-- `src/FocusMed.Data/Migrations/` — 3 EF migrations (latest: `AddSopClassUidAndStudyInstanceUid`).
+- `src/FocusMed.Data/FocusMedDbContext.cs` — 11 DbSets, fluent FK config, enum conversion, indexes.
+- `src/FocusMed.Data/Entities/StorageCommitmentStatus.cs` — `Pending=0`, `Completed=1`, `Failed=2`.
+- `src/FocusMed.Data/Migrations/` — 4 EF migrations (latest: `ConvertStorageCommitmentStatusToEnum`).

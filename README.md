@@ -11,7 +11,6 @@ Multi-role DICOM Service Class Provider (SCP) on .NET 10 / PostgreSQL. One TCP p
 - [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - PostgreSQL on `localhost:5432`, database `focusmed` (created automatically)
 - [DCMTK](https://dcmtk.org/) for testing (optional)
-- Windows (Worker is `net10.0-windows`)
 
 ### Run
 
@@ -29,8 +28,8 @@ On first startup, EF Core applies all migrations automatically via `Database.Mig
 ```
 src/
 ├── FocusMed.Data/      PostgreSQL + EF Core. 11 entities. No business logic. (net10.0)
-├── FocusMed.Dicom/     fo-dicom-based SCP. Ingestion, Mwl, Print, Storage Commitment. (net10.0)
-└── FocusMed.Worker/    Top-level Program.cs, Serilog, DI, listener. (net10.0-windows)
+├── FocusMed.Dicom/     fo-dicom-based SCP. Ingestion, MWL, Print, Storage Commitment. (net10.0)
+└── FocusMed.Worker/    Top-level Program.cs, Serilog, DI, listener. (net10.0)
 ```
 
 Dependency direction: `Worker` → `Dicom` → `Data` (leaf). Solution is `FocusMed.slnx` (XML, not classic `.sln`).
@@ -45,14 +44,14 @@ Dependency direction: `Worker` → `Dicom` → `Data` (leaf). Solution is `Focus
 | **C-FIND (MWL)** | Modality Worklist against `WorklistEntries` |
 | **C-MOVE** | Send stored `.dcm` files to a move destination AE |
 | **Storage Commitment** | N-ACTION received; N-EVENT-REPORT sent via reverse association with correct SOP Class UIDs from DB (requires per-site SCU mapping) |
-| **Print Management** | N-CREATE/SET/ACTION/DELETE for Film Session/Box/Image Box; multi-film-size support (A3, A4, 8INX10IN, 14INX17IN); rejects jobs when no FilmPrinter configured |
+| **Print Management** | N-CREATE/SET/ACTION/DELETE for Film Session/Box/Image Box; multi-film-size support (A3, A4, 8INX10IN, 14INX17IN); decoupled execution via `PrintExecutionService` |
 
 Other:
 - Enriched association logging to `data/logs/dicom_associations.log`
 - Study completion detection via background polling
 - Graceful shutdown drain for storage forward queue
 - Startup config summary (AE title, port, printers, forward targets)
-- Print jobs rejected with clear error when no FilmPrinter configured
+- Print decoupled: N-ACTION returns success immediately, physical print triggered separately
 
 ## Testing with DCMTK
 
@@ -90,7 +89,7 @@ StorageCommitmentJob (standalone) • WorklistEntry (standalone) • Association
 
 Unique indexes on every UID column (`StudyInstanceUid`, `SeriesInstanceUid`, `SopInstanceUid`).
 
-`DicomImage` includes `SopClassUid` (populated on ingest from DICOM `SOPClassUID` tag). `WorklistEntry` includes `StudyInstanceUid` (generated and persisted on first MWL query).
+`DicomImage` includes `SopClassUid` (populated on ingest from DICOM `SOPClassUID` tag). `WorklistEntry` includes `StudyInstanceUid` (generated and persisted on first MWL query). `StorageCommitmentJob.Status` is an enum (`StorageCommitmentStatus`: Pending=0, Completed=1, Failed=2) stored as integer.
 
 ## Configuration
 
@@ -158,13 +157,14 @@ Forwarding is queue-based and non-blocking. Failure on one target does not affec
 Add a migration from `src/FocusMed.Data`:
 
 ```powershell
-dotnet ef migrations add <Name> --project src/FocusMed.Data
+dotnet ef migrations add <Name> --project src/FocusMed.Data --startup-project src/FocusMed.Worker
 ```
 
 Existing migrations are auto-applied on app startup. Current set:
 - `20260627140620_AddStorageCommitmentAndWorklist`
 - `20260627232933_AddAssociationAuditEntry`
 - `20260705102645_AddSopClassUidAndStudyInstanceUid`
+- `20260706214141_ConvertStorageCommitmentStatusToEnum`
 
 ## Out of Scope (by design)
 
