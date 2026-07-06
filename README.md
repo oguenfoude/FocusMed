@@ -114,7 +114,7 @@ All non-default config goes in `src/FocusMed.Worker/appsettings.json`.
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `ConnectionString` | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=postgres` | PostgreSQL |
+| `ConnectionString` | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin` | PostgreSQL |
 | `ArchivePath` | `%FOCUSMED_DATA%/archive` | Raw `.dcm` archive root |
 | `StudyStabilizationSeconds` | `60` | Inactivity before study → Complete |
 

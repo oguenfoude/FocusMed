@@ -337,7 +337,7 @@ public class FocusMedScp : DicomService,
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
-        var level = request.Dataset.GetSingleValue<DicomTag>(DicomTag.QueryRetrieveLevel);
+        var level = request.Dataset.GetSingleValueOrDefault<string>(DicomTag.QueryRetrieveLevel, string.Empty);
         var affectedSop = request.Dataset.GetSingleValueOrDefault(DicomTag.AffectedSOPInstanceUID, string.Empty);
 
         List<DicomImage> images;
@@ -348,7 +348,7 @@ public class FocusMedScp : DicomService,
                 .Where(i => i.SopInstanceUid == affectedSop)
                 .ToListAsync();
         }
-        else if (level?.ToString() == "SERIES")
+        else if (level == "SERIES")
         {
             var seriesUid = request.Dataset.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty);
             images = await db.DicomImages
@@ -356,7 +356,7 @@ public class FocusMedScp : DicomService,
                 .Where(i => i.Series.SeriesInstanceUid == seriesUid)
                 .ToListAsync();
         }
-        else if (level?.ToString() == "STUDY")
+        else if (level == "STUDY")
         {
             var studyUid = request.Dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
             images = await db.DicomImages

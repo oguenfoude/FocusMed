@@ -10,13 +10,15 @@ namespace FocusMed.Data.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.AlterColumn<int>(
-                name: "Status",
-                table: "StorageCommitmentJobs",
-                type: "integer",
-                nullable: false,
-                oldClrType: typeof(string),
-                oldType: "text");
+            migrationBuilder.Sql(@"
+                UPDATE ""StorageCommitmentJobs""
+                SET ""Status"" = CASE ""Status""
+                    WHEN 'Completed' THEN 1
+                    WHEN 'Failed' THEN 2
+                    ELSE 0
+                END");
+
+            migrationBuilder.Sql(@"ALTER TABLE ""StorageCommitmentJobs"" ALTER COLUMN ""Status"" TYPE integer USING ""Status""::integer");
 
             migrationBuilder.CreateIndex(
                 name: "IX_WorklistEntries_PatientName",

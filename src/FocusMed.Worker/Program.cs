@@ -30,7 +30,7 @@ try
         .ConfigureServices((hostContext, services) =>
         {
             var connectionString = hostContext.Configuration.GetValue<string>("ConnectionString")
-                ?? "Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=postgres";
+                ?? "Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin";
 
             // Register Data & Dicom logic
             services.AddFocusMedData(connectionString);
