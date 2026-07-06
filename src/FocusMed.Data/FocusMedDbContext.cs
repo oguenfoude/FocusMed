@@ -70,5 +70,18 @@ public class FocusMedDbContext : DbContext
 
         modelBuilder.Entity<AssociationAuditEntry>()
             .HasIndex(e => e.Timestamp);
+
+        modelBuilder.Entity<StorageCommitmentJob>()
+            .Property(j => j.Status)
+            .HasConversion<int>();
+
+        modelBuilder.Entity<StorageCommitmentJob>()
+            .HasIndex(j => j.Status);
+
+        modelBuilder.Entity<WorklistEntry>()
+            .HasIndex(w => w.PatientName);
+
+        modelBuilder.Entity<WorklistEntry>()
+            .HasIndex(w => w.StudyInstanceUid);
     }
 }

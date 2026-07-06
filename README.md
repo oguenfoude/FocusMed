@@ -118,7 +118,6 @@ All non-default config goes in `src/FocusMed.Worker/appsettings.json`.
 | `ConnectionString` | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=postgres` | PostgreSQL |
 | `ArchivePath` | `%FOCUSMED_DATA%/archive` | Raw `.dcm` archive root |
 | `StudyStabilizationSeconds` | `60` | Inactivity before study → Complete |
-| `TargetPrinterName` | `""` | Legacy spooler target (unused — kept for config compat) |
 
 ### `FilmPrinters[]` (DICOM Print SCU)
 

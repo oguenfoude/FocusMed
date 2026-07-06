@@ -14,7 +14,7 @@ public class StorageCommitmentJob
 
     public string CallingAet { get; set; } = string.Empty;
 
-    public string Status { get; set; } = "Pending";
+    public StorageCommitmentStatus Status { get; set; } = StorageCommitmentStatus.Pending;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? CompletedAt { get; set; }

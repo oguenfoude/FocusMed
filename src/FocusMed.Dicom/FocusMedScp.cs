@@ -558,7 +558,7 @@ public class FocusMedScp : DicomService,
                     TransactionUid = transactionUid,
                     RequestedSopInstanceUids = string.Join(",", uids),
                     CallingAet = Association.CallingAE,
-                    Status = "Pending"
+                    Status = StorageCommitmentStatus.Pending
                 };
 
                 db.StorageCommitmentJobs.Add(job);
@@ -575,26 +575,10 @@ public class FocusMedScp : DicomService,
                     var printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.Id == filmBox.PrintJobId);
                     if (printJob != null)
                     {
-                        printJob.Status = PrintStatus.Printing;
-                        await db.SaveChangesAsync();
-
-                        var printScu = scope.ServiceProvider.GetService<IPrintScuService>();
-                        var matchedPrinter = SelectPrinterForFilmBox(printScu);
-
-                        if (matchedPrinter is null)
-                        {
-                            printJob.Status = PrintStatus.Failed;
-                            await db.SaveChangesAsync();
-
-                            _logger.LogError(
-                                "Print job {PrintJobId} has no matching enabled FilmPrinter configured. " +
-                                "Job will not be printed. Configure a FilmPrinter in appsettings.json.",
-                                printJob.Id);
-                            return new DicomNActionResponse(request, DicomStatus.ProcessingFailure);
-                        }
-
-                        var ct = CancellationToken.None;
-                        _ = printScu!.SendPrintJobAsync(printJob.Id, matchedPrinter, ct);
+                        _logger.LogInformation(
+                            "Print job {PrintJobId} received via N-ACTION. Status remains Pending — " +
+                            "physical print is decoupled to PrintExecutionService.",
+                            printJob.Id);
                     }
                 }
             }
@@ -642,18 +626,5 @@ public class FocusMedScp : DicomService,
     {
         _logger.LogInformation("N-EVENT-REPORT request for Instance {SopInstance}", request.SOPInstanceUID.UID);
         return Task.FromResult(new DicomNEventReportResponse(request, DicomStatus.Success));
-    }
-
-    private FilmPrinterConfig? SelectPrinterForFilmBox(IPrintScuService? printScu)
-    {
-        if (printScu is null) return null;
-
-        var printers = _networkingOptions.Value.FilmPrinters;
-        if (printers.Count == 0) return null;
-
-        var enabled = printers.Where(p => p.Enabled).ToList();
-        if (enabled.Count == 0) return null;
-
-        return enabled.FirstOrDefault();
     }
 }

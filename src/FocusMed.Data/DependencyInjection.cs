@@ -12,8 +12,6 @@ public static class DependencyInjection
             options.UseNpgsql(connectionString);
         });
 
-        services.AddSingleton<Messaging.IStudyEventBus, Messaging.InMemoryStudyEventBus>();
-
         return services;
     }
 }

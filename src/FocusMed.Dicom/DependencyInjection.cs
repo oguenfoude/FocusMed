@@ -17,7 +17,7 @@ public static class DependencyInjection
         services.AddSingleton<IStorageForwardQueue, StorageForwardQueue>();
         services.AddHostedService<StorageForwardService>();
         services.AddSingleton<IPrintScuService, PrintScuService>();
-        services.AddTransient<ScalingEngine>();
+        services.AddSingleton<PrintExecutionService>();
 
         return services;
     }

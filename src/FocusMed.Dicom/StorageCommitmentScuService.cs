@@ -2,6 +2,7 @@ using FellowOakDicom;
 using FellowOakDicom.Network;
 using FellowOakDicom.Network.Client;
 using FocusMed.Data;
+using FocusMed.Data.Entities;
 using FocusMed.Dicom.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,7 +50,7 @@ public class StorageCommitmentScuService : BackgroundService
         var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
         var pendingJobs = await db.StorageCommitmentJobs
-            .Where(j => j.Status == "Pending")
+            .Where(j => j.Status == StorageCommitmentStatus.Pending)
             .ToListAsync(stoppingToken);
 
         foreach (var job in pendingJobs)
@@ -65,14 +66,14 @@ public class StorageCommitmentScuService : BackgroundService
             if (archivedImagesCount == uids.Length)
             {
                 await SendNEventReportAsync(job, sopClassMap);
-                job.Status = "Completed";
+                job.Status = StorageCommitmentStatus.Completed;
                 job.CompletedAt = DateTime.UtcNow;
                 await db.SaveChangesAsync(stoppingToken);
             }
             else if (job.CreatedAt < DateTime.UtcNow.AddHours(-1))
             {
                 await SendNEventReportFailedAsync(job, sopClassMap);
-                job.Status = "Failed";
+                job.Status = StorageCommitmentStatus.Failed;
                 job.CompletedAt = DateTime.UtcNow;
                 await db.SaveChangesAsync(stoppingToken);
             }

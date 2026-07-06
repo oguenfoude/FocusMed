@@ -12,7 +12,7 @@ Three projects, single dependency direction: `Worker` → `Dicom` → `Data` (le
 |---------|-----|------|
 | `FocusMed.Data` | `net10.0` | EF Core (`FocusMedDbContext`), 11 entities. No business logic. |
 | `FocusMed.Dicom` | `net10.0` | `FocusMedScp` (single SCP), `DicomUpsertService`, hosted services, `PrintScuService`, `StorageForwardService`. |
-| `FocusMed.Worker` | `net10.0-windows` | `Program.cs`, Serilog, DI wiring, `DicomListenerService`, `Spooler`. |
+| `FocusMed.Worker` | `net10.0` | `Program.cs`, Serilog, DI wiring, `DicomListenerService`. |
 
 Solution: `FocusMed.slnx` (XML, **not** classic `.sln`).
 
@@ -70,9 +70,9 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 5. **No `global.json`.** .NET 10.0 SDK is required but not pinned. Confirm the resolved SDK is 10.x before debugging build issues.
 
-6. **`StudyCompletedEvent` publishes to nobody.** `InMemoryStudyEventBus` is wired in DI but has **zero subscribers**. Do not assume downstream effects; do not add feature code that waits on these events.
+6. **All DICOM roles live in `FocusMedScp`.** Do not invent separate SCP classes for C-STORE, C-FIND, C-MOVE, or Print Management.
 
-7. **Target framework split.** Worker = `net10.0-windows`, Data/Dicom = `net10.0`. `ScalingEngine` uses ImageSharp (cross-platform) but is resolved at runtime from `FocusMedScp`. `Spooler` (Windows-only `System.Drawing.Printing`) is dead code — kept as a file but no longer registered or used.
+7. **Target framework: all projects are `net10.0`.** No Windows-specific APIs. fo-dicom uses ImageSharp (cross-platform).
 
 8. **fo-dicom transfer syntax names are non-standard.** Always pull `DicomTransferSyntax` / `DicomUID` static fields, never hand-type UIDs. The map in `FocusMedScp.cs` uses `JPEGProcess1`, `JPEGProcess2_4`, `JPEGProcess14`, `MPEG4AVCH264HighProfileLevel41` — not the human-friendly aliases.
 
@@ -86,20 +86,18 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 13. **`Program.cs` re-binds `DicomNetworking` config** (`Program.cs:44-50`) into a fresh `DicomNetworkingOptions` so it can set `DicomServiceOptions.MaxPDULength`, instead of injecting `IOptions<DicomNetworkingOptions>` from DI. Works today; will silently diverge if the options class ever adds validation.
 
-14. **`ScalingEngine.GetFilmDimensions`** supports A3, A4, 8INX10IN, 14INX17IN. Unknown `filmSize` falls back to A4 with a warning log. `filmSize == null` defaults to A4 silently.
-
 ## Quick File Index
 
 - `src/FocusMed.Worker/Program.cs` — entry, Serilog, DI wiring, startup config summary, migration.
 - `src/FocusMed.Worker/DicomListenerService.cs` — starts `IDicomServer<FocusMedScp>`.
 - `src/FocusMed.Worker/PathHelper.cs` — resolves repo root / data dir.
-- `src/FocusMed.Worker/Spooler.cs` — Windows print (dead code, kept for reference).
 - `src/FocusMed.Worker/appsettings.json` — config.
 - `src/FocusMed.Dicom/FocusMedScp.cs` — every DICOM role.
 - `src/FocusMed.Dicom/DicomUpsertService.cs` — ingestion (UID repair, FNV-1a, PNG extract, forward queue enqueue).
 - `src/FocusMed.Dicom/StudyCompletionService.cs` — 5s polling loop.
 - `src/FocusMed.Dicom/StorageCommitmentScuService.cs` — 10s polling loop, N-EVENT-REPORT with DB-backed SOP Class lookup.
 - `src/FocusMed.Dicom/PrintScuService.cs` — DICOM Print SCU.
+- `src/FocusMed.Dicom/PrintExecutionService.cs` — decoupled print execution (pending→printing→completed/failed).
 - `src/FocusMed.Dicom/StorageForwardQueue.cs` — `Channel<T>`-based forward queue with `Complete()`/`PendingCount` for graceful shutdown.
 - `src/FocusMed.Dicom/StorageForwardService.cs` — hosted C-STORE SCU, drains queue on `StopAsync`.
 - `src/FocusMed.Dicom/ScalingEngine.cs` — print scaling with film size support (transient, has ILogger).
