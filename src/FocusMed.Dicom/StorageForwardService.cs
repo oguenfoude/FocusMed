@@ -35,6 +35,7 @@ public sealed class StorageForwardService : BackgroundService
         }
         catch (OperationCanceledException)
         {
+            _logger.LogDebug("StorageForwardService processing cancelled during shutdown.");
         }
     }
 

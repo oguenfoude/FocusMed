@@ -579,7 +579,7 @@ public class FocusMedScp : DicomService,
                         await db.SaveChangesAsync();
 
                         var printScu = scope.ServiceProvider.GetService<IPrintScuService>();
-                        var matchedPrinter = SelectPrinterForFilmBox(printScu, filmBox);
+                        var matchedPrinter = SelectPrinterForFilmBox(printScu);
 
                         if (matchedPrinter is null)
                         {
@@ -644,7 +644,7 @@ public class FocusMedScp : DicomService,
         return Task.FromResult(new DicomNEventReportResponse(request, DicomStatus.Success));
     }
 
-    private FilmPrinterConfig? SelectPrinterForFilmBox(IPrintScuService? printScu, FilmBox filmBox)
+    private FilmPrinterConfig? SelectPrinterForFilmBox(IPrintScuService? printScu)
     {
         if (printScu is null) return null;
 

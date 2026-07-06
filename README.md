@@ -78,7 +78,7 @@ data/
 
 The `<FNV-1a-Hash>` is a 64-bit FNV-1a of the Study's `StudyInstanceUID`, rendered as 16-char uppercase hex.
 
-Override the data directory with the `FOCUSMED_DATA` environment variable. `PathHelper.GetDataDirectory()` walks up from `AppContext.BaseDirectory` looking for `FocusMed.slnx`; published builds fall back to `./data`.
+Override the data directory with the `FOCUSMED_DATA` environment variable. `PathHelper.GetDataDirectory()` walks up from `AppContext.BaseDirectory` looking for `FocusMed.slnx`; published builds fall back to `<AppContext.BaseDirectory>/data`.
 
 ## Entities
 

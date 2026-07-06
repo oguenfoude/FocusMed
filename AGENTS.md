@@ -84,7 +84,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 12. **MWL entry condition is non-standard** (`FocusMedScp.cs:202`). C-FIND routes to MWL when `QueryRetrieveLevel` is empty **or** `ScheduledProcedureStepSequence` is present — not the strict `QueryRetrieveLevel == "WORKLIST"` check. Test with real devices before assuming a non-standards-compliant SCU is broken.
 
-13. **`Program.cs` re-binds `DicomNetworking` config** (`Program.cs:43-49`) into a fresh `DicomNetworkingOptions` so it can set `DicomServiceOptions.MaxPDULength`, instead of injecting `IOptions<DicomNetworkingOptions>` from DI. Works today; will silently diverge if the options class ever adds validation.
+13. **`Program.cs` re-binds `DicomNetworking` config** (`Program.cs:44-50`) into a fresh `DicomNetworkingOptions` so it can set `DicomServiceOptions.MaxPDULength`, instead of injecting `IOptions<DicomNetworkingOptions>` from DI. Works today; will silently diverge if the options class ever adds validation.
 
 14. **`ScalingEngine.GetFilmDimensions`** supports A3, A4, 8INX10IN, 14INX17IN. Unknown `filmSize` falls back to A4 with a warning log. `filmSize == null` defaults to A4 silently.
 

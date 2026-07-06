@@ -123,12 +123,14 @@ public class StorageCommitmentScuService : BackgroundService
         }
         dataset.Add(seq);
 
-        var request = new DicomNEventReportRequest(DicomUID.Parse("1.2.840.10008.1.20.1"), DicomUID.Parse("1.2.840.10008.1.20.1.1"), 1)
+        var storageCommitmentSopClass = DicomUID.Parse("1.2.840.10008.1.20.1");
+        var storageCommitmentSopInstance = DicomUID.Parse("1.2.840.10008.1.20.1.1");
+        var request = new DicomNEventReportRequest(storageCommitmentSopClass, storageCommitmentSopInstance, 1)
         {
             Dataset = dataset
         };
 
-        client.AddRequestAsync(request);
+        await client.AddRequestAsync(request);
         await client.SendAsync();
         _logger.LogInformation("Successfully sent N-EVENT-REPORT for transaction {TransactionUid} to {Ip}:{Port}", job.TransactionUid, endpoint.Ip, endpoint.Port);
     }
@@ -151,7 +153,12 @@ public class StorageCommitmentScuService : BackgroundService
             if (sopClassMap.TryGetValue(uid, out var sopClassUid) && !string.IsNullOrEmpty(sopClassUid))
             {
                 try { referencedSopClass = DicomUID.Parse(sopClassUid); }
-                catch { /* keep fallback */ }
+                catch
+                {
+                    _logger.LogWarning(
+                        "SopClassUid '{SopClassUid}' not recognized for instance {SopInstanceUid}. Using SecondaryCaptureImageStorage as fallback.",
+                        sopClassUid, uid);
+                }
             }
 
             var item = new DicomDataset
@@ -164,12 +171,14 @@ public class StorageCommitmentScuService : BackgroundService
         }
         dataset.Add(seq);
 
-        var request = new DicomNEventReportRequest(DicomUID.Parse("1.2.840.10008.1.20.1"), DicomUID.Parse("1.2.840.10008.1.20.1.1"), 2)
+        var storageCommitmentSopClass = DicomUID.Parse("1.2.840.10008.1.20.1");
+        var storageCommitmentSopInstance = DicomUID.Parse("1.2.840.10008.1.20.1.1");
+        var request = new DicomNEventReportRequest(storageCommitmentSopClass, storageCommitmentSopInstance, 2)
         {
             Dataset = dataset
         };
 
-        client.AddRequestAsync(request);
+        await client.AddRequestAsync(request);
         await client.SendAsync();
     }
 }
