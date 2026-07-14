@@ -16,5 +16,6 @@ public enum AssociationOutcome
 {
     Success = 0,
     Rejected = 1,
-    Failed = 2
+    Failed = 2,
+    PartiallyAccepted = 3
 }

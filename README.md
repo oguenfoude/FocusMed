@@ -19,11 +19,26 @@ dotnet build
 dotnet run --project src/FocusMed.Worker
 ```
 
-> **The terminal must run as Administrator.** The app binds to TCP port `11112`. The UAC manifest is currently commented out (`FocusMed.Worker.csproj:5`) for automated headless testing.
+> **The terminal must run as Administrator.** The app binds to TCP port `11112`.
 
 On first startup, EF Core applies all migrations automatically via `Database.Migrate()`. No manual SQL step.
 
-## Architecture at a Glance
+### Startup Output
+
+```
+=== FocusMed Configuration ===
+Data Directory: C:\Users\Administrator\AppData\Local\FocusMed
+AE Title: FOCUSMED
+Port: 11112
+Bind Address: 0.0.0.0
+Max PDU: 65536
+AE Whitelist: Disabled
+Film Printers configured: 0
+Storage Forward Targets configured: 0
+DICOM listener successfully starting on 0.0.0.0:11112 as AE Title 'FOCUSMED'
+```
+
+## Architecture
 
 ```
 src/
@@ -47,7 +62,7 @@ Dependency direction: `Worker` → `Dicom` → `Data` (leaf). Solution is `Focus
 | **Print Management** | N-CREATE/SET/ACTION/DELETE for Film Session/Box/Image Box; multi-film-size support (A3, A4, 8INX10IN, 14INX17IN); decoupled execution via `PrintExecutionService` |
 
 Other:
-- Enriched association logging to `data/logs/dicom_associations.log`
+- Enriched association logging to `%LOCALAPPDATA%/FocusMed/logs/dicom_associations.log`
 - Study completion detection via background polling
 - Graceful shutdown drain for storage forward queue
 - Startup config summary (AE title, port, printers, forward targets)
@@ -56,28 +71,33 @@ Other:
 ## Testing with DCMTK
 
 ```powershell
-echoscu  localhost 11112 -aet YOUR_AET -aec FOCUSMED_SCP
-storescu -v localhost 11112 path\to\image.dcm -aet YOUR_AET -aec FOCUSMED_SCP
-findscu  -v localhost 11112 -k QueryRetrieveLevel=STUDY -k PatientName="*" -aet YOUR_AET -aec FOCUSMED_SCP
-movescu  -v localhost 11112 -k QueryRetrieveLevel=STUDY -k StudyInstanceUID=<uid> -aet YOUR_AET -aec FOCUSMED_SCP -aem YOUR_AET
+echoscu  localhost 11112 -aet YOUR_AET -aec FOCUSMED
+storescu -v localhost 11112 path\to\image.dcm -aet YOUR_AET -aec FOCUSMED
+findscu  -v localhost 11112 -k QueryRetrieveLevel=STUDY -k PatientName="*" -aet YOUR_AET -aec FOCUSMED
+movescu  -v localhost 11112 -k QueryRetrieveLevel=STUDY -k StudyInstanceUID=<uid> -aet YOUR_AET -aec FOCUSMED -aem YOUR_AET
 ```
-
-There are no automated tests. Synthetic DICOM generators live under `tools/` (gitignored): `tools/generator/` for build-it-yourself, `tools/burst/` with 50 pre-generated files, `tools/real_test/` with 178 real-world files.
 
 ## Data Layout
 
-`data/` is gitignored — it contains patient PHI (when real files are used) and logs.
+Data directory resolves in this order:
+1. `FOCUSMED_DATA` environment variable (if set)
+2. `%LOCALAPPDATA%\FocusMed` (default)
 
 ```
-data/
-├── archive/<FNV-1a-Hash>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
-├── images/<FNV-1a-Hash>/<SeriesUid>/<SopUid>_<FrameIdx>.png
+%LOCALAPPDATA%\FocusMed\
+├── archive/<PatientName>_<YYYYMMDD>_<Hash>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
+├── images/<PatientName>_<YYYYMMDD>_<Hash>/<SeriesUid>/<SopUid>_<FrameIdx>.png
 └── logs/{focusmed-*, dicom_associations-*}
 ```
 
-The `<FNV-1a-Hash>` is a 64-bit FNV-1a of the Study's `StudyInstanceUID`, rendered as 16-char uppercase hex.
+The `<FNV-1a-Hash>` is a 64-bit FNV-1a of the Study's `StudyInstanceUID`, rendered as 16-char uppercase hex. Directory names include Patient Name and Study Date for easy browsing.
 
-Override the data directory with the `FOCUSMED_DATA` environment variable. `PathHelper.GetDataDirectory()` walks up from `AppContext.BaseDirectory` looking for `FocusMed.slnx`; published builds fall back to `<AppContext.BaseDirectory>/data`.
+## Environment Variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `FOCUSMED_DATA` | Override data directory | `%LOCALAPPDATA%\FocusMed` |
+| `FOCUSMED_DB_CONNECTION` | Override PostgreSQL connection string | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin` |
 
 ## Entities
 
@@ -99,7 +119,7 @@ All non-default config goes in `src/FocusMed.Worker/appsettings.json`.
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `AETitle` | `FOCUSMED_SCP` | DICOM Application Entity title (called) |
+| `AETitle` | `FOCUSMED` | DICOM Application Entity title (called) |
 | `DicomPort` | `11112` | TCP port for listener |
 | `MaxPduSize` | `65536` | Maximum PDU length in bytes |
 | `BindAddress` | `0.0.0.0` | Network interface |

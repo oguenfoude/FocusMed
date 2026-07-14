@@ -35,7 +35,7 @@ public sealed class StorageForwardService : BackgroundService
         }
         catch (OperationCanceledException)
         {
-            _logger.LogDebug("StorageForwardService processing cancelled during shutdown.");
+            _logger.LogDebug("Forward cancelled during shutdown.");
         }
     }
 
@@ -101,11 +101,11 @@ public sealed class StorageForwardService : BackgroundService
             await client.AddRequestAsync(cstore);
             await client.SendAsync(ct);
 
-            _logger.LogInformation("Forwarded {SopInstanceUid} to {TargetName} ({Ae}@{Ip}:{Port})", file.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty), target.Name, target.AeTitle, target.Ip, target.Port);
+            _logger.LogInformation("Forwarded: {SopUid} -> {TargetName}", file.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty), target.Name);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to forward {SopInstanceUid} to {TargetName} ({Ae}@{Ip}:{Port}). Skipping.", file.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty), target.Name, target.AeTitle, target.Ip, target.Port);
+            _logger.LogWarning(ex, "Forward failed: {TargetName}", target.Name);
         }
     }
 }

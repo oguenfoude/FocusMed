@@ -4,7 +4,7 @@ public class DicomNetworkingOptions
 {
     public const string SectionName = "DicomNetworking";
 
-    public string AETitle { get; set; } = "FOCUSMED_SCP";
+    public string AETitle { get; set; } = "FOCUSMED";
     public int MaxPduSize { get; set; } = 65536;
     public string BindAddress { get; set; } = "0.0.0.0";
     public int DicomPort { get; set; } = 11112;

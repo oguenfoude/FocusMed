@@ -64,7 +64,6 @@ public class FocusMedScp : DicomService,
     public async Task OnReceiveAssociationRequestAsync(DicomAssociation association)
     {
         _associationStartTime = DateTime.UtcNow;
-        _logger.LogInformation("Association request received from {CallingAET} to {CalledAET}", association.CallingAE, association.CalledAE);
 
         if (_networkingOptions.Value.EnforceAeWhitelist)
         {
@@ -76,7 +75,7 @@ public class FocusMedScp : DicomService,
 
             if (!allowed)
             {
-                _logger.LogWarning("Association REJECTED - {CallingAET} from {RemoteIp} not on whitelist", callingAe, remoteIp);
+                _logger.LogWarning("REJECTED {CallingAET} from {RemoteIp} (not on whitelist)", callingAe, remoteIp);
                 await WriteAuditEntryAsync(association, remoteIp, AssociationOutcome.Rejected);
                 await SendAssociationRejectAsync(
                     DicomRejectResult.Permanent,
@@ -85,6 +84,9 @@ public class FocusMedScp : DicomService,
                 return;
             }
         }
+
+        var accepted = 0;
+        var rejected = 0;
 
         foreach (var pc in association.PresentationContexts)
         {
@@ -98,6 +100,12 @@ public class FocusMedScp : DicomService,
                 || syntax == DicomUID.StudyRootQueryRetrieveInformationModelMove
                 || syntax == DicomUID.BasicGrayscalePrintManagementMeta
                 || syntax == DicomUID.BasicColorPrintManagementMeta
+                || syntax == DicomUID.BasicFilmSession
+                || syntax == DicomUID.BasicFilmBox
+                || syntax == DicomUID.BasicGrayscaleImageBox
+                || syntax == DicomUID.BasicColorImageBox
+                || syntax == DicomUID.Printer
+                || syntax == DicomUID.PrintJob
                 || syntax == DicomUID.ModalityWorklistInformationModelFind
                 || syntax == DicomUID.Parse("1.2.840.10008.1.20.1"))
             {
@@ -107,30 +115,45 @@ public class FocusMedScp : DicomService,
                 if (syntaxesToAccept.Any())
                 {
                     pc.AcceptTransferSyntaxes(syntaxesToAccept);
-                    _logger.LogInformation("Accepted Abstract Syntax: {AbstractSyntax} with Transfer Syntaxes: {TransferSyntaxes}", syntax.Name, string.Join(", ", syntaxesToAccept.Select(s => s.UID.Name)));
+                    accepted++;
                 }
                 else
                 {
                     pc.SetResult(DicomPresentationContextResult.RejectTransferSyntaxesNotSupported);
-                    _logger.LogWarning("Rejected Abstract Syntax: {AbstractSyntax} due to unsupported Transfer Syntaxes.", syntax.Name);
+                    rejected++;
                 }
             }
             else
             {
                 pc.SetResult(DicomPresentationContextResult.RejectAbstractSyntaxNotSupported);
-                _logger.LogWarning("Rejected Abstract Syntax: {AbstractSyntax} (Not Supported)", syntax.Name);
+                rejected++;
             }
         }
 
         var remoteIpForAudit = association.RemoteHost;
-        await WriteAuditEntryAsync(association, remoteIpForAudit, AssociationOutcome.Success);
+
+        if (accepted == 0)
+        {
+            _logger.LogWarning("Association: {CallingAe} -> {CalledAe} | 0 PCs accepted, rejecting association",
+                association.CallingAE, association.CalledAE);
+            await WriteAuditEntryAsync(association, remoteIpForAudit, AssociationOutcome.Rejected);
+            await SendAssociationRejectAsync(
+                DicomRejectResult.Permanent,
+                DicomRejectSource.ServiceUser,
+                DicomRejectReason.NoReasonGiven);
+            return;
+        }
+
+        _logger.LogInformation("Association: {CallingAe} -> {CalledAe} | {Accepted} accepted, {Rejected} rejected",
+            association.CallingAE, association.CalledAE, accepted, rejected);
+
+        var outcome = rejected > 0 ? AssociationOutcome.PartiallyAccepted : AssociationOutcome.Success;
+        await WriteAuditEntryAsync(association, remoteIpForAudit, outcome);
         await SendAssociationAcceptAsync(association);
     }
 
     public Task OnReceiveAssociationReleaseRequestAsync()
     {
-        var duration = (DateTime.UtcNow - _associationStartTime).TotalMilliseconds;
-        _logger.LogInformation("Association release request received. Duration: {DurationMs}ms. Association closing normally.", (int)duration);
         return SendAssociationReleaseResponseAsync();
     }
 
@@ -176,8 +199,17 @@ public class FocusMedScp : DicomService,
 
     public async Task<DicomCStoreResponse> OnCStoreRequestAsync(DicomCStoreRequest request)
     {
-        await _upsertService.ProcessDicomFileAsync(request.File);
-        return new DicomCStoreResponse(request, DicomStatus.Success);
+        try
+        {
+            await _upsertService.StoreFileOnlyAsync(request.File);
+            return new DicomCStoreResponse(request, DicomStatus.Success);
+        }
+        catch (Exception ex)
+        {
+            var sopUid = request.File.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
+            _logger.LogError(ex, "C-STORE failed for {SopUid}", sopUid);
+            return new DicomCStoreResponse(request, DicomStatus.ProcessingFailure);
+        }
     }
 
     public Task OnCStoreRequestExceptionAsync(string tempFileName, Exception e)
@@ -188,16 +220,41 @@ public class FocusMedScp : DicomService,
 
     public Task<DicomCEchoResponse> OnCEchoRequestAsync(DicomCEchoRequest request)
     {
-        _logger.LogInformation("C-ECHO request received.");
         return Task.FromResult(new DicomCEchoResponse(request, DicomStatus.Success));
     }
 
     public async IAsyncEnumerable<DicomCFindResponse> OnCFindRequestAsync(DicomCFindRequest request)
     {
+        DicomCFindResponse[] results;
+        Exception? queryException = null;
+        try
+        {
+            results = await ExecuteCFindQueryAsync(request);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "C-FIND query failed");
+            queryException = ex;
+            results = [];
+        }
+
+        if (queryException != null)
+        {
+            yield return new DicomCFindResponse(request, DicomStatus.ProcessingFailure);
+            yield break;
+        }
+
+        foreach (var r in results)
+            yield return r;
+    }
+
+    private async Task<DicomCFindResponse[]> ExecuteCFindQueryAsync(DicomCFindRequest request)
+    {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
         var level = request.Dataset.GetSingleValueOrDefault<string>(DicomTag.QueryRetrieveLevel, string.Empty);
+        var results = new List<DicomCFindResponse>();
 
         if (level == string.Empty || request.Dataset.Contains(DicomTag.ScheduledProcedureStepSequence))
         {
@@ -206,7 +263,11 @@ public class FocusMedScp : DicomService,
 
             var query = db.WorklistEntries.AsQueryable();
             if (!string.IsNullOrWhiteSpace(patientId)) query = query.Where(w => w.PatientId.Contains(patientId));
-            if (!string.IsNullOrWhiteSpace(patientName) && patientName != "*") query = query.Where(w => w.PatientName.Contains(patientName.Replace("*", "")));
+            if (!string.IsNullOrWhiteSpace(patientName) && patientName != "*")
+            {
+                var searchName = patientName.Replace("*", "").Replace("?", "");
+                query = query.Where(w => EF.Functions.Like(w.PatientName, $"%{searchName}%"));
+            }
 
             var entries = await query.ToListAsync();
 
@@ -238,12 +299,12 @@ public class FocusMedScp : DicomService,
 
                 responseDataset.Add(new DicomSequence(DicomTag.ScheduledProcedureStepSequence, spsDataset));
 
-                yield return new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset };
+                results.Add(new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset });
             }
 
             await db.SaveChangesAsync();
-            yield return new DicomCFindResponse(request, DicomStatus.Success);
-            yield break;
+            results.Add(new DicomCFindResponse(request, DicomStatus.Success));
+            return results.ToArray();
         }
 
         if (level?.ToString() == "PATIENT")
@@ -266,7 +327,7 @@ public class FocusMedScp : DicomService,
                     { DicomTag.PatientName, patient.PatientName },
                     { DicomTag.PatientID, patient.PatientId }
                 };
-                yield return new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset };
+                results.Add(new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset });
             }
         }
         else if (level?.ToString() == "STUDY")
@@ -298,7 +359,7 @@ public class FocusMedScp : DicomService,
                     { DicomTag.StudyDate, study.StudyDate?.ToString("yyyyMMdd") ?? string.Empty },
                     { DicomTag.AccessionNumber, string.Empty }
                 };
-                yield return new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset };
+                results.Add(new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset });
             }
         }
         else if (level?.ToString() == "SERIES")
@@ -325,49 +386,73 @@ public class FocusMedScp : DicomService,
                     { DicomTag.Modality, series.Modality },
                     { DicomTag.StudyInstanceUID, series.Study?.StudyInstanceUid ?? string.Empty }
                 };
-                yield return new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset };
+                results.Add(new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset });
             }
         }
 
-        yield return new DicomCFindResponse(request, DicomStatus.Success);
+        results.Add(new DicomCFindResponse(request, DicomStatus.Success));
+        return results.ToArray();
     }
 
     public async IAsyncEnumerable<DicomCMoveResponse> OnCMoveRequestAsync(DicomCMoveRequest request)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-
-        var level = request.Dataset.GetSingleValueOrDefault<string>(DicomTag.QueryRetrieveLevel, string.Empty);
-        var affectedSop = request.Dataset.GetSingleValueOrDefault(DicomTag.AffectedSOPInstanceUID, string.Empty);
-
         List<DicomImage> images;
+        Exception? queryException = null;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
-        if (!string.IsNullOrWhiteSpace(affectedSop))
-        {
-            images = await db.DicomImages
-                .Where(i => i.SopInstanceUid == affectedSop)
-                .ToListAsync();
+            var level = request.Dataset.GetSingleValueOrDefault<string>(DicomTag.QueryRetrieveLevel, string.Empty);
+            var affectedSop = request.Dataset.GetSingleValueOrDefault(DicomTag.AffectedSOPInstanceUID, string.Empty);
+
+            if (!string.IsNullOrWhiteSpace(affectedSop))
+            {
+                images = await db.DicomImages
+                    .Where(i => i.SopInstanceUid == affectedSop)
+                    .ToListAsync();
+            }
+            else if (level == "SERIES")
+            {
+                var seriesUid = request.Dataset.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty);
+                images = await db.DicomImages
+                    .Include(i => i.Series)
+                    .Where(i => i.Series.SeriesInstanceUid == seriesUid)
+                    .ToListAsync();
+            }
+            else if (level == "STUDY")
+            {
+                var studyUid = request.Dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
+                images = await db.DicomImages
+                    .Include(i => i.Series)
+                    .ThenInclude(s => s.Study)
+                    .Where(i => i.Series.Study.StudyInstanceUid == studyUid)
+                    .ToListAsync();
+            }
+            else
+            {
+                images = new List<DicomImage>();
+            }
         }
-        else if (level == "SERIES")
+        catch (Exception ex)
         {
-            var seriesUid = request.Dataset.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty);
-            images = await db.DicomImages
-                .Include(i => i.Series)
-                .Where(i => i.Series.SeriesInstanceUid == seriesUid)
-                .ToListAsync();
-        }
-        else if (level == "STUDY")
-        {
-            var studyUid = request.Dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
-            images = await db.DicomImages
-                .Include(i => i.Series)
-                .ThenInclude(s => s.Study)
-                .Where(i => i.Series.Study.StudyInstanceUid == studyUid)
-                .ToListAsync();
-        }
-        else
-        {
+            _logger.LogError(ex, "C-MOVE query failed");
+            queryException = ex;
             images = new List<DicomImage>();
+        }
+
+        if (queryException != null)
+        {
+            yield return new DicomCMoveResponse(request, DicomStatus.ProcessingFailure)
+            {
+                Dataset = new DicomDataset
+                {
+                    { DicomTag.NumberOfRemainingSuboperations, (ushort)0 },
+                    { DicomTag.NumberOfFailedSuboperations, (ushort)1 },
+                    { DicomTag.NumberOfWarningSuboperations, (ushort)0 }
+                }
+            };
+            yield break;
         }
 
         var remaining = images.Count;
@@ -420,211 +505,519 @@ public class FocusMedScp : DicomService,
 
     public async Task<DicomNCreateResponse> OnNCreateRequestAsync(DicomNCreateRequest request)
     {
-        var sopUid = request.SOPInstanceUID.UID;
-        var sopClass = request.SOPClassUID.UID;
-
-        _logger.LogInformation("N-CREATE request for SOP Class {SopClass}, Instance {SopInstance}", sopClass, sopUid);
-
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-
-        if (sopClass == DicomUID.BasicFilmSession.UID)
+        try
         {
-            var printJob = new PrintJob
+            var sopUid = request.SOPInstanceUID?.UID ?? string.Empty;
+            var sopClass = request.SOPClassUID?.UID ?? string.Empty;
+
+            if (string.IsNullOrEmpty(sopUid))
             {
-                SopInstanceUid = sopUid,
-                NumberOfCopies = request.Dataset.GetSingleValueOrDefault(DicomTag.NumberOfCopies, (ushort)1),
-                PrintPriority = request.Dataset.GetSingleValueOrDefault(DicomTag.PrintPriority, "NORMAL")
+                sopUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+            }
+
+            if (string.IsNullOrEmpty(sopClass))
+            {
+                _logger.LogWarning("N-CREATE rejected: missing SOP Class UID");
+                return new DicomNCreateResponse(request, DicomStatus.InvalidArgumentValue);
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+
+            if (sopClass == DicomUID.BasicFilmSession.UID)
+            {
+                var existing = await db.PrintJobs.FirstOrDefaultAsync(p => p.SopInstanceUid == sopUid);
+                if (existing != null)
+                {
+                    var ds = new DicomDataset(request.Dataset);
+                    ds.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
+                    return new DicomNCreateResponse(request, DicomStatus.Success) { Dataset = ds };
+                }
+
+                var printJob = new PrintJob
+                {
+                    SopInstanceUid = sopUid,
+                    NumberOfCopies = request.Dataset.GetSingleValueOrDefault(DicomTag.NumberOfCopies, (ushort)1),
+                    PrintPriority = request.Dataset.GetSingleValueOrDefault(DicomTag.PrintPriority, "NORMAL")
+                };
+
+                db.PrintJobs.Add(printJob);
+                await db.SaveChangesAsync();
+                _logger.LogInformation("Print Job #{PrintJobId} created ({Copies} copy, {Priority})", printJob.Id, printJob.NumberOfCopies, printJob.PrintPriority);
+            }
+            else if (sopClass == DicomUID.BasicFilmBox.UID)
+            {
+                var printJobUid = string.Empty;
+                if (request.Dataset.TryGetSequence(DicomTag.ReferencedFilmSessionSequence, out var filmSessionSeq)
+                    && filmSessionSeq.Items.Count > 0)
+                {
+                    printJobUid = filmSessionSeq.Items[0].GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty);
+                }
+
+                var existing = await db.FilmBoxes.FirstOrDefaultAsync(f => f.SopInstanceUid == sopUid);
+                if (existing != null)
+                {
+                    var ds = new DicomDataset(request.Dataset);
+                    ds.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
+                    return new DicomNCreateResponse(request, DicomStatus.Success) { Dataset = ds };
+                }
+
+                PrintJob? printJob = null;
+
+                if (!string.IsNullOrEmpty(printJobUid))
+                {
+                    printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.SopInstanceUid == printJobUid);
+                }
+
+                if (printJob == null)
+                {
+                    _logger.LogWarning("FilmBox N-CREATE: PrintJob {PrintJobUid} not found, creating orphaned FilmBox", printJobUid);
+                }
+
+                var filmBox = new FilmBox
+                {
+                    SopInstanceUid = sopUid,
+                    FilmSize = request.Dataset.GetSingleValueOrDefault(DicomTag.FilmSizeID, "A4"),
+                    Orientation = request.Dataset.GetSingleValueOrDefault(DicomTag.FilmOrientation, "PORTRAIT"),
+                    PrintJobId = printJob?.Id
+                };
+
+                db.FilmBoxes.Add(filmBox);
+                await db.SaveChangesAsync();
+
+                var imageDisplayFormat = request.Dataset.GetSingleValueOrDefault(DicomTag.ImageDisplayFormat, "STANDARD\\1,1");
+                var imageBoxCount = ParseImageBoxCount(imageDisplayFormat);
+
+                var isColor = Association.PresentationContexts
+                    .Any(pc => pc.AbstractSyntax == DicomUID.BasicColorPrintManagementMeta
+                        && pc.Result == DicomPresentationContextResult.Accept);
+                if (!isColor)
+                    isColor = request.Dataset.GetSingleValueOrDefault(DicomTag.PrintPriority, "") == "COLOR";
+                var imageBoxSopClass = isColor ? DicomUID.BasicColorImageBox : DicomUID.BasicGrayscaleImageBox;
+
+                var referencedImageBoxSeq = new DicomSequence(DicomTag.ReferencedImageBoxSequence);
+
+                for (int i = 0; i < imageBoxCount; i++)
+                {
+                    var imageBoxUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+
+                    var imageBox = new PrintImageBox
+                    {
+                        SopInstanceUid = imageBoxUid,
+                        FilmBoxId = filmBox.Id,
+                        FrameNumber = i + 1
+                    };
+                    db.PrintImageBoxes.Add(imageBox);
+
+                    var refItem = new DicomDataset
+                    {
+                        { DicomTag.ReferencedSOPClassUID, imageBoxSopClass.UID },
+                        { DicomTag.ReferencedSOPInstanceUID, imageBoxUid }
+                    };
+                    referencedImageBoxSeq.Items.Add(refItem);
+                }
+
+                await db.SaveChangesAsync();
+
+                var filmBoxResponseDataset = new DicomDataset(request.Dataset);
+                filmBoxResponseDataset.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
+                filmBoxResponseDataset.AddOrUpdate(DicomTag.ImageDisplayFormat, imageDisplayFormat);
+                if (filmSessionSeq != null)
+                    filmBoxResponseDataset.AddOrUpdate(DicomTag.ReferencedFilmSessionSequence, filmSessionSeq);
+                filmBoxResponseDataset.AddOrUpdate(DicomTag.ReferencedImageBoxSequence, referencedImageBoxSeq);
+
+                return new DicomNCreateResponse(request, DicomStatus.Success) { Dataset = filmBoxResponseDataset };
+            }
+            else if (sopClass == DicomUID.BasicGrayscaleImageBox.UID || sopClass == DicomUID.BasicColorImageBox.UID)
+            {
+                var filmBoxUid = string.Empty;
+                if (request.Dataset.TryGetSequence(DicomTag.ReferencedFilmBoxSequence, out var filmBoxSeq)
+                    && filmBoxSeq.Items.Count > 0)
+                {
+                    filmBoxUid = filmBoxSeq.Items[0].GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty);
+                }
+
+                var existing = await db.PrintImageBoxes.FirstOrDefaultAsync(i => i.SopInstanceUid == sopUid);
+                if (existing != null)
+                {
+                    var ds = new DicomDataset(request.Dataset);
+                    ds.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
+                    return new DicomNCreateResponse(request, DicomStatus.Success) { Dataset = ds };
+                }
+
+                var filmBox = await db.FilmBoxes.FirstOrDefaultAsync(f => f.SopInstanceUid == filmBoxUid);
+
+                var refImageUid = string.Empty;
+                if (request.Dataset.TryGetSequence(DicomTag.ReferencedImageSequence, out var refImageSeq)
+                    && refImageSeq.Items.Count > 0)
+                {
+                    refImageUid = refImageSeq.Items[0].GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty);
+                }
+
+                var imageBox = new PrintImageBox
+                {
+                    SopInstanceUid = sopUid,
+                    ReferencedImageSopUid = refImageUid,
+                    FrameNumber = request.Dataset.GetSingleValueOrDefault(DicomTag.InstanceNumber, 0),
+                    FilmBoxId = filmBox?.Id
+                };
+
+                db.PrintImageBoxes.Add(imageBox);
+                await db.SaveChangesAsync();
+            }
+
+            var responseDataset = new DicomDataset(request.Dataset);
+            responseDataset.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
+
+            return new DicomNCreateResponse(request, DicomStatus.Success)
+            {
+                Dataset = responseDataset
             };
-            db.PrintJobs.Add(printJob);
-            await db.SaveChangesAsync();
         }
-        else if (sopClass == DicomUID.BasicFilmBox.UID)
+        catch (Exception ex)
         {
-            var printJobUid = string.Empty;
-            if (request.Dataset.TryGetSequence(DicomTag.ReferencedFilmSessionSequence, out var filmSessionSeq)
-                && filmSessionSeq.Items.Count > 0)
-            {
-                printJobUid = filmSessionSeq.Items[0].GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty);
-            }
-
-            var printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.SopInstanceUid == printJobUid);
-
-            var filmBox = new FilmBox
-            {
-                SopInstanceUid = sopUid,
-                FilmSize = request.Dataset.GetSingleValueOrDefault(DicomTag.FilmSizeID, "A4"),
-                Orientation = request.Dataset.GetSingleValueOrDefault(DicomTag.FilmOrientation, "PORTRAIT")
-            };
-
-            if (printJob != null)
-            {
-                filmBox.PrintJobId = printJob.Id;
-            }
-
-            db.FilmBoxes.Add(filmBox);
-            await db.SaveChangesAsync();
+            _logger.LogError(ex, "N-CREATE failed");
+            return new DicomNCreateResponse(request, DicomStatus.ProcessingFailure);
         }
-        else if (sopClass == DicomUID.BasicGrayscaleImageBox.UID || sopClass == DicomUID.BasicColorImageBox.UID)
-        {
-            var filmBoxUid = string.Empty;
-            if (request.Dataset.TryGetSequence(DicomTag.ReferencedFilmBoxSequence, out var filmBoxSeq)
-                && filmBoxSeq.Items.Count > 0)
-            {
-                filmBoxUid = filmBoxSeq.Items[0].GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty);
-            }
-
-            var filmBox = await db.FilmBoxes.FirstOrDefaultAsync(f => f.SopInstanceUid == filmBoxUid);
-
-            var refImageUid = string.Empty;
-            if (request.Dataset.TryGetSequence(DicomTag.ReferencedImageSequence, out var refImageSeq)
-                && refImageSeq.Items.Count > 0)
-            {
-                refImageUid = refImageSeq.Items[0].GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty);
-            }
-
-            var imageBox = new PrintImageBox
-            {
-                SopInstanceUid = sopUid,
-                ReferencedImageSopUid = refImageUid,
-                FrameNumber = request.Dataset.GetSingleValueOrDefault(DicomTag.InstanceNumber, 0)
-            };
-
-            if (filmBox != null)
-            {
-                imageBox.FilmBoxId = filmBox.Id;
-            }
-
-            db.PrintImageBoxes.Add(imageBox);
-            await db.SaveChangesAsync();
-        }
-
-        return new DicomNCreateResponse(request, DicomStatus.Success)
-        {
-            Dataset = request.Dataset
-        };
     }
 
     public async Task<DicomNSetResponse> OnNSetRequestAsync(DicomNSetRequest request)
     {
-        var sopUid = request.SOPInstanceUID.UID;
+        string sopUid;
+        try { sopUid = request.SOPInstanceUID?.UID ?? string.Empty; }
+        catch { sopUid = string.Empty; }
 
-        _logger.LogInformation("N-SET request for Instance {SopInstance}", sopUid);
-
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-
-        var imageBox = await db.PrintImageBoxes.FirstOrDefaultAsync(i => i.SopInstanceUid == sopUid);
-        if (imageBox != null)
+        if (string.IsNullOrEmpty(sopUid))
         {
-            if (request.Dataset.TryGetSequence(DicomTag.ReferencedImageSequence, out var refImageSeq)
-                && refImageSeq.Items.Count > 0)
+            var command = new DicomDataset
             {
-                imageBox.ReferencedImageSopUid = refImageSeq.Items[0]
-                    .GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty);
-            }
-            imageBox.FrameNumber = request.Dataset.GetSingleValueOrDefault(DicomTag.InstanceNumber, imageBox.FrameNumber);
-            await db.SaveChangesAsync();
+                { DicomTag.CommandField, (ushort)DicomCommandField.NSetResponse },
+                { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                { DicomTag.Status, (ushort)DicomStatus.InvalidArgumentValue.Code },
+                { DicomTag.CommandDataSetType, (ushort)0x0101 },
+            };
+            var response = new DicomNSetResponse(command);
+            response.PresentationContext = request.PresentationContext;
+            return response;
         }
 
-        return new DicomNSetResponse(request, DicomStatus.Success);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+
+            var imageBox = await db.PrintImageBoxes
+                .Include(i => i.FilmBox).ThenInclude(f => f!.PrintJob).ThenInclude(p => p!.Patient)
+                .FirstOrDefaultAsync(i => i.SopInstanceUid == sopUid);
+            if (imageBox != null)
+            {
+                var instanceNumber = request.Dataset.GetSingleValueOrDefault(DicomTag.InstanceNumber, imageBox.FrameNumber);
+                imageBox.FrameNumber = instanceNumber;
+
+                string? patientId = null;
+                string? patientName = null;
+
+                if (imageBox.FilmBox?.PrintJob?.Patient != null)
+                {
+                    patientId = imageBox.FilmBox.PrintJob.Patient.PatientId;
+                    patientName = imageBox.FilmBox.PrintJob.Patient.PatientName;
+                    _logger.LogDebug("Patient from PrintJob chain: {PatientId} - {PatientName}", patientId, patientName);
+                }
+
+                DicomSequence? imageSeq = null;
+                if (request.Dataset.TryGetSequence(DicomTag.BasicGrayscaleImageSequence, out var gsSeq)
+                    && gsSeq.Items.Count > 0)
+                    imageSeq = gsSeq;
+                else if (request.Dataset.TryGetSequence(DicomTag.BasicColorImageSequence, out var csSeq)
+                    && csSeq.Items.Count > 0)
+                    imageSeq = csSeq;
+
+                if (string.IsNullOrEmpty(patientId) && imageSeq != null && imageSeq.Items.Count > 0)
+                {
+                    patientId = imageSeq.Items[0].GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
+                    patientName = imageSeq.Items[0].GetSingleValueOrDefault(DicomTag.PatientName, string.Empty);
+                    if (!string.IsNullOrEmpty(patientId))
+                        _logger.LogDebug("Patient from inner DICOM dataset: {PatientId} - {PatientName}", patientId, patientName);
+                }
+
+                if (string.IsNullOrEmpty(patientId))
+                {
+                    var recentCStoreStudy = await db.Studies
+                        .Where(s => s.Series.Any(se => se.Images.Any(di => di.Source == "C-STORE")))
+                        .Include(s => s.Patient)
+                        .OrderByDescending(s => s.LastUpdatedAt)
+                        .FirstOrDefaultAsync();
+                    if (recentCStoreStudy?.Patient != null)
+                    {
+                        patientId = recentCStoreStudy.Patient.PatientId;
+                        patientName = recentCStoreStudy.Patient.PatientName;
+                        _logger.LogDebug("Patient from recent C-STORE study: {PatientId} - {PatientName}", patientId, patientName);
+                    }
+                }
+
+                if (string.IsNullOrEmpty(patientId))
+                {
+                    patientId = "";
+                    patientName = "";
+                    _logger.LogWarning("No patient info found for print image box {SopUid}, using empty patient fields", sopUid);
+                }
+
+                if (imageSeq != null)
+                {
+                    var innerDataset = imageSeq.Items[0];
+                    var storedFile = await _upsertService.IngestPrintImageAsync(innerDataset, patientId, patientName!);
+                    if (storedFile != null)
+                    {
+                        var newSopUid = storedFile.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
+                        imageBox.ReferencedImageSopUid = newSopUid;
+
+                        var newStudyUid = storedFile.Dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
+                        var printStudy = await db.Studies.FirstOrDefaultAsync(s => s.StudyInstanceUid == newStudyUid);
+                        if (printStudy != null && imageBox.FilmBox?.PrintJob != null)
+                        {
+                            imageBox.FilmBox.PrintJob.PatientId = printStudy.PatientId;
+                            imageBox.FilmBox.PrintJob.StudyId = printStudy.Id;
+                        }
+                    }
+                }
+
+                await db.SaveChangesAsync();
+            }
+            else
+            {
+                _logger.LogWarning("Image Box not found for N-SET: {SopUid}", sopUid);
+                var cmd = new DicomDataset
+                {
+                    { DicomTag.CommandField, (ushort)DicomCommandField.NSetResponse },
+                    { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                    { DicomTag.Status, (ushort)DicomStatus.ProcessingFailure.Code },
+                    { DicomTag.CommandDataSetType, (ushort)0x0101 },
+                };
+                var resp = new DicomNSetResponse(cmd);
+                resp.PresentationContext = request.PresentationContext;
+                return resp;
+            }
+
+            return new DicomNSetResponse(request, DicomStatus.Success);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "N-SET failed");
+            var command = new DicomDataset
+            {
+                { DicomTag.CommandField, (ushort)DicomCommandField.NSetResponse },
+                { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                { DicomTag.Status, (ushort)DicomStatus.ProcessingFailure.Code },
+                { DicomTag.CommandDataSetType, (ushort)0x0101 },
+            };
+            var response = new DicomNSetResponse(command);
+            response.PresentationContext = request.PresentationContext;
+            return response;
+        }
     }
 
     public async Task<DicomNActionResponse> OnNActionRequestAsync(DicomNActionRequest request)
     {
-        var sopUid = request.SOPInstanceUID.UID;
+        string sopUid;
+        try { sopUid = request.SOPInstanceUID?.UID ?? string.Empty; }
+        catch (Exception ex) { _logger.LogDebug(ex, "Failed to extract SOP Instance UID from N-ACTION request"); sopUid = string.Empty; }
+
+        string sopClassUid;
+        try { sopClassUid = request.SOPClassUID?.UID ?? string.Empty; }
+        catch (Exception ex) { _logger.LogDebug(ex, "Failed to extract SOP Class UID from N-ACTION request"); sopClassUid = string.Empty; }
+
         var actionType = request.Dataset.GetSingleValueOrDefault(DicomTag.ActionTypeID, (ushort)0);
 
-        _logger.LogInformation("N-ACTION request for Instance {SopInstance}, Action {Action}", sopUid, actionType);
-
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-
-        if (actionType == 1)
+        try
         {
-            if (sopUid == "1.2.840.10008.1.20.1.1")
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+
+            if (!string.IsNullOrEmpty(sopUid) && !string.IsNullOrEmpty(sopClassUid))
             {
-                var transactionUid = request.Dataset.GetSingleValueOrDefault(DicomTag.TransactionUID, string.Empty);
-                var referencedSopSeq = request.Dataset.GetSequence(DicomTag.ReferencedSOPSequence);
-
-                var uids = new List<string>();
-                foreach (var item in referencedSopSeq.Items)
+                if (sopClassUid == DicomUID.BasicFilmSession.UID && actionType == 1)
                 {
-                    uids.Add(item.GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty));
-                }
-
-                var job = new StorageCommitmentJob
-                {
-                    TransactionUid = transactionUid,
-                    RequestedSopInstanceUids = string.Join(",", uids),
-                    CallingAet = Association.CallingAE,
-                    Status = StorageCommitmentStatus.Pending
-                };
-
-                db.StorageCommitmentJobs.Add(job);
-                await db.SaveChangesAsync();
-
-                _logger.LogInformation("Accepted Storage Commitment request for Transaction UID {TransactionUID}", transactionUid);
-                return new DicomNActionResponse(request, DicomStatus.Success);
-            }
-            else
-            {
-                var filmBox = await db.FilmBoxes.FirstOrDefaultAsync(f => f.SopInstanceUid == sopUid);
-                if (filmBox != null)
-                {
-                    var printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.Id == filmBox.PrintJobId);
+                    var printJob = await db.PrintJobs.Include(p => p.Patient).FirstOrDefaultAsync(p => p.SopInstanceUid == sopUid);
                     if (printJob != null)
                     {
-                        _logger.LogInformation(
-                            "Print job {PrintJobId} received via N-ACTION. Status remains Pending — " +
-                            "physical print is decoupled to PrintExecutionService.",
-                            printJob.Id);
+                        printJob.Status = PrintStatus.Completed;
+                        await db.SaveChangesAsync();
+                    }
+                }
+                else if (sopClassUid == DicomUID.BasicFilmBox.UID && actionType == 1)
+                {
+                    var filmBox = await db.FilmBoxes.FirstOrDefaultAsync(f => f.SopInstanceUid == sopUid);
+                    if (filmBox?.PrintJobId != null)
+                    {
+                        var printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.Id == filmBox.PrintJobId);
+                        if (printJob != null)
+                        {
+                            printJob.Status = PrintStatus.Completed;
+                            await db.SaveChangesAsync();
+                        }
+                    }
+                }
+                else if (sopClassUid == "1.2.840.10008.1.20.1")
+                {
+                    var transactionUid = request.Dataset.GetSingleValueOrDefault(DicomTag.TransactionUID, string.Empty);
+                    if (request.Dataset.TryGetSequence(DicomTag.ReferencedSOPSequence, out var referencedSopSeq)
+                        && referencedSopSeq.Items.Count > 0)
+                    {
+                        var uids = new List<string>();
+                        foreach (var item in referencedSopSeq.Items)
+                        {
+                            uids.Add(item.GetSingleValueOrDefault(DicomTag.ReferencedSOPInstanceUID, string.Empty));
+                        }
+
+                        var job = new StorageCommitmentJob
+                        {
+                            TransactionUid = transactionUid,
+                            RequestedSopInstanceUids = string.Join(",", uids),
+                            CallingAet = Association.CallingAE,
+                            Status = StorageCommitmentStatus.Pending
+                        };
+
+                        db.StorageCommitmentJobs.Add(job);
+                        await db.SaveChangesAsync();
                     }
                 }
             }
-        }
+            else
+            {
+                _logger.LogWarning("N-ACTION with empty SOP Instance UID or SOP Class UID, ignoring");
+            }
 
-        return new DicomNActionResponse(request, DicomStatus.Success);
+            var actionCommand = new DicomDataset
+            {
+                { DicomTag.CommandField, (ushort)DicomCommandField.NActionResponse },
+                { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                { DicomTag.Status, (ushort)DicomStatus.Success.Code },
+                { DicomTag.CommandDataSetType, (ushort)0x0101 },
+            };
+            var actionResponse = new DicomNActionResponse(actionCommand);
+            actionResponse.PresentationContext = request.PresentationContext;
+            return actionResponse;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "N-ACTION failed");
+            var command = new DicomDataset
+            {
+                { DicomTag.CommandField, (ushort)DicomCommandField.NActionResponse },
+                { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                { DicomTag.Status, (ushort)DicomStatus.ProcessingFailure.Code },
+                { DicomTag.CommandDataSetType, (ushort)0x0101 },
+            };
+            var response = new DicomNActionResponse(command);
+            response.PresentationContext = request.PresentationContext;
+            return response;
+        }
     }
 
     public async Task<DicomNDeleteResponse> OnNDeleteRequestAsync(DicomNDeleteRequest request)
     {
-        var sopUid = request.SOPInstanceUID.UID;
+        string sopUid;
+        try { sopUid = request.SOPInstanceUID?.UID ?? string.Empty; }
+        catch (Exception ex) { _logger.LogDebug(ex, "Failed to extract SOP Instance UID from N-DELETE request"); sopUid = string.Empty; }
 
-        _logger.LogInformation("N-DELETE request for Instance {SopInstance}", sopUid);
-
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-
-        var printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.SopInstanceUid == sopUid);
-        if (printJob != null)
+        if (string.IsNullOrEmpty(sopUid))
         {
-            var filmBoxes = await db.FilmBoxes.Where(f => f.PrintJobId == printJob.Id).ToListAsync();
-            foreach (var fb in filmBoxes)
+            var command = new DicomDataset
             {
-                var imageBoxes = await db.PrintImageBoxes.Where(i => i.FilmBoxId == fb.Id).ToListAsync();
-                db.PrintImageBoxes.RemoveRange(imageBoxes);
-            }
-            db.FilmBoxes.RemoveRange(filmBoxes);
-            db.PrintJobs.Remove(printJob);
-            await db.SaveChangesAsync();
+                { DicomTag.CommandField, (ushort)DicomCommandField.NDeleteResponse },
+                { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                { DicomTag.Status, (ushort)DicomStatus.InvalidArgumentValue.Code },
+                { DicomTag.CommandDataSetType, (ushort)0x0101 },
+            };
+            var response = new DicomNDeleteResponse(command);
+            response.PresentationContext = request.PresentationContext;
+            return response;
         }
 
-        return new DicomNDeleteResponse(request, DicomStatus.Success);
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+
+            var printJob = await db.PrintJobs
+                .Include(p => p.Patient)
+                .Include(p => p.FilmBoxes).ThenInclude(fb => fb.ImageBoxes)
+                .FirstOrDefaultAsync(p => p.SopInstanceUid == sopUid);
+            if (printJob != null)
+            {
+                foreach (var fb in printJob.FilmBoxes)
+                {
+                    db.PrintImageBoxes.RemoveRange(fb.ImageBoxes);
+                }
+                db.FilmBoxes.RemoveRange(printJob.FilmBoxes);
+                db.PrintJobs.Remove(printJob);
+                await db.SaveChangesAsync();
+            }
+
+            var command = new DicomDataset
+            {
+                { DicomTag.CommandField, (ushort)DicomCommandField.NDeleteResponse },
+                { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                { DicomTag.Status, (ushort)DicomStatus.Success.Code },
+                { DicomTag.CommandDataSetType, (ushort)0x0101 },
+            };
+            var response = new DicomNDeleteResponse(command);
+            response.PresentationContext = request.PresentationContext;
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "N-DELETE failed");
+            var command = new DicomDataset
+            {
+                { DicomTag.CommandField, (ushort)DicomCommandField.NDeleteResponse },
+                { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                { DicomTag.Status, (ushort)DicomStatus.ProcessingFailure.Code },
+                { DicomTag.CommandDataSetType, (ushort)0x0101 },
+            };
+            var response = new DicomNDeleteResponse(command);
+            response.PresentationContext = request.PresentationContext;
+            return response;
+        }
     }
 
     public Task<DicomNGetResponse> OnNGetRequestAsync(DicomNGetRequest request)
     {
-        _logger.LogInformation("N-GET request for Instance {SopInstance}", request.SOPInstanceUID.UID);
-        return Task.FromResult(new DicomNGetResponse(request, DicomStatus.Success)
+        var dataset = new DicomDataset
         {
-            Dataset = new DicomDataset()
-        });
+            { DicomTag.PrinterStatus, "NORMAL" },
+            { DicomTag.PrinterStatusInfo, "IDLE" },
+            { DicomTag.PrinterName, "FocusMed" }
+        };
+
+        return Task.FromResult(new DicomNGetResponse(request, DicomStatus.Success) { Dataset = dataset });
     }
 
     public Task<DicomNEventReportResponse> OnNEventReportRequestAsync(DicomNEventReportRequest request)
     {
-        _logger.LogInformation("N-EVENT-REPORT request for Instance {SopInstance}", request.SOPInstanceUID.UID);
         return Task.FromResult(new DicomNEventReportResponse(request, DicomStatus.Success));
+    }
+
+    private static int ParseImageBoxCount(string imageDisplayFormat)
+    {
+        if (string.IsNullOrWhiteSpace(imageDisplayFormat))
+            return 1;
+
+        var parts = imageDisplayFormat.Split('\\');
+        if (parts.Length < 2)
+            return 1;
+
+        var dimensions = parts[1].Split(',');
+        if (dimensions.Length >= 2
+            && int.TryParse(dimensions[0], out var cols)
+            && int.TryParse(dimensions[1], out var rows))
+        {
+            return Math.Max(1, cols * rows);
+        }
+
+        if (int.TryParse(dimensions[0], out var single))
+            return Math.Max(1, single);
+
+        return 1;
     }
 }

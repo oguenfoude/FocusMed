@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FellowOakDicom;
 using FocusMed.Data;
 using FocusMed.Data.Entities;
@@ -12,29 +13,30 @@ public class DicomUpsertService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<DicomUpsertService> _logger;
     private readonly IStorageForwardQueue _forwardQueue;
-    private readonly string _archivePath;
-    private readonly string _imagesPath;
+    private readonly string _rawArchivePath;
+    private readonly string _printArchivePath;
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
 
     public DicomUpsertService(IServiceScopeFactory scopeFactory, ILogger<DicomUpsertService> logger, IStorageForwardQueue forwardQueue, IConfiguration configuration)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
         _forwardQueue = forwardQueue;
-        _archivePath = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("ArchivePath") ?? "%FOCUSMED_DATA%/archive");
-        _imagesPath = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("ImagesPath") ?? "%FOCUSMED_DATA%/images");
-        Directory.CreateDirectory(_archivePath);
-        Directory.CreateDirectory(_imagesPath);
+        var dataDir = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("DataDirectory") ?? "%FOCUSMED_DATA%");
+        _rawArchivePath = Path.Combine(dataDir, "archive", "raw");
+        _printArchivePath = Path.Combine(dataDir, "archive", "print");
+        Directory.CreateDirectory(_rawArchivePath);
+        Directory.CreateDirectory(_printArchivePath);
     }
 
-    public async Task ProcessDicomFileAsync(DicomFile dicomFile)
+    public async Task StoreFileOnlyAsync(DicomFile dicomFile)
     {
         var dataset = dicomFile.Dataset;
         var patientId = dataset.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
         if (string.IsNullOrWhiteSpace(patientId))
         {
-            patientId = $"UNKNOWN_{Guid.NewGuid():N}";
+            patientId = "";
             dataset.AddOrUpdate(DicomTag.PatientID, patientId);
-            _logger.LogWarning("DICOM file missing PatientID. Synthesized fallback: {PatientId}", patientId);
         }
 
         var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
@@ -42,7 +44,6 @@ public class DicomUpsertService
         {
             studyUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
             dataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
-            _logger.LogWarning("DICOM file missing StudyInstanceUID. Synthesized fallback: {StudyUid}", studyUid);
         }
 
         var seriesUid = dataset.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty);
@@ -50,7 +51,6 @@ public class DicomUpsertService
         {
             seriesUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
             dataset.AddOrUpdate(DicomTag.SeriesInstanceUID, seriesUid);
-            _logger.LogWarning("DICOM file missing SeriesInstanceUID. Synthesized fallback: {SeriesUid}", seriesUid);
         }
 
         var sopUid = dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
@@ -58,62 +58,63 @@ public class DicomUpsertService
         {
             sopUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
             dataset.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
-            _logger.LogWarning("DICOM file missing SOPInstanceUID. Synthesized fallback: {SopUid}", sopUid);
         }
 
+        var studyLock = _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
+        await studyLock.WaitAsync();
         try
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
-            if (db.DicomImages.Any(i => i.SopInstanceUid == sopUid))
-            {
-                _logger.LogInformation("Image {SopUid} already exists. Skipping.", sopUid);
-                return;
-            }
+            var patientName = dataset.GetSingleValueOrDefault(DicomTag.PatientName, "");
+            var studyDate = DicomHelpers.GetDicomDate(dataset, DicomTag.StudyDate);
+            var modality = dataset.GetSingleValueOrDefault(DicomTag.Modality, "OT");
+            var accessionNumber = dataset.GetSingleValueOrDefault(DicomTag.AccessionNumber, string.Empty);
+            var studyDescription = dataset.GetSingleValueOrDefault(DicomTag.StudyDescription, string.Empty);
 
             var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId);
             if (patient == null)
             {
-                patient = new Patient
-                {
-                    PatientId = patientId,
-                    PatientName = dataset.GetSingleValueOrDefault(DicomTag.PatientName, "UNKNOWN")
-                };
+                patient = new Patient { PatientId = patientId, PatientName = patientName };
                 db.Patients.Add(patient);
+            }
+            else
+            {
+                patient.PatientName = patientName;
             }
 
             var study = db.Studies.FirstOrDefault(s => s.StudyInstanceUid == studyUid);
             if (study == null)
             {
-                study = new Study
-                {
-                    Patient = patient,
-                    StudyInstanceUid = studyUid,
-                    StudyDate = GetDicomDate(dataset, DicomTag.StudyDate)
-                };
+                study = new Study { Patient = patient, StudyInstanceUid = studyUid, StudyDate = studyDate, Status = StudyStatus.Receiving };
                 db.Studies.Add(study);
             }
             else
             {
+                study.Patient = patient;
                 study.LastUpdatedAt = DateTime.UtcNow;
-                study.Status = StudyStatus.Receiving;
             }
 
-            var series = db.Series.FirstOrDefault(s => s.SeriesInstanceUid == seriesUid);
+            var series = db.Series.FirstOrDefault(s => s.SeriesInstanceUid == seriesUid && s.StudyId == study.Id);
             if (series == null)
             {
-                series = new Series
-                {
-                    Study = study,
-                    SeriesInstanceUid = seriesUid,
-                    Modality = dataset.GetSingleValueOrDefault(DicomTag.Modality, "OT")
-                };
+                series = new Series { Study = study, SeriesInstanceUid = seriesUid, Modality = modality };
                 db.Series.Add(series);
             }
 
-            var studyHash = GetFnv1aHash(studyUid);
-            var studyDir = Path.Combine(_archivePath, studyHash);
+            var existingImage = db.DicomImages.FirstOrDefault(d => d.SopInstanceUid == sopUid);
+            if (existingImage != null)
+            {
+                return;
+            }
+
+            var studyHash = DicomHelpers.GetFnv1aHash(studyUid);
+            var safePatientName = DicomHelpers.SanitizeFileName(patientName);
+            var safeModality = DicomHelpers.SanitizeFileName(modality);
+            var datePart = studyDate?.ToString("yyyyMMdd") ?? "nodate";
+            var studyDirName = $"{safePatientName}_{safeModality}_{datePart}_{studyHash}";
+            var studyDir = Path.Combine(_rawArchivePath, studyDirName);
             Directory.CreateDirectory(studyDir);
 
             var infoPath = Path.Combine(studyDir, "study-info.json");
@@ -122,14 +123,16 @@ public class DicomUpsertService
                 var info = new
                 {
                     PatientId = patientId,
-                    PatientName = dataset.GetSingleValueOrDefault(DicomTag.PatientName, "UNKNOWN"),
+                    PatientName = patientName,
                     StudyInstanceUid = studyUid,
-                    StudyDate = dataset.GetSingleValueOrDefault(DicomTag.StudyDate, string.Empty),
-                    Modality = dataset.GetSingleValueOrDefault(DicomTag.Modality, "OT"),
-                    AccessionNumber = dataset.GetSingleValueOrDefault(DicomTag.AccessionNumber, string.Empty),
+                    StudyDate = studyDate?.ToString("yyyyMMdd") ?? "",
+                    StudyDescription = studyDescription,
+                    Modality = modality,
+                    AccessionNumber = accessionNumber,
+                    Source = "C-STORE",
                     ReceivedAt = DateTime.UtcNow
                 };
-                await File.WriteAllTextAsync(infoPath, System.Text.Json.JsonSerializer.Serialize(info, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(infoPath, System.Text.Json.JsonSerializer.Serialize(info, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             }
 
             var seriesDir = Path.Combine(studyDir, seriesUid);
@@ -143,79 +146,143 @@ public class DicomUpsertService
                 Series = series,
                 SopInstanceUid = sopUid,
                 FilePath = filePath,
-                SopClassUid = dataset.GetSingleValueOrDefault(DicomTag.SOPClassUID, string.Empty)
+                SopClassUid = dataset.GetSingleValueOrDefault(DicomTag.SOPClassUID, string.Empty),
+                Source = "C-STORE"
             };
             db.DicomImages.Add(dicomImage);
 
-            try
-            {
-                if (dataset.Contains(DicomTag.PixelData))
-                {
-                    var imagesDir = Path.Combine(_imagesPath, studyHash, seriesUid);
-                    Directory.CreateDirectory(imagesDir);
-
-                    var image = new FellowOakDicom.Imaging.DicomImage(dataset);
-                    for (int frameIndex = 0; frameIndex < image.NumberOfFrames; frameIndex++)
-                    {
-                        var pngPath = Path.Combine(imagesDir, $"{sopUid}_{frameIndex:D4}.png");
-
-                        using var renderedImage = image.RenderImage(frameIndex);
-                        using var sharpImage = renderedImage.As<SixLabors.ImageSharp.Image>();
-                        await SixLabors.ImageSharp.ImageExtensions.SaveAsPngAsync(sharpImage, pngPath);
-
-                        if (frameIndex == 0)
-                        {
-                            dicomImage.PngPath = pngPath;
-                        }
-
-                        dicomImage.Frames.Add(new DicomFrame
-                        {
-                            FrameIndex = frameIndex,
-                            PngPath = pngPath
-                        });
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to extract PNG for SOP {SopUid}. DICOM will still be saved.", sopUid);
-            }
-
             await db.SaveChangesAsync();
-            _logger.LogInformation("Successfully ingested image {SopUid} for study {StudyUid}", sopUid, studyUid);
 
             try
             {
-                var sopClassUid = dataset.GetSingleValueOrDefault(DicomTag.SOPClassUID, string.Empty);
-                _forwardQueue.Enqueue(new StorageForwardRequest(filePath, sopUid, sopClassUid));
+                _forwardQueue.Enqueue(new StorageForwardRequest(filePath, sopUid, dicomImage.SopClassUid));
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to enqueue storage forward request for {SopUid}. Forward skipped.", sopUid);
+                _logger.LogWarning(ex, "Forward queue failed for {SopUid}", sopUid);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing DICOM file with SOP {SopUid}", sopUid);
+            _logger.LogError(ex, "Store failed: {SopUid}", sopUid);
         }
-    }
-
-    private static string GetFnv1aHash(string input)
-    {
-        ulong hash = 14695981039346656037;
-        foreach (char c in input)
+        finally
         {
-            hash ^= c;
-            hash *= 1099511628211;
+            studyLock.Release();
         }
-        return hash.ToString("X16");
     }
 
-    private static DateTime? GetDicomDate(DicomDataset dataset, DicomTag tag)
+    public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, string patientId, string patientName)
     {
-        var dateString = dataset.GetSingleValueOrDefault(tag, string.Empty);
-        if (DateTime.TryParseExact(dateString, "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out var date))
-            return date;
-        return null;
+        var sopUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+        var studyUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+        var seriesUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+
+        var newDataset = new DicomDataset(DicomTransferSyntax.ExplicitVRLittleEndian)
+        {
+            { DicomTag.SOPClassUID, DicomUID.SecondaryCaptureImageStorage.UID },
+            { DicomTag.SOPInstanceUID, sopUid },
+            { DicomTag.StudyInstanceUID, studyUid },
+            { DicomTag.SeriesInstanceUID, seriesUid },
+            { DicomTag.PatientID, patientId },
+            { DicomTag.PatientName, patientName },
+            { DicomTag.StudyDate, DateTime.UtcNow.ToString("yyyyMMdd") },
+            { DicomTag.Modality, "OT" },
+        };
+
+        if (imageDataset.TryGetSingleValue(DicomTag.SamplesPerPixel, out ushort spp))
+            newDataset.Add(DicomTag.SamplesPerPixel, spp);
+        if (imageDataset.TryGetSingleValue(DicomTag.PhotometricInterpretation, out string? photo) && photo != null)
+            newDataset.Add(DicomTag.PhotometricInterpretation, photo);
+        if (imageDataset.TryGetSingleValue(DicomTag.PlanarConfiguration, out ushort pc))
+            newDataset.Add(DicomTag.PlanarConfiguration, pc);
+        if (imageDataset.TryGetSingleValue(DicomTag.Rows, out ushort rows))
+            newDataset.Add(DicomTag.Rows, rows);
+        if (imageDataset.TryGetSingleValue(DicomTag.Columns, out ushort cols))
+            newDataset.Add(DicomTag.Columns, cols);
+        if (imageDataset.TryGetSingleValue(DicomTag.BitsAllocated, out ushort ba))
+            newDataset.Add(DicomTag.BitsAllocated, ba);
+        if (imageDataset.TryGetSingleValue(DicomTag.BitsStored, out ushort bs))
+            newDataset.Add(DicomTag.BitsStored, bs);
+        if (imageDataset.TryGetSingleValue(DicomTag.HighBit, out ushort hb))
+            newDataset.Add(DicomTag.HighBit, hb);
+        if (imageDataset.TryGetSingleValue(DicomTag.PixelRepresentation, out ushort pr))
+            newDataset.Add(DicomTag.PixelRepresentation, pr);
+
+        var pixelDataItem = imageDataset.GetDicomItem<DicomItem>(DicomTag.PixelData);
+        if (pixelDataItem != null)
+            newDataset.Add(pixelDataItem);
+
+        var dicomFile = new DicomFile(newDataset);
+
+        var studyLock = _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
+        await studyLock.WaitAsync();
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+
+            var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId);
+            if (patient == null)
+            {
+                patient = new Patient { PatientId = patientId, PatientName = patientName };
+                db.Patients.Add(patient);
+            }
+
+            var study = new Study { Patient = patient, StudyInstanceUid = studyUid, StudyDate = DateTime.UtcNow };
+            db.Studies.Add(study);
+
+            var series = new Series { Study = study, SeriesInstanceUid = seriesUid, Modality = "OT" };
+            db.Series.Add(series);
+
+            var studyHash = DicomHelpers.GetFnv1aHash(studyUid);
+            var safePatientName = DicomHelpers.SanitizeFileName(patientName);
+            var datePart = DateTime.UtcNow.ToString("yyyyMMdd");
+            var studyDirName = $"{safePatientName}_SC_{datePart}_{studyHash}";
+            var studyDir = Path.Combine(_printArchivePath, studyDirName);
+            Directory.CreateDirectory(studyDir);
+
+            var infoPath = Path.Combine(studyDir, "study-info.json");
+            var info = new
+            {
+                PatientId = patientId,
+                PatientName = patientName,
+                StudyInstanceUid = studyUid,
+                StudyDate = datePart,
+                Modality = "SC",
+                Source = "PRINT",
+                ReceivedAt = DateTime.UtcNow
+            };
+            File.WriteAllText(infoPath, System.Text.Json.JsonSerializer.Serialize(info, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+
+            var seriesDir = Path.Combine(studyDir, seriesUid);
+            Directory.CreateDirectory(seriesDir);
+
+            var filePath = Path.Combine(seriesDir, $"{sopUid}.dcm");
+            await dicomFile.SaveAsync(filePath);
+
+            var dicomImage = new DicomImage
+            {
+                Series = series,
+                SopInstanceUid = sopUid,
+                FilePath = filePath,
+                SopClassUid = DicomUID.SecondaryCaptureImageStorage.UID,
+                Source = "PRINT"
+            };
+            db.DicomImages.Add(dicomImage);
+
+            await db.SaveChangesAsync();
+            _logger.LogInformation("Print image ingested: {PatientName} | SOP={SopUid}", patientName, sopUid);
+            return dicomFile;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Print image ingest failed");
+            return null;
+        }
+        finally
+        {
+            studyLock.Release();
+        }
     }
 }

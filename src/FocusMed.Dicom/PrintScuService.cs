@@ -28,7 +28,7 @@ public sealed class PrintScuService : IPrintScuService
             || string.IsNullOrWhiteSpace(printer.PrinterAe)
             || printer.PrinterPort <= 0)
         {
-            _logger.LogWarning("PrintScu: printer config invalid or disabled. Cannot send PrintJob {PrintJobId}.", printJobId);
+            _logger.LogWarning("Printer config invalid for PrintJob {PrintJobId}", printJobId);
             return false;
         }
 
@@ -42,7 +42,7 @@ public sealed class PrintScuService : IPrintScuService
                 .FirstOrDefaultAsync(p => p.Id == printJobId, ct);
             if (job is null)
             {
-                _logger.LogWarning("PrintScu: PrintJob {PrintJobId} not found.", printJobId);
+                _logger.LogWarning("PrintJob {PrintJobId} not found", printJobId);
                 return false;
             }
             printJob = job;
@@ -70,12 +70,12 @@ public sealed class PrintScuService : IPrintScuService
                 }
             }
 
-            _logger.LogInformation("PrintScu: PrintJob {PrintJobId} sent to printer {PrinterName} ({PrinterAe}@{PrinterIp}:{PrinterPort}).", printJobId, printer.Name, printer.PrinterAe, printer.PrinterIp, printer.PrinterPort);
+            _logger.LogInformation("Print sent: Job #{PrintJobId} -> {PrinterName}", printJobId, printer.Name);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "PrintScu: failed to send PrintJob {PrintJobId} to printer {PrinterName} ({PrinterAe}@{PrinterIp}:{PrinterPort}).", printJobId, printer.Name, printer.PrinterAe, printer.PrinterIp, printer.PrinterPort);
+            _logger.LogError(ex, "Print failed: Job #{PrintJobId} -> {PrinterName}", printJobId, printer.Name);
             try
             {
                 await using var scope = _scopeFactory.CreateAsyncScope();
@@ -162,17 +162,22 @@ public sealed class PrintScuService : IPrintScuService
                     if (pixelDataItem is not null)
                     {
                         var imageSequenceTag = isColor ? DicomTag.BasicColorImageSequence : DicomTag.BasicGrayscaleImageSequence;
-                        var innerDataset = new DicomDataset
-                        {
-                            srcFile.Dataset.GetDicomItem<DicomOtherByte>(DicomTag.BitsAllocated),
-                            srcFile.Dataset.GetDicomItem<DicomOtherByte>(DicomTag.BitsStored),
-                            srcFile.Dataset.GetDicomItem<DicomOtherByte>(DicomTag.HighBit),
-                            srcFile.Dataset.GetDicomItem<DicomOtherByte>(DicomTag.SamplesPerPixel),
-                            srcFile.Dataset.GetDicomItem<DicomOtherByte>(DicomTag.Rows),
-                            srcFile.Dataset.GetDicomItem<DicomOtherByte>(DicomTag.Columns),
-                            srcFile.Dataset.GetDicomItem<DicomOtherByte>(DicomTag.PhotometricInterpretation),
-                            pixelDataItem
-                        };
+                        var innerDataset = new DicomDataset();
+                        if (srcFile.Dataset.TryGetSingleValue(DicomTag.BitsAllocated, out ushort bitsAllocated))
+                            innerDataset.Add(DicomTag.BitsAllocated, bitsAllocated);
+                        if (srcFile.Dataset.TryGetSingleValue(DicomTag.BitsStored, out ushort bitsStored))
+                            innerDataset.Add(DicomTag.BitsStored, bitsStored);
+                        if (srcFile.Dataset.TryGetSingleValue(DicomTag.HighBit, out ushort highBit))
+                            innerDataset.Add(DicomTag.HighBit, highBit);
+                        if (srcFile.Dataset.TryGetSingleValue(DicomTag.SamplesPerPixel, out ushort samplesPerPixel))
+                            innerDataset.Add(DicomTag.SamplesPerPixel, samplesPerPixel);
+                        if (srcFile.Dataset.TryGetSingleValue(DicomTag.Rows, out ushort rows))
+                            innerDataset.Add(DicomTag.Rows, rows);
+                        if (srcFile.Dataset.TryGetSingleValue(DicomTag.Columns, out ushort columns))
+                            innerDataset.Add(DicomTag.Columns, columns);
+                        if (srcFile.Dataset.TryGetSingleValue(DicomTag.PhotometricInterpretation, out string? photometric) && photometric != null)
+                            innerDataset.Add(DicomTag.PhotometricInterpretation, photometric);
+                        innerDataset.Add(pixelDataItem);
                         var ibSetDataset = new DicomDataset
                         {
                             new DicomSequence(imageSequenceTag, innerDataset)

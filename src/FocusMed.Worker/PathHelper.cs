@@ -1,24 +1,14 @@
-using System;
-using System.IO;
-
 namespace FocusMed.Worker;
 
 public static class PathHelper
 {
     public static string GetDataDirectory()
     {
-        var currentDir = AppContext.BaseDirectory;
-        
-        var dir = new DirectoryInfo(currentDir);
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "FocusMed.slnx")))
-            {
-                return Path.Combine(dir.FullName, "data");
-            }
-            dir = dir.Parent;
-        }
+        var overridePath = Environment.GetEnvironmentVariable("FOCUSMED_DATA");
+        if (!string.IsNullOrWhiteSpace(overridePath))
+            return overridePath;
 
-        return Path.Combine(AppContext.BaseDirectory, "data");
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return Path.Combine(appData, "FocusMed");
     }
 }

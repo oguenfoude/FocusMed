@@ -41,6 +41,5 @@ logs/
 appsettings.Development.json
 appsettings.Production.json
 tools/
-*.txt
-node_modules/
+temp_images/
 test-env/

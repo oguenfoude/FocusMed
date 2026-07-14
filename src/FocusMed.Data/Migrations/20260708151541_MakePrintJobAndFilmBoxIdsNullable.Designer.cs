@@ -3,6 +3,7 @@ using System;
 using FocusMed.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace FocusMed.Data.Migrations
 {
     [DbContext(typeof(FocusMedDbContext))]
-    partial class FocusMedDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260708151541_MakePrintJobAndFilmBoxIdsNullable")]
+    partial class MakePrintJobAndFilmBoxIdsNullable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -57,6 +60,8 @@ namespace FocusMed.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Timestamp");
+
                     b.ToTable("AssociationAuditEntries");
                 });
 
@@ -78,6 +83,7 @@ namespace FocusMed.Data.Migrations
                         .HasColumnType("integer");
 
                     b.Property<string>("PngPath")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
@@ -116,17 +122,12 @@ namespace FocusMed.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.HasKey("Id");
 
                     b.HasIndex("SeriesId");
 
-                    b.HasIndex("SopInstanceUid");
-
-                    b.HasIndex("Source");
+                    b.HasIndex("SopInstanceUid")
+                        .IsUnique();
 
                     b.ToTable("DicomImages");
                 });
@@ -174,6 +175,9 @@ namespace FocusMed.Data.Migrations
                         .HasColumnType("integer");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("PatientId")
                         .IsRequired()
@@ -239,9 +243,6 @@ namespace FocusMed.Data.Migrations
                     b.Property<int>("NumberOfCopies")
                         .HasColumnType("integer");
 
-                    b.Property<int?>("PatientId")
-                        .HasColumnType("integer");
-
                     b.Property<string>("PrintPriority")
                         .IsRequired()
                         .HasColumnType("text");
@@ -253,17 +254,10 @@ namespace FocusMed.Data.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("integer");
 
-                    b.Property<int?>("StudyId")
-                        .HasColumnType("integer");
-
                     b.HasKey("Id");
-
-                    b.HasIndex("PatientId");
 
                     b.HasIndex("SopInstanceUid")
                         .IsUnique();
-
-                    b.HasIndex("StudyId");
 
                     b.ToTable("PrintJobs");
                 });
@@ -292,7 +286,8 @@ namespace FocusMed.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("SeriesInstanceUid");
+                    b.HasIndex("SeriesInstanceUid")
+                        .IsUnique();
 
                     b.HasIndex("StudyId");
 
@@ -364,13 +359,14 @@ namespace FocusMed.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("LastUpdatedAt");
+                    b.HasIndex("CreatedAt");
 
                     b.HasIndex("PatientId");
 
                     b.HasIndex("Status");
 
-                    b.HasIndex("StudyInstanceUid");
+                    b.HasIndex("StudyInstanceUid")
+                        .IsUnique();
 
                     b.ToTable("Studies");
                 });
@@ -418,6 +414,8 @@ namespace FocusMed.Data.Migrations
 
                     b.HasIndex("PatientName");
 
+                    b.HasIndex("StudyInstanceUid");
+
                     b.ToTable("WorklistEntries");
                 });
 
@@ -461,23 +459,6 @@ namespace FocusMed.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("FilmBox");
-                });
-
-            modelBuilder.Entity("FocusMed.Data.Entities.PrintJob", b =>
-                {
-                    b.HasOne("FocusMed.Data.Entities.Patient", "Patient")
-                        .WithMany()
-                        .HasForeignKey("PatientId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("FocusMed.Data.Entities.Study", "Study")
-                        .WithMany()
-                        .HasForeignKey("StudyId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("Patient");
-
-                    b.Navigation("Study");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.Series", b =>

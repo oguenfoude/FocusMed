@@ -84,11 +84,11 @@ public class StorageCommitmentScuService : BackgroundService
     {
         if (!_networkingOptions.Value.StorageCommitmentScuMapping.TryGetValue(job.CallingAet, out var endpoint))
         {
-            _logger.LogWarning("Cannot send N-EVENT-REPORT. No mapping found for AET: {Aet}", job.CallingAet);
+            _logger.LogWarning("No mapping for AET: {Aet}", job.CallingAet);
             return;
         }
 
-        var client = DicomClientFactory.Create(endpoint.Ip, endpoint.Port, false, job.CallingAet, _ourAet);
+        var client = DicomClientFactory.Create(endpoint.Ip, endpoint.Port, false, _ourAet, job.CallingAet);
         var dataset = new DicomDataset
         {
             { DicomTag.TransactionUID, job.TransactionUid }
@@ -103,16 +103,12 @@ public class StorageCommitmentScuService : BackgroundService
                 try { referencedSopClass = DicomUID.Parse(sopClassUid); }
                 catch
                 {
-                    _logger.LogWarning(
-                        "SopClassUid '{SopClassUid}' not recognized for instance {SopInstanceUid}. Using SecondaryCaptureImageStorage as fallback.",
-                        sopClassUid, uid);
+                    _logger.LogWarning("Unknown SOP Class {SopClassUid} for {Uid}", sopClassUid, uid);
                 }
             }
             else
             {
-                _logger.LogWarning(
-                    "SopClassUid not found in DB for instance {SopInstanceUid}. Using SecondaryCaptureImageStorage as fallback.",
-                    uid);
+                _logger.LogWarning("SOP Class not in DB for {Uid}", uid);
             }
 
             var item = new DicomDataset
@@ -133,7 +129,7 @@ public class StorageCommitmentScuService : BackgroundService
 
         await client.AddRequestAsync(request);
         await client.SendAsync();
-        _logger.LogInformation("Successfully sent N-EVENT-REPORT for transaction {TransactionUid} to {Ip}:{Port}", job.TransactionUid, endpoint.Ip, endpoint.Port);
+        _logger.LogInformation("N-EVENT-REPORT sent: Tx={TransactionUid}", job.TransactionUid);
     }
 
     private async Task SendNEventReportFailedAsync(FocusMed.Data.Entities.StorageCommitmentJob job, Dictionary<string, string> sopClassMap)
@@ -141,7 +137,7 @@ public class StorageCommitmentScuService : BackgroundService
         if (!_networkingOptions.Value.StorageCommitmentScuMapping.TryGetValue(job.CallingAet, out var endpoint))
             return;
 
-        var client = DicomClientFactory.Create(endpoint.Ip, endpoint.Port, false, job.CallingAet, _ourAet);
+        var client = DicomClientFactory.Create(endpoint.Ip, endpoint.Port, false, _ourAet, job.CallingAet);
         var dataset = new DicomDataset
         {
             { DicomTag.TransactionUID, job.TransactionUid }
@@ -156,9 +152,7 @@ public class StorageCommitmentScuService : BackgroundService
                 try { referencedSopClass = DicomUID.Parse(sopClassUid); }
                 catch
                 {
-                    _logger.LogWarning(
-                        "SopClassUid '{SopClassUid}' not recognized for instance {SopInstanceUid}. Using SecondaryCaptureImageStorage as fallback.",
-                        sopClassUid, uid);
+                    _logger.LogWarning("Unknown SOP Class {SopClassUid} for {Uid}", sopClassUid, uid);
                 }
             }
 

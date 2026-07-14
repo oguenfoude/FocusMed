@@ -38,20 +38,20 @@ public class PrintExecutionService
 
         if (job is null)
         {
-            _logger.LogWarning("PrintExecutionService: PrintJob {Id} not found.", printJobId);
+            _logger.LogWarning("PrintJob {Id} not found", printJobId);
             return false;
         }
 
         if (job.Status != PrintStatus.Pending)
         {
-            _logger.LogWarning("PrintExecutionService: PrintJob {Id} not Pending (current: {Status}), skipping.", printJobId, job.Status);
+            _logger.LogWarning("PrintJob {Id} status is {Status}, skipping", printJobId, job.Status);
             return false;
         }
 
         var matchedPrinter = SelectPrinter();
         if (matchedPrinter is null)
         {
-            _logger.LogError("PrintExecutionService: No enabled FilmPrinter configured for PrintJob {Id}.", printJobId);
+            _logger.LogWarning("No printer configured for PrintJob {Id}", printJobId);
             job.Status = PrintStatus.Failed;
             await db.SaveChangesAsync(ct);
             return false;

@@ -23,8 +23,6 @@ public class StudyCompletionService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("Study Completion Service is starting. Stabilization Window: {Seconds}s", _stabilizationSeconds);
-
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -33,7 +31,7 @@ public class StudyCompletionService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error while processing receiving studies.");
+                _logger.LogError(ex, "Study completion error");
             }
 
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
@@ -56,7 +54,7 @@ public class StudyCompletionService : BackgroundService
         foreach (var study in readyStudies)
         {
             study.Status = StudyStatus.Complete;
-            _logger.LogInformation("Study {StudyUid} has stabilized and is now Complete.", study.StudyInstanceUid);
+            _logger.LogInformation("Study complete: {PatientName} | {StudyDate}", study.Patient?.PatientName ?? "Unknown", study.StudyDate?.ToString("yyyy-MM-dd") ?? "N/A");
         }
 
         if (readyStudies.Any())

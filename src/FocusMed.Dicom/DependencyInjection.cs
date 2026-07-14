@@ -11,13 +11,16 @@ public static class DependencyInjection
         services.Configure<DicomNetworkingOptions>(
             configuration.GetSection(DicomNetworkingOptions.SectionName));
 
+        services.Configure<PngExtractionOptions>(
+            configuration.GetSection(PngExtractionOptions.SectionName));
+
         services.AddSingleton<DicomUpsertService>();
+        services.AddSingleton<PngExtractionService>();
+        services.AddHostedService<PngCleanupService>();
         services.AddHostedService<StudyCompletionService>();
         services.AddHostedService<StorageCommitmentScuService>();
         services.AddSingleton<IStorageForwardQueue, StorageForwardQueue>();
         services.AddHostedService<StorageForwardService>();
-        services.AddSingleton<IPrintScuService, PrintScuService>();
-        services.AddSingleton<PrintExecutionService>();
 
         return services;
     }

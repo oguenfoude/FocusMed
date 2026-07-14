@@ -7,6 +7,7 @@ public class DicomImage
     public string SopInstanceUid { get; set; } = string.Empty;
     public string FilePath { get; set; } = string.Empty;
     public string SopClassUid { get; set; } = string.Empty;
+    public string Source { get; set; } = "C-STORE";
     public string? PngPath { get; set; }
     public DateTime ReceivedAt { get; set; } = DateTime.UtcNow;
 

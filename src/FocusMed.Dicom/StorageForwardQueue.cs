@@ -19,12 +19,24 @@ public sealed class StorageForwardQueue : IStorageForwardQueue
             SingleWriter = false
         });
 
-    public void Enqueue(StorageForwardRequest request) => _channel.Writer.TryWrite(request);
+    private int _pendingCount;
 
-    public IAsyncEnumerable<StorageForwardRequest> ReadAllAsync(CancellationToken ct) =>
-        _channel.Reader.ReadAllAsync(ct);
+    public void Enqueue(StorageForwardRequest request)
+    {
+        _channel.Writer.TryWrite(request);
+        Interlocked.Increment(ref _pendingCount);
+    }
+
+    public async IAsyncEnumerable<StorageForwardRequest> ReadAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var request in _channel.Reader.ReadAllAsync(ct))
+        {
+            Interlocked.Decrement(ref _pendingCount);
+            yield return request;
+        }
+    }
 
     public void Complete() => _channel.Writer.TryComplete();
 
-    public int PendingCount => _channel.Reader.Count;
+    public int PendingCount => Volatile.Read(ref _pendingCount);
 }

@@ -30,6 +30,7 @@ try
         .ConfigureServices((hostContext, services) =>
         {
             var connectionString = hostContext.Configuration.GetValue<string>("ConnectionString")
+                ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
                 ?? "Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin";
 
             // Register Data & Dicom logic
@@ -57,7 +58,13 @@ try
     DicomSetupBuilder.UseServiceProvider(host.Services);
 
     var dicomOpts = host.Services.GetRequiredService<IOptions<DicomNetworkingOptions>>().Value;
-    Log.Information("FocusMed starting -- AE: {AeTitle} Port: {Port}", dicomOpts.AETitle, dicomOpts.DicomPort);
+    Log.Information("=== FocusMed Configuration ===");
+    Log.Information("Data Directory: {DataDir}", dataDir);
+    Log.Information("AE Title: {AeTitle}", dicomOpts.AETitle);
+    Log.Information("Port: {Port}", dicomOpts.DicomPort);
+    Log.Information("Bind Address: {BindAddress}", dicomOpts.BindAddress);
+    Log.Information("Max PDU: {MaxPdu}", dicomOpts.MaxPduSize);
+    Log.Information("AE Whitelist: {Enabled}", dicomOpts.EnforceAeWhitelist ? "Enabled" : "Disabled");
 
     var enabledPrinters = dicomOpts.FilmPrinters.Where(p => p.Enabled).ToList();
     Log.Information("Film Printers configured: {Count}", enabledPrinters.Count);
@@ -70,12 +77,16 @@ try
         Log.Information("  Forward Target: {Name} -> {Ae} @ {Ip}:{Port}", t.Name, t.AeTitle, t.Ip, t.Port);
 
     if (enabledPrinters.Count == 0)
-        Log.Warning(
-            "No enabled FilmPrinters configured. All incoming print jobs will be REJECTED. " +
-            "Add at least one FilmPrinter entry to DicomNetworking:FilmPrinters in appsettings.json.");
+        Log.Information("No Film Printers configured. Print jobs will be received and stored only (no forwarding to physical printers).");
 
     if (enabledTargets.Count == 0)
-        Log.Warning("No enabled Storage Forward Targets. Images will be stored locally only.");
+        Log.Information("No Storage Forward Targets. Images will be stored locally only.");
+
+    var pngOpts = host.Services.GetRequiredService<IOptions<PngExtractionOptions>>().Value;
+    Log.Information("PNG Extraction: {Enabled}, CleanupInterval: {Interval}min, MaxAge: {MaxAge}min",
+        pngOpts.Enabled ? "Enabled" : "Disabled",
+        pngOpts.CleanupIntervalMinutes,
+        pngOpts.MaxAgeMinutes);
 
     using (var scope = host.Services.CreateScope())
     {
