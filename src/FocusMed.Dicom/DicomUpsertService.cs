@@ -13,8 +13,7 @@ public class DicomUpsertService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<DicomUpsertService> _logger;
     private readonly IStorageForwardQueue _forwardQueue;
-    private readonly string _rawArchivePath;
-    private readonly string _printArchivePath;
+    private readonly string _archivePath;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
 
     public DicomUpsertService(IServiceScopeFactory scopeFactory, ILogger<DicomUpsertService> logger, IStorageForwardQueue forwardQueue, IConfiguration configuration)
@@ -23,10 +22,8 @@ public class DicomUpsertService
         _logger = logger;
         _forwardQueue = forwardQueue;
         var dataDir = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("DataDirectory") ?? "%FOCUSMED_DATA%");
-        _rawArchivePath = Path.Combine(dataDir, "archive", "raw");
-        _printArchivePath = Path.Combine(dataDir, "archive", "print");
-        Directory.CreateDirectory(_rawArchivePath);
-        Directory.CreateDirectory(_printArchivePath);
+        _archivePath = Path.Combine(dataDir, "archive");
+        Directory.CreateDirectory(_archivePath);
     }
 
     public async Task StoreFileOnlyAsync(DicomFile dicomFile)
@@ -114,7 +111,7 @@ public class DicomUpsertService
             var safeModality = DicomHelpers.SanitizeFileName(modality);
             var datePart = studyDate?.ToString("yyyyMMdd") ?? "nodate";
             var studyDirName = $"{safePatientName}_{safeModality}_{datePart}_{studyHash}";
-            var studyDir = Path.Combine(_rawArchivePath, studyDirName);
+            var studyDir = Path.Combine(_archivePath, studyDirName);
             Directory.CreateDirectory(studyDir);
 
             var infoPath = Path.Combine(studyDir, "study-info.json");
@@ -239,7 +236,7 @@ public class DicomUpsertService
             var safePatientName = DicomHelpers.SanitizeFileName(patientName);
             var datePart = DateTime.UtcNow.ToString("yyyyMMdd");
             var studyDirName = $"{safePatientName}_SC_{datePart}_{studyHash}";
-            var studyDir = Path.Combine(_printArchivePath, studyDirName);
+            var studyDir = Path.Combine(_archivePath, studyDirName);
             Directory.CreateDirectory(studyDir);
 
             var infoPath = Path.Combine(studyDir, "study-info.json");

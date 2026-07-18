@@ -36,15 +36,14 @@ Data directory resolves in this order:
 ```
 %LOCALAPPDATA%\FocusMed\
 ├── archive/
-│   ├── raw/<PatientName>_<Modality>_<YYYYMMDD>_<Hash>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
-│   └── print/<PatientName>_SC_<YYYYMMDD>_<Hash>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
+│   ├── <PatientName>_<Modality>_<YYYYMMDD>_<Hash>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
+│   └── <PatientName>_SC_<YYYYMMDD>_<Hash>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
 ├── images/
-│   ├── raw/<PatientName>_<Modality>_<YYYYMMDD>_<Hash>/<SeriesUid>/   # PNG per frame (C-STORE, if extracted)
-│   └── print/<PatientName>_SC_<YYYYMMDD>_<Hash>/<SeriesUid>/         # PNG per frame, 300 DPI (print)
+│   └── <PatientName>_<Modality>_<YYYYMMDD>_<Hash>/<SeriesUid>/   # PNG per frame (on-demand)
 └── logs/                                   # Serilog rolling + association log
 ```
 
-Folders use `<Modality>` from DICOM tag (CT, MR, etc.) or `SC` for print images. Hash is 64-bit FNV-1a of `StudyInstanceUID`, rendered as 16-char uppercase hex.
+Folders use `<Modality>` from DICOM tag (CT, MR, etc.) or `SC` for print images. All DICOM files stored in single `archive/` folder. Hash is 64-bit FNV-1a of `StudyInstanceUID`, rendered as 16-char uppercase hex.
 
 ## Environment Variables
 

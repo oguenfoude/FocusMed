@@ -15,8 +15,7 @@ public class PngExtractionService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<PngExtractionService> _logger;
-    private readonly string _rawImagesPath;
-    private readonly string _printImagesPath;
+    private readonly string _imagesPath;
     private readonly bool _enabled;
 
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
@@ -32,10 +31,8 @@ public class PngExtractionService
         _logger = logger;
         _enabled = options.Value.Enabled;
         var dataDir = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("DataDirectory") ?? "%FOCUSMED_DATA%");
-        _rawImagesPath = Path.Combine(dataDir, "images", "raw");
-        _printImagesPath = Path.Combine(dataDir, "images", "print");
-        Directory.CreateDirectory(_rawImagesPath);
-        Directory.CreateDirectory(_printImagesPath);
+        _imagesPath = Path.Combine(dataDir, "images");
+        Directory.CreateDirectory(_imagesPath);
     }
 
     public async Task<IReadOnlyList<FrameResult>> GetOrExtractFramesAsync(int studyId, CancellationToken ct = default)
@@ -176,9 +173,7 @@ public class PngExtractionService
             var datePart = studyDate?.ToString("yyyyMMdd") ?? "nodate";
             var studyDirName = $"{safePatientName}_{safeModality}_{datePart}_{studyHash}";
 
-            var isPrint = fresh.Source == "PRINT";
-            var basePath = isPrint ? _printImagesPath : _rawImagesPath;
-            var imagesDir = Path.Combine(basePath, studyDirName, seriesUid);
+            var imagesDir = Path.Combine(_imagesPath, studyDirName, seriesUid);
             Directory.CreateDirectory(imagesDir);
 
             var dicomFile = await DicomFile.OpenAsync(fresh.FilePath);
