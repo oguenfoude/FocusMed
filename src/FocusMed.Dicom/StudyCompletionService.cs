@@ -47,19 +47,35 @@ public class StudyCompletionService : BackgroundService
 
         var readyStudies = await db.Studies
             .Include(s => s.Patient)
-            .Include(s => s.Series)
+            .Include(s => s.Series).ThenInclude(s => s.Images)
+            .AsSplitQuery()
             .Where(s => s.Status == StudyStatus.Receiving && s.LastUpdatedAt <= cutoffTime)
             .ToListAsync(stoppingToken);
 
+        if (readyStudies.Count == 0)
+            return;
+
         foreach (var study in readyStudies)
         {
+            var imageCount = study.Series.SelectMany(s => s.Images).Count();
+
+            // Re-check: verify no new images arrived since query (C-STORE race)
+            var freshImageCount = await db.DicomImages
+                .CountAsync(i => i.Series.StudyId == study.Id, stoppingToken);
+            if (freshImageCount != imageCount)
+            {
+                study.LastUpdatedAt = DateTime.UtcNow;
+                continue;
+            }
+
             study.Status = StudyStatus.Complete;
-            _logger.LogInformation("Study complete: {PatientName} | {StudyDate}", study.Patient?.PatientName ?? "Unknown", study.StudyDate?.ToString("yyyy-MM-dd") ?? "N/A");
+            _logger.LogInformation("Study complete: {PatientName} | {StudyDate} | {StudyUid} ({ImageCount} images)",
+                study.Patient?.PatientName ?? "Unknown",
+                study.StudyDate?.ToString("yyyy-MM-dd") ?? "N/A",
+                study.StudyInstanceUid,
+                imageCount);
         }
 
-        if (readyStudies.Any())
-        {
-            await db.SaveChangesAsync(stoppingToken);
-        }
+        await db.SaveChangesAsync(stoppingToken);
     }
 }

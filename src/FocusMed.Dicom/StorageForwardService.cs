@@ -72,19 +72,9 @@ public sealed class StorageForwardService : BackgroundService
             return;
         }
 
-        DicomFile file;
-        try
-        {
-            file = await DicomFile.OpenAsync(request.FilePath);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Cannot open {FilePath} for forwarding.", request.FilePath);
-            return;
-        }
-
         foreach (var target in targets)
         {
+            var file = await DicomFile.OpenAsync(request.FilePath);
             await ForwardToTargetAsync(file, target, ct);
         }
     }

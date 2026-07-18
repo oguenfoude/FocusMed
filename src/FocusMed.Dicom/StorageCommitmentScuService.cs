@@ -56,19 +56,25 @@ public class StorageCommitmentScuService : BackgroundService
         foreach (var job in pendingJobs)
         {
             var uids = job.RequestedSopInstanceUids.Split(',', StringSplitOptions.RemoveEmptyEntries);
-            var archivedImagesCount = await db.DicomImages
-                .CountAsync(i => uids.Contains(i.SopInstanceUid), stoppingToken);
-
             var sopClassMap = await db.DicomImages
                 .Where(i => uids.Contains(i.SopInstanceUid))
                 .ToDictionaryAsync(i => i.SopInstanceUid, i => i.SopClassUid, stoppingToken);
 
+            var archivedImagesCount = sopClassMap.Count;
+
             if (archivedImagesCount == uids.Length)
             {
-                await SendNEventReportAsync(job, sopClassMap);
-                job.Status = StorageCommitmentStatus.Completed;
-                job.CompletedAt = DateTime.UtcNow;
-                await db.SaveChangesAsync(stoppingToken);
+                var sent = await SendNEventReportAsync(job, sopClassMap);
+                if (sent)
+                {
+                    job.Status = StorageCommitmentStatus.Completed;
+                    job.CompletedAt = DateTime.UtcNow;
+                    await db.SaveChangesAsync(stoppingToken);
+                }
+                else
+                {
+                    _logger.LogWarning("N-EVENT-REPORT not sent (no mapping for AET {Aet}), leaving job Pending", job.CallingAet);
+                }
             }
             else if (job.CreatedAt < DateTime.UtcNow.AddHours(-1))
             {
@@ -80,12 +86,12 @@ public class StorageCommitmentScuService : BackgroundService
         }
     }
 
-    private async Task SendNEventReportAsync(FocusMed.Data.Entities.StorageCommitmentJob job, Dictionary<string, string> sopClassMap)
+    private async Task<bool> SendNEventReportAsync(FocusMed.Data.Entities.StorageCommitmentJob job, Dictionary<string, string> sopClassMap)
     {
         if (!_networkingOptions.Value.StorageCommitmentScuMapping.TryGetValue(job.CallingAet, out var endpoint))
         {
             _logger.LogWarning("No mapping for AET: {Aet}", job.CallingAet);
-            return;
+            return false;
         }
 
         var client = DicomClientFactory.Create(endpoint.Ip, endpoint.Port, false, _ourAet, job.CallingAet);
@@ -101,9 +107,9 @@ public class StorageCommitmentScuService : BackgroundService
             if (sopClassMap.TryGetValue(uid, out var sopClassUid) && !string.IsNullOrEmpty(sopClassUid))
             {
                 try { referencedSopClass = DicomUID.Parse(sopClassUid); }
-                catch
+                catch (Exception ex)
                 {
-                    _logger.LogWarning("Unknown SOP Class {SopClassUid} for {Uid}", sopClassUid, uid);
+                    _logger.LogDebug(ex, "Unknown SOP Class {SopClassUid} for {Uid}", sopClassUid, uid);
                 }
             }
             else
@@ -130,12 +136,16 @@ public class StorageCommitmentScuService : BackgroundService
         await client.AddRequestAsync(request);
         await client.SendAsync();
         _logger.LogInformation("N-EVENT-REPORT sent: Tx={TransactionUid}", job.TransactionUid);
+        return true;
     }
 
     private async Task SendNEventReportFailedAsync(FocusMed.Data.Entities.StorageCommitmentJob job, Dictionary<string, string> sopClassMap)
     {
         if (!_networkingOptions.Value.StorageCommitmentScuMapping.TryGetValue(job.CallingAet, out var endpoint))
+        {
+            _logger.LogWarning("N-EVENT-REPORT (failed) skipped: no mapping for AET {Aet}", job.CallingAet);
             return;
+        }
 
         var client = DicomClientFactory.Create(endpoint.Ip, endpoint.Port, false, _ourAet, job.CallingAet);
         var dataset = new DicomDataset
@@ -150,9 +160,9 @@ public class StorageCommitmentScuService : BackgroundService
             if (sopClassMap.TryGetValue(uid, out var sopClassUid) && !string.IsNullOrEmpty(sopClassUid))
             {
                 try { referencedSopClass = DicomUID.Parse(sopClassUid); }
-                catch
+                catch (Exception ex)
                 {
-                    _logger.LogWarning("Unknown SOP Class {SopClassUid} for {Uid}", sopClassUid, uid);
+                    _logger.LogDebug(ex, "Unknown SOP Class {SopClassUid} for {Uid}", sopClassUid, uid);
                 }
             }
 

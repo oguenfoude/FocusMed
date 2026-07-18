@@ -6,7 +6,8 @@ internal static class DicomHelpers
     {
         foreach (var c in Path.GetInvalidFileNameChars())
             name = name.Replace(c, '_');
-        return string.IsNullOrWhiteSpace(name) ? "UNKNOWN" : name.Trim().Replace(' ', '_');
+        name = name.Replace('\\', '_').Replace('/', '_');
+        return string.IsNullOrWhiteSpace(name) ? "" : name.Trim().Replace(' ', '_');
     }
 
     public static string GetFnv1aHash(string input)
@@ -23,7 +24,10 @@ internal static class DicomHelpers
     public static DateTime? GetDicomDate(FellowOakDicom.DicomDataset dataset, FellowOakDicom.DicomTag tag)
     {
         var dateString = dataset.GetSingleValueOrDefault(tag, string.Empty);
-        if (DateTime.TryParseExact(dateString, "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out var date))
+        if (string.IsNullOrWhiteSpace(dateString))
+            return null;
+        dateString = dateString.Trim();
+        if (DateTime.TryParseExact(dateString, "yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date))
             return DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
         return null;
     }

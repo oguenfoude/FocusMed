@@ -10,7 +10,7 @@ Three projects, single dependency direction: `Worker` → `Dicom` → `Data` (le
 
 | Project | TFM | Role |
 |---------|-----|------|
-| `FocusMed.Data` | `net10.0` | EF Core (`FocusMedDbContext`), 11 entities, 4 enums (`StorageCommitmentStatus`, `PrintStatus`, `StudyStatus`, `AssociationOutcome`). 17 indexes. No business logic. |
+| `FocusMed.Data` | `net10.0` | EF Core (`FocusMedDbContext`), 11 entities, 4 enums (`StorageCommitmentStatus`, `PrintStatus`, `StudyStatus`, `AssociationOutcome`). 17+ indexes. No business logic. |
 | `FocusMed.Dicom` | `net10.0` | `FocusMedScp` (single SCP), `DicomUpsertService`, hosted services, `PrintScuService`, `PrintExecutionService`, `StorageForwardService`. |
 | `FocusMed.Worker` | `net10.0` | `Program.cs`, Serilog, DI wiring, `DicomListenerService`. |
 
@@ -54,7 +54,7 @@ Folders use `<Modality>` from DICOM tag (CT, MR, etc.) or `SC` for print images.
 
 ## Explicitly Out of Scope
 
-Until the user explicitly directs otherwise, **do not** build: PDF generation, installers/MSIs, web dashboard/frontend, `.docx` watchers.
+Until the user explicitly directs otherwise, **do not** build: PDF generation, installers/MSIs, `.docx` watchers.
 
 ## PHI Warning
 
@@ -90,7 +90,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 13. **`Program.cs` re-binds `DicomNetworking` config** (`Program.cs:44-50`) into a fresh `DicomNetworkingOptions` so it can set `DicomServiceOptions.MaxPDULength`, instead of injecting `IOptions<DicomNetworkingOptions>` from DI. Works today; will silently diverge if the options class ever adds validation.
 
-14. **Print execution is decoupled.** N-ACTION returns `DicomStatus.Success` immediately; `PrintJob.Status` stays `Pending`. Physical printing is triggered by `PrintExecutionService.ExecutePendingPrintJobAsync(id)` — not wired to any endpoint yet (out of scope). `PrintJob` has optional `PatientId`/`StudyId` nullable FKs — linked in N-SET after `IngestPrintImageAsync` creates the study, NOT in N-CREATE. N-CREATE always creates PrintJob with null FKs.
+14. **Print execution is decoupled.** N-ACTION marks `PrintJob.Status = Completed` immediately upon receipt. Physical printing is triggered by `PrintExecutionService.ExecutePendingPrintJobAsync(id)` — not wired to any endpoint yet (out of scope). `PrintJob` has optional `PatientId`/`StudyId` nullable FKs — linked in N-SET after `IngestPrintImageAsync` creates the study, NOT in N-CREATE. N-CREATE always creates PrintJob with null FKs.
 
 15. **`StorageCommitmentJob.Status` is an enum** (`StorageCommitmentStatus`), not a string. Values: `Pending=0`, `Completed=1`, `Failed=2`. Stored as `int` via `HasConversion<int>()`.
 
@@ -108,7 +108,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 22. **Color vs. grayscale print is determined by `Association.PresentationContexts`** (`FocusMedScp.cs:603-607`), not by the request dataset alone. The SCP checks whether `BasicColorPrintManagementMeta` was accepted in any PC. As a fallback, `PrintPriority == "COLOR"` in the dataset also triggers color mode. If you change the PC negotiation list, verify that `isColor` still resolves correctly.
 
-23. **N-DELETE eagerly loads the full delete cascade** (`FocusMedScp.cs:922-935`). The query uses `.Include(p => p.Patient).Include(p => p.FilmBoxes).ThenInclude(fb => fb.ImageBoxes)` to load all child entities in one query, then calls `RemoveRange` for each level. Do not remove the `Include` calls — doing so would cause N+1 queries or orphaned rows depending on cascade configuration.
+23. **N-DELETE eagerly loads the full delete cascade** (`FocusMedScp.cs:922-935`). The query uses `.Include(p => p.Patient).Include(p => p.FilmBoxes).ThenInclude(fb => fb.ImageBoxes).AsSplitQuery()` to load all child entities in separate SQL queries, then calls `RemoveRange` for each level. Do not remove the `Include` calls — doing so would cause N+1 queries or orphaned rows depending on cascade configuration.
 
 24. **`PrintScuService` uses `TryGetSingleValue` for all DICOM tag access** (`PrintScuService.cs:166-178`). Never use `GetSingleValue<T>` on tags that might be absent — use `TryGetSingleValue<T>(tag, out var value)` or `GetSingleValueOrDefault(tag, defaultValue)` instead. Missing tags in source DICOM files are common (e.g., `BitsAllocated`, `PhotometricInterpretation`).
 
@@ -129,6 +129,38 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 32. **N-DELETE with empty SOP UID returns `InvalidArgumentValue`** (`FocusMedScp.cs:923-930`). Previously returned `Success` for empty UIDs, which is incorrect per DICOM spec.
 
 33. **N-SET returns `ProcessingFailure` when ImageBox not found** (`FocusMedScp.cs:786-794`). Previously returned `Success` even when the imageBox lookup failed, misleading the SCU.
+
+34. **EF Core `MultipleCollectionIncludeWarning` — use `.AsSplitQuery()`.** Any query with 2+ collection navigations (e.g., `Include(Series).ThenInclude(Images)` + `Include(Frames)`) triggers this warning. Add `.AsSplitQuery()` to split into separate SQL queries. Fixed in `StudyCompletionService.cs:51`, `PngExtractionService.cs:51`, `FocusMedScp.cs:945`.
+
+35. **PNG extraction is on-demand, not automatic.** PNGs are only generated when a viewer calls `GetOrExtractFramesAsync(studyId)`. C-STORE and study completion do NOT extract PNGs. This keeps the receive pipeline fast and avoids CPU spikes. `PngCleanupService` deletes stale PNGs after 60min.
+
+36. **C-STORE now returns `ProcessingFailure` on DB/save errors.** `StoreFileOnlyAsync` (`DicomUpsertService.cs:164`) re-throws exceptions. `OnCStoreRequestAsync` catches them and returns `DicomStatus.ProcessingFailure`. Previously swallowed exceptions silently succeeded — the sender would never retry. Also cleans up orphaned `.dcm` files on failure.
+
+37. **PrintScuService two-phase send** (`PrintScuService.cs`). Phase 1 sends all N-CREATE requests (FilmSession + ImageBoxes) and calls `SendAsync()` to populate SCP-assigned UIDs via `OnResponseReceived` callbacks. Phase 2 opens a new `DicomClient` and sends N-SET + N-ACTION + N-DELETE with the resolved UIDs. The old single-phase approach read closure variables before `SendAsync` fired callbacks, so all SCP UIDs were lost.
+
+38. **StorageCommitmentScuService only marks Completed if N-EVENT-REPORT was sent.** `SendNEventReportAsync` returns `bool` (`StorageCommitmentScuService.cs:68`). When no AET mapping exists, the job stays `Pending` and a warning is logged. Previously marked `Completed` even when the send silently returned.
+
+39. **PrintScuService + PrintExecutionService are registered in DI** (`DependencyInjection.cs:19-20`). Both are `AddSingleton`. Any code path resolving `IPrintScuService` or `PrintExecutionService` would crash before this fix.
+
+40. **PngExtractionService `_studyLocks`/`_studyRefCount` cleanup** (`PngExtractionService.cs:211`). When refcount reaches 0, both the semaphore and refcount entry are removed from their static dictionaries. Previously `_studyLocks.TryRemove` was called immediately after `Release()`, allowing another thread to acquire a semaphore that was about to be deleted. Now removal is conditional on `remaining <= 0`.
+
+41. **DicomUpsertService `_studyLocks` cleanup** (`DicomUpsertService.cs:168`). When the semaphore's `CurrentCount > 0` (no waiters), the entry is removed from the static dictionary. Prevents unbounded memory growth from one `SemaphoreSlim` per unique StudyInstanceUID.
+
+42. **StorageForwardQueue `PendingCount` only increments on successful enqueue** (`StorageForwardQueue.cs:26`). `TryWrite` return value is checked before `Interlocked.Inrement`. Previously inflated the counter even when the channel was completed/full.
+
+43. **Data directory resolution uses `FOCUSMED_DATA` env var directly** (`DicomUpsertService.cs:24`, `PngExtractionService.cs:33`). Both services read `Environment.GetEnvironmentVariable("FOCUSMED_DATA")` with fallback to `%LOCALAPPDATA%\FocusMed`. Previously read a non-existent `DataDirectory` config key. `IConfiguration` parameter removed from `DicomUpsertService` constructor.
+
+44. **StudyCompletionService re-checks image count before marking Complete** (`StudyCompletionService.cs:60`). After querying ready studies, re-counts images per study. If the count changed (C-STORE arrived during the query), the study's `LastUpdatedAt` is bumped and completion is deferred. Prevents marking a study Complete while images are still arriving.
+
+45. **N-DELETE returns `ProcessingFailure` when PrintJob not found** (`FocusMedScp.cs:947`). Previously returned `Success` even when the SOP UID matched no PrintJob, misleading the SCU.
+
+46. **PngCleanupService batched query** (`PngCleanupService.cs:114`). Replaces N+1 per-image COUNT queries with a single `GroupBy` + `Except` to find images with zero remaining PNGs.
+
+47. **StorageCommitmentScuService single query** (`StorageCommitmentScuService.cs:58`). Merged redundant `CountAsync` + `ToDictionaryAsync` into a single `ToDictionaryAsync` with `.Count` on the result.
+
+48. **`DicomHelpers.SanitizeFileName` returns `""` not `"UNKNOWN"`** (`DicomHelpers.cs:5`). Also strips `\` and `/` characters to prevent path traversal. Empty input returns empty string per AGENTS.md #26.
+
+49. **`DicomHelpers.GetDicomDate` trims whitespace and uses `CultureInfo.InvariantCulture`** (`DicomHelpers.cs:26`). Locale-dependent parsing was a latent bug. Returns `null` for empty/whitespace-only input.
 
 ## Quick File Index
 

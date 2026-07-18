@@ -4,7 +4,6 @@ using FocusMed.Data;
 using FocusMed.Data.Entities;
 using FocusMed.Dicom.Options;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -24,13 +23,12 @@ public class PngExtractionService
     public PngExtractionService(
         IServiceScopeFactory scopeFactory,
         ILogger<PngExtractionService> logger,
-        IConfiguration configuration,
         IOptions<PngExtractionOptions> options)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
         _enabled = options.Value.Enabled;
-        var dataDir = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("DataDirectory") ?? "%FOCUSMED_DATA%");
+        var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
         _imagesPath = Path.Combine(dataDir, "images");
         Directory.CreateDirectory(_imagesPath);
     }
@@ -48,6 +46,7 @@ public class PngExtractionService
             .ThenInclude(s => s.Study)
                 .ThenInclude(s => s!.Patient)
             .Include(i => i.Frames)
+            .AsSplitQuery()
             .Where(i => i.Series.StudyId == studyId)
             .OrderBy(i => i.Series!.SeriesInstanceUid)
             .ThenBy(i => i.SopInstanceUid)
@@ -208,7 +207,12 @@ public class PngExtractionService
         finally
         {
             studyLock.Release();
-            _studyLocks.TryRemove(studyUid, out _);
+            _studyRefCount.AddOrUpdate(studyUid, 0, (_, old) => Math.Max(0, old - 1));
+            if (!_studyRefCount.TryGetValue(studyUid, out var remaining) || remaining <= 0)
+            {
+                _studyLocks.TryRemove(studyUid, out _);
+                _studyRefCount.TryRemove(studyUid, out _);
+            }
         }
     }
 }

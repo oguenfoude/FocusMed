@@ -191,7 +191,6 @@ Existing migrations are auto-applied on app startup. Current set:
 Until explicitly requested, FocusMed does **not** include:
 - PDF generation
 - Installers / MSIs / deployment scripts
-- Web dashboard or any frontend
 - `.docx` watchers or converters
 
 ## License

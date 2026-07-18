@@ -543,7 +543,7 @@ public class FocusMedScp : DicomService,
 
                 db.PrintJobs.Add(printJob);
                 await db.SaveChangesAsync();
-                _logger.LogInformation("Print Job #{PrintJobId} created ({Copies} copy, {Priority})", printJob.Id, printJob.NumberOfCopies, printJob.PrintPriority);
+                _logger.LogInformation("Print Job #{PrintJobId} created ({Copies} {CopyLabel}, {Priority})", printJob.Id, printJob.NumberOfCopies, printJob.NumberOfCopies == 1 ? "copy" : "copies", printJob.PrintPriority);
             }
             else if (sopClass == DicomUID.BasicFilmBox.UID)
             {
@@ -685,7 +685,7 @@ public class FocusMedScp : DicomService,
     {
         string sopUid;
         try { sopUid = request.SOPInstanceUID?.UID ?? string.Empty; }
-        catch { sopUid = string.Empty; }
+        catch (Exception ex) { _logger.LogDebug(ex, "Failed to extract SOP Instance UID from N-SET request"); sopUid = string.Empty; }
 
         if (string.IsNullOrEmpty(sopUid))
         {
@@ -884,7 +884,7 @@ public class FocusMedScp : DicomService,
             }
             else
             {
-                _logger.LogWarning("N-ACTION with empty SOP Instance UID or SOP Class UID, ignoring");
+                _logger.LogDebug("N-ACTION with empty SOP Instance UID or SOP Class UID, ignoring");
             }
 
             var actionCommand = new DicomDataset
@@ -942,17 +942,30 @@ public class FocusMedScp : DicomService,
             var printJob = await db.PrintJobs
                 .Include(p => p.Patient)
                 .Include(p => p.FilmBoxes).ThenInclude(fb => fb.ImageBoxes)
+                .AsSplitQuery()
                 .FirstOrDefaultAsync(p => p.SopInstanceUid == sopUid);
-            if (printJob != null)
+            if (printJob == null)
             {
-                foreach (var fb in printJob.FilmBoxes)
+                _logger.LogWarning("N-DELETE: PrintJob not found for SOP {SopUid}", sopUid);
+                var notFoundCmd = new DicomDataset
                 {
-                    db.PrintImageBoxes.RemoveRange(fb.ImageBoxes);
-                }
-                db.FilmBoxes.RemoveRange(printJob.FilmBoxes);
-                db.PrintJobs.Remove(printJob);
-                await db.SaveChangesAsync();
+                    { DicomTag.CommandField, (ushort)DicomCommandField.NDeleteResponse },
+                    { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                    { DicomTag.Status, (ushort)DicomStatus.ProcessingFailure.Code },
+                    { DicomTag.CommandDataSetType, (ushort)0x0101 },
+                };
+                var notFoundResponse = new DicomNDeleteResponse(notFoundCmd);
+                notFoundResponse.PresentationContext = request.PresentationContext;
+                return notFoundResponse;
             }
+
+            foreach (var fb in printJob.FilmBoxes)
+            {
+                db.PrintImageBoxes.RemoveRange(fb.ImageBoxes);
+            }
+            db.FilmBoxes.RemoveRange(printJob.FilmBoxes);
+            db.PrintJobs.Remove(printJob);
+            await db.SaveChangesAsync();
 
             var command = new DicomDataset
             {

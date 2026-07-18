@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using FellowOakDicom;
 using FocusMed.Data;
 using FocusMed.Data.Entities;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -16,12 +15,12 @@ public class DicomUpsertService
     private readonly string _archivePath;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
 
-    public DicomUpsertService(IServiceScopeFactory scopeFactory, ILogger<DicomUpsertService> logger, IStorageForwardQueue forwardQueue, IConfiguration configuration)
+    public DicomUpsertService(IServiceScopeFactory scopeFactory, ILogger<DicomUpsertService> logger, IStorageForwardQueue forwardQueue)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
         _forwardQueue = forwardQueue;
-        var dataDir = Environment.ExpandEnvironmentVariables(configuration.GetValue<string>("DataDirectory") ?? "%FOCUSMED_DATA%");
+        var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
         _archivePath = Path.Combine(dataDir, "archive");
         Directory.CreateDirectory(_archivePath);
     }
@@ -59,6 +58,7 @@ public class DicomUpsertService
 
         var studyLock = _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
         await studyLock.WaitAsync();
+        string filePath = "";
         try
         {
             using var scope = _scopeFactory.CreateScope();
@@ -135,7 +135,7 @@ public class DicomUpsertService
             var seriesDir = Path.Combine(studyDir, seriesUid);
             Directory.CreateDirectory(seriesDir);
 
-            var filePath = Path.Combine(seriesDir, $"{sopUid}.dcm");
+            filePath = Path.Combine(seriesDir, $"{sopUid}.dcm");
             await dicomFile.SaveAsync(filePath);
 
             var dicomImage = new DicomImage
@@ -162,10 +162,14 @@ public class DicomUpsertService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Store failed: {SopUid}", sopUid);
+            try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
+            throw;
         }
         finally
         {
             studyLock.Release();
+            if (_studyLocks.TryGetValue(studyUid, out var existing) && existing.CurrentCount > 0)
+                _studyLocks.TryRemove(studyUid, out _);
         }
     }
 
@@ -280,6 +284,8 @@ public class DicomUpsertService
         finally
         {
             studyLock.Release();
+            if (_studyLocks.TryGetValue(studyUid, out var existing) && existing.CurrentCount > 0)
+                _studyLocks.TryRemove(studyUid, out _);
         }
     }
 }

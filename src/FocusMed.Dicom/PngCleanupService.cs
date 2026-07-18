@@ -112,18 +112,23 @@ public class PngCleanupService : BackgroundService
             }
 
             var affectedImageIds = studyGroup.Select(f => f.DicomImageId).Distinct().ToList();
-            var images = await db.DicomImages
-                .Where(i => affectedImageIds.Contains(i.Id))
+            var imagesWithRemainingPngs = await db.DicomFrames
+                .Where(f => affectedImageIds.Contains(f.DicomImageId) && f.PngPath != null)
+                .GroupBy(f => f.DicomImageId)
+                .Select(g => g.Key)
                 .ToListAsync(ct);
 
-            foreach (var image in images)
+            var imagesWithoutPngs = affectedImageIds.Except(imagesWithRemainingPngs).ToList();
+            if (imagesWithoutPngs.Count > 0)
             {
-                var remainingFrames = await db.DicomFrames
-                    .Where(f => f.DicomImageId == image.Id && f.PngPath != null)
-                    .CountAsync(ct);
+                var images = await db.DicomImages
+                    .Where(i => imagesWithoutPngs.Contains(i.Id))
+                    .ToListAsync(ct);
 
-                if (remainingFrames == 0)
+                foreach (var image in images)
+                {
                     image.PngPath = null;
+                }
             }
         }
 

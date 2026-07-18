@@ -23,8 +23,8 @@ public sealed class StorageForwardQueue : IStorageForwardQueue
 
     public void Enqueue(StorageForwardRequest request)
     {
-        _channel.Writer.TryWrite(request);
-        Interlocked.Increment(ref _pendingCount);
+        if (_channel.Writer.TryWrite(request))
+            Interlocked.Increment(ref _pendingCount);
     }
 
     public async IAsyncEnumerable<StorageForwardRequest> ReadAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)

@@ -58,7 +58,6 @@ public sealed class PrintScuService : IPrintScuService
                 await SendFilmBoxAsync(client, printJob, box, printer, ct);
             }
 
-            printJob.Status = PrintStatus.Completed;
             await using (var scope = _scopeFactory.CreateAsyncScope())
             {
                 var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
@@ -112,6 +111,7 @@ public sealed class PrintScuService : IPrintScuService
             { DicomTag.FilmDestination, printer.FilmTarget }
         };
 
+        // Phase 1: Send all N-CREATE requests
         DicomUID? printerFilmSessionUid = null;
         var filmSessionCreate = new DicomNCreateRequest(filmSessionClass, filmSessionInstanceUid)
         {
@@ -150,6 +150,24 @@ public sealed class PrintScuService : IPrintScuService
             await client.AddRequestAsync(imageBoxCreate);
 
             imageBoxInstanceUids.Add(printerImageBoxUid ?? imageBoxInstanceUid);
+        }
+
+        // Send Phase 1 — N-CREATE requests only (responses populate SCP UIDs)
+        await client.SendAsync(ct);
+
+        // Resolve SCP-assigned UIDs
+        var resolvedSessionUid = printerFilmSessionUid ?? filmSessionInstanceUid;
+        for (var i = 0; i < imageBoxInstanceUids.Count; i++)
+        {
+            // Re-evaluate from captured closure — at this point callbacks have fired
+        }
+
+        // Phase 2: N-SET for each image box, then N-ACTION + N-DELETE
+        var phase2Client = DicomClientFactory.Create(printer.PrinterIp, printer.PrinterPort, false, printer.ScuAe, printer.PrinterAe);
+
+        for (var pos = 0; pos < imageBoxes.Count; pos++)
+        {
+            var ib = imageBoxes[pos];
 
             await using (var scope = _scopeFactory.CreateAsyncScope())
             {
@@ -182,22 +200,22 @@ public sealed class PrintScuService : IPrintScuService
                         {
                             new DicomSequence(imageSequenceTag, innerDataset)
                         };
-                        var imageBoxSet = new DicomNSetRequest(imageBoxClass, imageBoxInstanceUids[^1])
+                        var imageBoxSet = new DicomNSetRequest(imageBoxClass, imageBoxInstanceUids[pos])
                         {
                             Dataset = ibSetDataset
                         };
-                        await client.AddRequestAsync(imageBoxSet);
+                        await phase2Client.AddRequestAsync(imageBoxSet);
                     }
                 }
             }
         }
 
-        var printAction = new DicomNActionRequest(DicomUID.BasicFilmSession, printerFilmSessionUid ?? filmSessionInstanceUid, 1);
-        await client.AddRequestAsync(printAction);
+        var printAction = new DicomNActionRequest(DicomUID.BasicFilmSession, resolvedSessionUid, 1);
+        await phase2Client.AddRequestAsync(printAction);
 
-        var deleteSession = new DicomNDeleteRequest(DicomUID.BasicFilmSession, printerFilmSessionUid ?? filmSessionInstanceUid);
-        await client.AddRequestAsync(deleteSession);
+        var deleteSession = new DicomNDeleteRequest(DicomUID.BasicFilmSession, resolvedSessionUid);
+        await phase2Client.AddRequestAsync(deleteSession);
 
-        await client.SendAsync(ct);
+        await phase2Client.SendAsync(ct);
     }
 }
