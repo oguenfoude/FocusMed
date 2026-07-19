@@ -92,29 +92,43 @@ else
         <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-2">
             <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                 <h3 class="text-sm font-bold text-slate-800">Détails de l'étude</h3>
-                @if (Study.Status == StudyStatus.Complete)
-                {
-                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
-                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Terminé
-                    </span>
-                }
-                else if (Study.Status == StudyStatus.Receiving)
-                {
-                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
-                        <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Réception
-                    </span>
-                }
-                else
-                {
-                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">
-                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Échoué
-                    </span>
-                }
+                <div class="flex items-center gap-2">
+                    @if (IsPrintStudy)
+                    {
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-violet-50 text-violet-700 border border-violet-100">
+                            Impression
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-cyan-50 text-cyan-700 border border-cyan-100">
+                            C-STORE
+                        </span>
+                    }
+                    @if (Study.Status == StudyStatus.Complete)
+                    {
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Terminé
+                        </span>
+                    }
+                    else if (Study.Status == StudyStatus.Receiving)
+                    {
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                            <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Réception
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">
+                            <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Échoué
+                        </span>
+                    }
+                </div>
             </div>
             <div class="p-6 grid grid-cols-1 md:grid-cols-3 gap-y-6 gap-x-4">
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Description</p>
-                    <p class="text-sm text-slate-700 line-clamp-2" title="@Study.Description">@(Study.Description ?? "N/A")</p>
+                    <p class="text-sm text-slate-700 line-clamp-2" title="@Study.Description">@(Study.Description ?? (IsPrintStudy ? "Image imprimée" : "Non disponible"))</p>
                 </div>
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Modalité</p>
@@ -122,20 +136,20 @@ else
                 </div>
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Accession Number</p>
-                    <p class="text-sm text-slate-700 font-mono">@(Study.AccessionNumber ?? "N/A")</p>
+                    <p class="text-sm text-slate-700 font-mono">@(Study.AccessionNumber ?? (IsPrintStudy ? "—" : "Non disponible"))</p>
                 </div>
                 
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Institution</p>
-                    <p class="text-sm text-slate-700 truncate" title="@Study.InstitutionName">@(Study.InstitutionName ?? "N/A")</p>
+                    <p class="text-sm text-slate-700 truncate" title="@Study.InstitutionName">@(Study.InstitutionName ?? (IsPrintStudy ? "—" : "Non disponible"))</p>
                 </div>
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Fabricant</p>
-                    <p class="text-sm text-slate-700">@(Study.Manufacturer ?? "N/A")</p>
+                    <p class="text-sm text-slate-700">@(Study.Manufacturer ?? (IsPrintStudy ? "—" : "Non disponible"))</p>
                 </div>
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Médecin Référent</p>
-                    <p class="text-sm text-slate-700">@FormatReferringPhysician(Study.ReferringPhysicianName)</p>
+                    <p class="text-sm text-slate-700">@(string.IsNullOrWhiteSpace(Study.ReferringPhysicianName) ? (IsPrintStudy ? "—" : "Non disponible") : Study.ReferringPhysicianName!.Replace("^", " ").Trim())</p>
                 </div>
 
                 <div>
@@ -220,6 +234,7 @@ else
     private bool IsLoading = true;
     private bool IsExtractingImages = true;
     private string? ImageError;
+    private bool IsPrintStudy;
 
     private IReadOnlyList<FrameResult> Images = new List<FrameResult>();
     private string DataDir = "";
@@ -264,6 +279,15 @@ else
             .AsSplitQuery()
             .FirstOrDefaultAsync(s => s.Id == Id);
 
+        if (Study != null)
+        {
+            var firstImage = await DbContext.DicomImages
+                .Where(i => i.Series.StudyId == Id)
+                .Select(i => i.Source)
+                .FirstOrDefaultAsync();
+            IsPrintStudy = firstImage == "PRINT";
+        }
+
         IsLoading = false;
         await InvokeAsync(StateHasChanged);
     }
@@ -304,13 +328,6 @@ else
             "O" => "Autre",
             _ => "N/A"
         };
-    }
-
-    private string FormatReferringPhysician(string? name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return "N/A";
-        return name.Replace("^", " ").Trim();
     }
 
     private string GetWebPath(string? absolutePath)
