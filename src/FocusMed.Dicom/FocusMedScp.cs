@@ -571,7 +571,17 @@ public class FocusMedScp : DicomService,
 
                 if (printJob == null)
                 {
-                    _logger.LogWarning("FilmBox N-CREATE: PrintJob {PrintJobUid} not found, creating orphaned FilmBox", printJobUid);
+                    printJob = await db.PrintJobs
+                        .Where(p => p.Status == PrintStatus.Pending)
+                        .OrderByDescending(p => p.CreatedAt)
+                        .FirstOrDefaultAsync();
+                    if (printJob != null)
+                        _logger.LogInformation("FilmBox N-CREATE: matched PrintJob #{PrintJobId} via pending fallback", printJob.Id);
+                }
+
+                if (printJob == null)
+                {
+                    _logger.LogWarning("FilmBox N-CREATE: no PrintJob found, creating orphaned FilmBox");
                 }
 
                 var filmBox = new FilmBox
@@ -742,24 +752,9 @@ public class FocusMedScp : DicomService,
 
                 if (string.IsNullOrEmpty(patientId))
                 {
-                    var recentCStoreStudy = await db.Studies
-                        .Where(s => s.Series.Any(se => se.Images.Any(di => di.Source == "C-STORE")))
-                        .Include(s => s.Patient)
-                        .OrderByDescending(s => s.LastUpdatedAt)
-                        .FirstOrDefaultAsync();
-                    if (recentCStoreStudy?.Patient != null)
-                    {
-                        patientId = recentCStoreStudy.Patient.PatientId;
-                        patientName = recentCStoreStudy.Patient.PatientName;
-                        _logger.LogDebug("Patient from recent C-STORE study: {PatientId} - {PatientName}", patientId, patientName);
-                    }
-                }
-
-                if (string.IsNullOrEmpty(patientId))
-                {
-                    patientId = "";
-                    patientName = "";
-                    _logger.LogWarning("No patient info found for print image box {SopUid}, using empty patient fields", sopUid);
+                    _logger.LogWarning("No patient info in print image box {SopUid}, skipping image ingestion", sopUid);
+                    await db.SaveChangesAsync();
+                    return new DicomNSetResponse(request, DicomStatus.ProcessingFailure);
                 }
 
                 if (imageSeq != null)
@@ -922,16 +917,70 @@ public class FocusMedScp : DicomService,
 
         if (string.IsNullOrEmpty(sopUid))
         {
-            var command = new DicomDataset
+            _logger.LogWarning("N-DELETE: SOP Instance UID is empty, attempting fallback lookup");
+
+            try
             {
-                { DicomTag.CommandField, (ushort)DicomCommandField.NDeleteResponse },
-                { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
-                { DicomTag.Status, (ushort)DicomStatus.InvalidArgumentValue.Code },
-                { DicomTag.CommandDataSetType, (ushort)0x0101 },
-            };
-            var response = new DicomNDeleteResponse(command);
-            response.PresentationContext = request.PresentationContext;
-            return response;
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+
+                var printJob = await db.PrintJobs
+                    .Where(p => p.Status == PrintStatus.Pending || p.Status == PrintStatus.Completed)
+                    .OrderByDescending(p => p.CreatedAt)
+                    .Include(p => p.Patient)
+                    .Include(p => p.FilmBoxes).ThenInclude(fb => fb.ImageBoxes)
+                    .AsSplitQuery()
+                    .FirstOrDefaultAsync();
+
+                if (printJob == null)
+                {
+                    var notFoundCmd = new DicomDataset
+                    {
+                        { DicomTag.CommandField, (ushort)DicomCommandField.NDeleteResponse },
+                        { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                        { DicomTag.Status, (ushort)DicomStatus.ProcessingFailure.Code },
+                        { DicomTag.CommandDataSetType, (ushort)0x0101 },
+                    };
+                    var notFoundResp = new DicomNDeleteResponse(notFoundCmd);
+                    notFoundResp.PresentationContext = request.PresentationContext;
+                    return notFoundResp;
+                }
+
+                _logger.LogInformation("N-DELETE: matched PrintJob #{PrintJobId} via fallback", printJob.Id);
+
+                foreach (var fb in printJob.FilmBoxes)
+                {
+                    db.PrintImageBoxes.RemoveRange(fb.ImageBoxes);
+                }
+                db.FilmBoxes.RemoveRange(printJob.FilmBoxes);
+                db.PrintJobs.Remove(printJob);
+                await db.SaveChangesAsync();
+
+                var command = new DicomDataset
+                {
+                    { DicomTag.CommandField, (ushort)DicomCommandField.NDeleteResponse },
+                    { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                    { DicomTag.Status, (ushort)DicomStatus.Success.Code },
+                    { DicomTag.CommandDataSetType, (ushort)0x0101 },
+                };
+                var response = new DicomNDeleteResponse(command);
+                response.PresentationContext = request.PresentationContext;
+                return response;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "N-DELETE fallback failed");
+                var failCmd = new DicomDataset
+                {
+                    { DicomTag.CommandField, (ushort)DicomCommandField.NDeleteResponse },
+                    { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
+                    { DicomTag.Status, (ushort)DicomStatus.ProcessingFailure.Code },
+                    { DicomTag.CommandDataSetType, (ushort)0x0101 },
+                };
+                var failResp = new DicomNDeleteResponse(failCmd);
+                failResp.PresentationContext = request.PresentationContext;
+                return failResp;
+            }
         }
 
         try
