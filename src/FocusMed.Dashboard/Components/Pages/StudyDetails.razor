@@ -4,6 +4,7 @@
 @using FellowOakDicom
 @inject FocusMedDbContext DbContext
 @inject PngExtractionService PngExtractionService
+@inject ILogger<StudyDetails> Logger
 
 <PageTitle>Détails de l'étude — FocusMed</PageTitle>
 
@@ -158,6 +159,20 @@ else
             <span class="text-xs font-medium text-slate-500">@Images.Count image(s) extraite(s)</span>
         </div>
         <div class="p-6">
+            @if (ImageError != null)
+            {
+                <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-red-500 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                        </svg>
+                        <div>
+                            <p class="text-sm font-semibold text-red-800">Erreur lors du chargement des images</p>
+                            <p class="text-xs text-red-600 mt-1">@ImageError</p>
+                        </div>
+                    </div>
+                </div>
+            }
             @if (IsExtractingImages)
             {
                 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
@@ -184,10 +199,10 @@ else
             else
             {
                 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-                    @foreach (var img in Images)
+                    @foreach (var img in Images.Where(i => i.FileExists))
                     {
                         <div class="group relative rounded-lg overflow-hidden border border-slate-200 bg-slate-50 aspect-square flex items-center justify-center">
-                            <img src="@GetWebPath(img.PngPath)" class="w-full h-full object-contain" alt="DICOM Frame @img.FrameIndex" />
+                            <img src="@GetWebPath(img.PngPath)" class="w-full h-full object-contain" alt="DICOM Frame @img.FrameIndex" loading="lazy" />
                             <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-900/80 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <span class="text-[10px] text-white font-medium">Frame @(img.FrameIndex + 1)</span>
                             </div>
@@ -207,6 +222,7 @@ else
     private Study? Study;
     private bool IsLoading = true;
     private bool IsExtractingImages = true;
+    private string? ImageError;
     
     private string PatientAge = "N/A";
     private string PatientSex = "N/A";
@@ -217,8 +233,6 @@ else
     private string StudyDescription = "N/A";
     private string InstitutionName = "N/A";
     private string Manufacturer = "N/A";
-
-
 
     private IReadOnlyList<FrameResult> Images = new List<FrameResult>();
     private string DataDir = "";
@@ -233,20 +247,25 @@ else
 
         if (Study != null)
         {
-            // Extract images in background
             try
             {
                 Images = await PngExtractionService.GetOrExtractFramesAsync(Study.Id);
             }
-            catch
+            catch (Exception ex)
             {
+                Logger.LogError(ex, "PNG extraction failed for Study {StudyId}", Study.Id);
+                ImageError = $"Échec de l'extraction PNG : {ex.Message}";
                 Images = new List<FrameResult>();
             }
             finally
             {
                 IsExtractingImages = false;
-                StateHasChanged();
+                await InvokeAsync(StateHasChanged);
             }
+        }
+        else
+        {
+            IsExtractingImages = false;
         }
     }
 
@@ -260,51 +279,56 @@ else
 
         if (Study != null)
         {
-            // Try to load additional DICOM metadata from the first file
             var firstDicomImage = await DbContext.DicomImages
                 .Include(i => i.Series)
                 .Where(i => i.Series.StudyId == Id)
                 .FirstOrDefaultAsync();
 
-            if (firstDicomImage != null && File.Exists(firstDicomImage.FilePath))
+            if (firstDicomImage != null)
             {
-                try
+                var filePath = firstDicomImage.FilePath;
+                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
                 {
-                    var dicomFile = await DicomFile.OpenAsync(firstDicomImage.FilePath);
-                    var ds = dicomFile.Dataset;
-                    
-                    PatientAge = ds.GetSingleValueOrDefault(DicomTag.PatientAge, "N/A");
-                    PatientSex = ds.GetSingleValueOrDefault(DicomTag.PatientSex, "N/A");
-                    var dobStr = ds.GetSingleValueOrDefault(DicomTag.PatientBirthDate, "");
-                    if (dobStr.Length == 8)
+                    try
                     {
-                        PatientBirthDate = $"{dobStr.Substring(6,2)}/{dobStr.Substring(4,2)}/{dobStr.Substring(0,4)}";
+                        var dicomFile = await DicomFile.OpenAsync(filePath);
+                        var ds = dicomFile.Dataset;
+                        
+                        PatientAge = ds.GetSingleValueOrDefault(DicomTag.PatientAge, "N/A");
+                        PatientSex = ds.GetSingleValueOrDefault(DicomTag.PatientSex, "N/A");
+                        var dobStr = ds.GetSingleValueOrDefault(DicomTag.PatientBirthDate, "");
+                        if (dobStr.Length == 8)
+                        {
+                            PatientBirthDate = $"{dobStr.Substring(6,2)}/{dobStr.Substring(4,2)}/{dobStr.Substring(0,4)}";
+                        }
+                        else
+                        {
+                            PatientBirthDate = string.IsNullOrEmpty(dobStr) ? "N/A" : dobStr;
+                        }
+
+                        AccessionNumber = ds.GetSingleValueOrDefault(DicomTag.AccessionNumber, "N/A");
+                        ReferringPhysician = ds.GetSingleValueOrDefault(DicomTag.ReferringPhysicianName, "N/A").Replace("^", " ").Trim();
+                        if (string.IsNullOrWhiteSpace(ReferringPhysician)) ReferringPhysician = "N/A";
+
+                        StudyDescription = ds.GetSingleValueOrDefault(DicomTag.StudyDescription, "N/A");
+                        InstitutionName = ds.GetSingleValueOrDefault(DicomTag.InstitutionName, "N/A");
+                        Manufacturer = ds.GetSingleValueOrDefault(DicomTag.Manufacturer, "N/A");
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        PatientBirthDate = string.IsNullOrEmpty(dobStr) ? "N/A" : dobStr;
+                        Logger.LogWarning(ex, "Failed to read DICOM metadata from {FilePath}", filePath);
                     }
-
-                    AccessionNumber = ds.GetSingleValueOrDefault(DicomTag.AccessionNumber, "N/A");
-                    ReferringPhysician = ds.GetSingleValueOrDefault(DicomTag.ReferringPhysicianName, "N/A").Replace("^", " ").Trim();
-                    if (string.IsNullOrWhiteSpace(ReferringPhysician)) ReferringPhysician = "N/A";
-
-                    StudyDescription = ds.GetSingleValueOrDefault(DicomTag.StudyDescription, "N/A");
-                    InstitutionName = ds.GetSingleValueOrDefault(DicomTag.InstitutionName, "N/A");
-                    Manufacturer = ds.GetSingleValueOrDefault(DicomTag.Manufacturer, "N/A");
                 }
-                catch
+                else
                 {
-                    // Ignore metadata read errors
+                    Logger.LogWarning("DICOM file not found at {FilePath} for image {ImageId}", firstDicomImage.FilePath, firstDicomImage.Id);
                 }
             }
         }
         
         IsLoading = false;
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
-
-
 
     private string GetWebPath(string? absolutePath)
     {

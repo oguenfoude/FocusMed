@@ -21,6 +21,7 @@ builder.Services.AddFellowOakDicom()
 
 builder.Services.Configure<PngExtractionOptions>(options => options.Enabled = true);
 builder.Services.AddSingleton<PngExtractionService>();
+builder.Services.AddLogging();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -47,7 +48,8 @@ Directory.CreateDirectory(imagesPath);
 app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new PhysicalFileProvider(imagesPath),
-    RequestPath = "/images"
+    RequestPath = "/images",
+    ServeUnknownFileTypes = false
 });
 
 app.MapRazorComponents<App>()
