@@ -75,6 +75,19 @@ public class PngExtractionService
                 if (updated != null)
                     currentImage = updated;
             }
+            else if (!File.Exists(currentImage.PngPath))
+            {
+                currentImage.PngPath = null;
+                foreach (var frame in currentImage.Frames)
+                    frame.PngPath = null;
+                await db.SaveChangesAsync(ct);
+                await ExtractForImageAsync(currentImage, ct);
+                var updated = await db.DicomImages
+                    .Include(i => i.Frames)
+                    .FirstOrDefaultAsync(i => i.Id == currentImage.Id, ct);
+                if (updated != null)
+                    currentImage = updated;
+            }
 
             var frames = currentImage.Frames
                 .OrderBy(f => f.FrameIndex)

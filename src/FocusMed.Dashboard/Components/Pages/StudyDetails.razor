@@ -54,7 +54,6 @@
 else
 {
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <!-- Patient Info -->
         <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-1 flex flex-col">
             <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                 <div class="flex items-center gap-3">
@@ -76,21 +75,20 @@ else
                     <p class="text-sm text-slate-700 font-mono">@(string.IsNullOrWhiteSpace(Study.Patient?.PatientId) ? "N/A" : Study.Patient.PatientId)</p>
                 </div>
                 <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Âge</p>
-                    <p class="text-sm text-slate-700">@PatientAge</p>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Sexe</p>
+                    <p class="text-sm text-slate-700">@FormatSex(Study.Patient?.Sex)</p>
                 </div>
                 <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Sexe</p>
-                    <p class="text-sm text-slate-700">@PatientSex</p>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Âge</p>
+                    <p class="text-sm text-slate-700">@ComputeAge(Study.Patient?.BirthDate)</p>
                 </div>
                 <div class="col-span-2">
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Date de naissance</p>
-                    <p class="text-sm text-slate-700">@PatientBirthDate</p>
+                    <p class="text-sm text-slate-700">@FormatBirthDate(Study.Patient?.BirthDate)</p>
                 </div>
             </div>
         </div>
 
-        <!-- Study Info -->
         <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-2">
             <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                 <h3 class="text-sm font-bold text-slate-800">Détails de l'étude</h3>
@@ -116,7 +114,7 @@ else
             <div class="p-6 grid grid-cols-1 md:grid-cols-3 gap-y-6 gap-x-4">
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Description</p>
-                    <p class="text-sm text-slate-700 line-clamp-2" title="@StudyDescription">@StudyDescription</p>
+                    <p class="text-sm text-slate-700 line-clamp-2" title="@Study.Description">@(Study.Description ?? "N/A")</p>
                 </div>
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Modalité</p>
@@ -124,20 +122,20 @@ else
                 </div>
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Accession Number</p>
-                    <p class="text-sm text-slate-700 font-mono">@AccessionNumber</p>
+                    <p class="text-sm text-slate-700 font-mono">@(Study.AccessionNumber ?? "N/A")</p>
                 </div>
                 
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Institution</p>
-                    <p class="text-sm text-slate-700 truncate" title="@InstitutionName">@InstitutionName</p>
+                    <p class="text-sm text-slate-700 truncate" title="@Study.InstitutionName">@(Study.InstitutionName ?? "N/A")</p>
                 </div>
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Fabricant</p>
-                    <p class="text-sm text-slate-700">@Manufacturer</p>
+                    <p class="text-sm text-slate-700">@(Study.Manufacturer ?? "N/A")</p>
                 </div>
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Médecin Référent</p>
-                    <p class="text-sm text-slate-700">@ReferringPhysician</p>
+                    <p class="text-sm text-slate-700">@FormatReferringPhysician(Study.ReferringPhysicianName)</p>
                 </div>
 
                 <div>
@@ -152,11 +150,10 @@ else
         </div>
     </div>
 
-    <!-- Images Viewer -->
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mb-6">
         <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
             <h3 class="text-sm font-bold text-slate-800">Visualiseur d'Images</h3>
-            <span class="text-xs font-medium text-slate-500">@Images.Count image(s) extraite(s)</span>
+            <span class="text-xs font-medium text-slate-500">@Images.Count(i => i.FileExists) image(s) disponible(s)</span>
         </div>
         <div class="p-6">
             @if (ImageError != null)
@@ -186,7 +183,7 @@ else
                     }
                 </div>
             }
-            else if (!Images.Any())
+            else if (!Images.Any(i => i.FileExists))
             {
                 <div class="flex flex-col items-center justify-center py-12 gap-2">
                     <svg class="w-10 h-10 text-slate-300" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
@@ -223,16 +220,6 @@ else
     private bool IsLoading = true;
     private bool IsExtractingImages = true;
     private string? ImageError;
-    
-    private string PatientAge = "N/A";
-    private string PatientSex = "N/A";
-    private string PatientBirthDate = "N/A";
-    private string AccessionNumber = "N/A";
-    private string ReferringPhysician = "N/A";
-
-    private string StudyDescription = "N/A";
-    private string InstitutionName = "N/A";
-    private string Manufacturer = "N/A";
 
     private IReadOnlyList<FrameResult> Images = new List<FrameResult>();
     private string DataDir = "";
@@ -277,57 +264,53 @@ else
             .AsSplitQuery()
             .FirstOrDefaultAsync(s => s.Id == Id);
 
-        if (Study != null)
-        {
-            var firstDicomImage = await DbContext.DicomImages
-                .Include(i => i.Series)
-                .Where(i => i.Series.StudyId == Id)
-                .FirstOrDefaultAsync();
-
-            if (firstDicomImage != null)
-            {
-                var filePath = firstDicomImage.FilePath;
-                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
-                {
-                    try
-                    {
-                        var dicomFile = await DicomFile.OpenAsync(filePath);
-                        var ds = dicomFile.Dataset;
-                        
-                        PatientAge = ds.GetSingleValueOrDefault(DicomTag.PatientAge, "N/A");
-                        PatientSex = ds.GetSingleValueOrDefault(DicomTag.PatientSex, "N/A");
-                        var dobStr = ds.GetSingleValueOrDefault(DicomTag.PatientBirthDate, "");
-                        if (dobStr.Length == 8)
-                        {
-                            PatientBirthDate = $"{dobStr.Substring(6,2)}/{dobStr.Substring(4,2)}/{dobStr.Substring(0,4)}";
-                        }
-                        else
-                        {
-                            PatientBirthDate = string.IsNullOrEmpty(dobStr) ? "N/A" : dobStr;
-                        }
-
-                        AccessionNumber = ds.GetSingleValueOrDefault(DicomTag.AccessionNumber, "N/A");
-                        ReferringPhysician = ds.GetSingleValueOrDefault(DicomTag.ReferringPhysicianName, "N/A").Replace("^", " ").Trim();
-                        if (string.IsNullOrWhiteSpace(ReferringPhysician)) ReferringPhysician = "N/A";
-
-                        StudyDescription = ds.GetSingleValueOrDefault(DicomTag.StudyDescription, "N/A");
-                        InstitutionName = ds.GetSingleValueOrDefault(DicomTag.InstitutionName, "N/A");
-                        Manufacturer = ds.GetSingleValueOrDefault(DicomTag.Manufacturer, "N/A");
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogWarning(ex, "Failed to read DICOM metadata from {FilePath}", filePath);
-                    }
-                }
-                else
-                {
-                    Logger.LogWarning("DICOM file not found at {FilePath} for image {ImageId}", firstDicomImage.FilePath, firstDicomImage.Id);
-                }
-            }
-        }
-        
         IsLoading = false;
         await InvokeAsync(StateHasChanged);
+    }
+
+    private string ComputeAge(string? birthDate)
+    {
+        if (string.IsNullOrWhiteSpace(birthDate) || birthDate.Length != 8)
+            return "N/A";
+
+        if (!DateOnly.TryParseExact(birthDate, "yyyyMMdd", out var dob))
+            return "N/A";
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var age = today.Year - dob.Year;
+        if (today.DayOfYear < dob.DayOfYear)
+            age--;
+
+        return $"{age} ans";
+    }
+
+    private string FormatBirthDate(string? birthDate)
+    {
+        if (string.IsNullOrWhiteSpace(birthDate) || birthDate.Length != 8)
+            return "N/A";
+
+        if (DateOnly.TryParseExact(birthDate, "yyyyMMdd", out var dob))
+            return dob.ToString("dd/MM/yyyy");
+
+        return birthDate;
+    }
+
+    private string FormatSex(string? sex)
+    {
+        return sex?.ToUpperInvariant() switch
+        {
+            "M" => "Masculin",
+            "F" => "Féminin",
+            "O" => "Autre",
+            _ => "N/A"
+        };
+    }
+
+    private string FormatReferringPhysician(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "N/A";
+        return name.Replace("^", " ").Trim();
     }
 
     private string GetWebPath(string? absolutePath)

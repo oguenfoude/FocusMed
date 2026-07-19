@@ -272,15 +272,26 @@ else
         if (StudyToDelete == null) return;
 
         var studyId = StudyToDelete.Id;
+        var patientId = StudyToDelete.PatientId;
 
-        // Delete frames, images, series, then the study
         var images = await DbContext.DicomImages
             .Include(i => i.Frames)
+            .Include(i => i.Series)
             .Where(i => i.Series.StudyId == studyId)
             .ToListAsync();
 
+        var archiveDirs = new HashSet<string>();
         foreach (var img in images)
         {
+            if (!string.IsNullOrEmpty(img.FilePath))
+            {
+                var dir = Path.GetDirectoryName(img.FilePath);
+                if (dir != null)
+                {
+                    var studyDir = Directory.GetParent(dir)?.FullName;
+                    if (studyDir != null) archiveDirs.Add(studyDir);
+                }
+            }
             DbContext.DicomFrames.RemoveRange(img.Frames);
         }
         DbContext.DicomImages.RemoveRange(images);
@@ -298,11 +309,55 @@ else
 
         await DbContext.SaveChangesAsync();
 
-        // Remove from in-memory list
+        foreach (var dir in archiveDirs)
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { }
+        }
+
+        try
+        {
+            var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+            var imagesBase = Path.Combine(dataDir, "images");
+            if (Directory.Exists(imagesBase))
+            {
+                foreach (var studyDir in Directory.GetDirectories(imagesBase))
+                {
+                    var dirName = Path.GetFileName(studyDir);
+                    if (dirName.Contains("_"))
+                    {
+                        var seriesDirs = Directory.GetDirectories(studyDir);
+                        foreach (var seriesDir in seriesDirs)
+                        {
+                            if (seriesDir.Contains("_") && File.Exists(Path.Combine(seriesDir, ".keep")) == false)
+                            {
+                                var pngs = Directory.GetFiles(seriesDir, "*.png");
+                                if (pngs.Length == 0)
+                                {
+                                    try { Directory.Delete(seriesDir, true); } catch { }
+                                }
+                            }
+                        }
+                        if (Directory.Exists(studyDir) && !Directory.EnumerateFileSystemEntries(studyDir).Any())
+                        {
+                            try { Directory.Delete(studyDir, true); } catch { }
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+
+        var hasOtherStudies = await DbContext.Studies.AnyAsync(s => s.PatientId == patientId);
+        if (!hasOtherStudies)
+        {
+            var patient = await DbContext.Patients.FindAsync(patientId);
+            if (patient != null) DbContext.Patients.Remove(patient);
+            await DbContext.SaveChangesAsync();
+        }
+
         Studies?.RemoveAll(s => s.Id == studyId);
         StudyToDelete = null;
 
-        // Adjust page if needed
         if (CurrentPage > TotalPages) CurrentPage = TotalPages;
     }
 }

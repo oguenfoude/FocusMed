@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using FellowOakDicom;
 using FocusMed.Data;
 using FocusMed.Data.Entities;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -65,32 +66,61 @@ public class DicomUpsertService
             var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
             var patientName = dataset.GetSingleValueOrDefault(DicomTag.PatientName, "");
+            var patientBirthDate = dataset.GetSingleValueOrDefault(DicomTag.PatientBirthDate, "");
+            var patientSex = dataset.GetSingleValueOrDefault(DicomTag.PatientSex, "");
             var studyDate = DicomHelpers.GetDicomDate(dataset, DicomTag.StudyDate);
             var modality = dataset.GetSingleValueOrDefault(DicomTag.Modality, "OT");
             var accessionNumber = dataset.GetSingleValueOrDefault(DicomTag.AccessionNumber, string.Empty);
             var studyDescription = dataset.GetSingleValueOrDefault(DicomTag.StudyDescription, string.Empty);
+            var institutionName = dataset.GetSingleValueOrDefault(DicomTag.InstitutionName, string.Empty);
+            var manufacturer = dataset.GetSingleValueOrDefault(DicomTag.Manufacturer, string.Empty);
+            var referringPhysician = dataset.GetSingleValueOrDefault(DicomTag.ReferringPhysicianName, string.Empty);
 
             var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId);
             if (patient == null)
             {
-                patient = new Patient { PatientId = patientId, PatientName = patientName };
+                patient = new Patient
+                {
+                    PatientId = patientId,
+                    PatientName = patientName,
+                    BirthDate = string.IsNullOrWhiteSpace(patientBirthDate) ? null : patientBirthDate,
+                    Sex = string.IsNullOrWhiteSpace(patientSex) ? null : patientSex
+                };
                 db.Patients.Add(patient);
             }
             else
             {
                 patient.PatientName = patientName;
+                if (!string.IsNullOrWhiteSpace(patientBirthDate)) patient.BirthDate = patientBirthDate;
+                if (!string.IsNullOrWhiteSpace(patientSex)) patient.Sex = patientSex;
             }
 
             var study = db.Studies.FirstOrDefault(s => s.StudyInstanceUid == studyUid);
             if (study == null)
             {
-                study = new Study { Patient = patient, StudyInstanceUid = studyUid, StudyDate = studyDate, Status = StudyStatus.Receiving };
+                study = new Study
+                {
+                    Patient = patient,
+                    StudyInstanceUid = studyUid,
+                    StudyDate = studyDate,
+                    Description = string.IsNullOrWhiteSpace(studyDescription) ? null : studyDescription,
+                    AccessionNumber = string.IsNullOrWhiteSpace(accessionNumber) ? null : accessionNumber,
+                    InstitutionName = string.IsNullOrWhiteSpace(institutionName) ? null : institutionName,
+                    Manufacturer = string.IsNullOrWhiteSpace(manufacturer) ? null : manufacturer,
+                    ReferringPhysicianName = string.IsNullOrWhiteSpace(referringPhysician) ? null : referringPhysician,
+                    Status = StudyStatus.Receiving
+                };
                 db.Studies.Add(study);
             }
             else
             {
                 study.Patient = patient;
                 study.LastUpdatedAt = DateTime.UtcNow;
+                if (!string.IsNullOrWhiteSpace(studyDescription)) study.Description = studyDescription;
+                if (!string.IsNullOrWhiteSpace(accessionNumber)) study.AccessionNumber = accessionNumber;
+                if (!string.IsNullOrWhiteSpace(institutionName)) study.InstitutionName = institutionName;
+                if (!string.IsNullOrWhiteSpace(manufacturer)) study.Manufacturer = manufacturer;
+                if (!string.IsNullOrWhiteSpace(referringPhysician)) study.ReferringPhysicianName = referringPhysician;
             }
 
             var series = db.Series.FirstOrDefault(s => s.SeriesInstanceUid == seriesUid && s.StudyId == study.Id);
@@ -170,6 +200,85 @@ public class DicomUpsertService
             studyLock.Release();
             if (_studyLocks.TryGetValue(studyUid, out var existing) && existing.CurrentCount > 0)
                 _studyLocks.TryRemove(studyUid, out _);
+        }
+    }
+
+    public async Task BackfillMetadataAsync()
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+
+        var images = await db.DicomImages
+            .Include(i => i.Series)
+            .ThenInclude(s => s.Study)
+                .ThenInclude(s => s!.Patient)
+            .Where(i => i.Series.Study != null &&
+                (i.Series.Study.Patient!.BirthDate == null ||
+                 i.Series.Study.InstitutionName == null))
+            .AsSplitQuery()
+            .ToListAsync();
+
+        var processedFileHashes = new HashSet<string>();
+        var backfilled = 0;
+
+        foreach (var image in images)
+        {
+            if (string.IsNullOrEmpty(image.FilePath) || !File.Exists(image.FilePath))
+                continue;
+
+            var key = image.FilePath;
+            if (!processedFileHashes.Add(key))
+                continue;
+
+            try
+            {
+                var dicomFile = await DicomFile.OpenAsync(image.FilePath);
+                var ds = dicomFile.Dataset;
+
+                var patient = image.Series?.Study?.Patient;
+                if (patient != null)
+                {
+                    var birthDate = ds.GetSingleValueOrDefault(DicomTag.PatientBirthDate, "");
+                    var sex = ds.GetSingleValueOrDefault(DicomTag.PatientSex, "");
+                    if (patient.BirthDate == null && !string.IsNullOrWhiteSpace(birthDate))
+                        patient.BirthDate = birthDate;
+                    if (patient.Sex == null && !string.IsNullOrWhiteSpace(sex))
+                        patient.Sex = sex;
+                }
+
+                var study = image.Series?.Study;
+                if (study != null)
+                {
+                    var desc = ds.GetSingleValueOrDefault(DicomTag.StudyDescription, "");
+                    var accNum = ds.GetSingleValueOrDefault(DicomTag.AccessionNumber, "");
+                    var inst = ds.GetSingleValueOrDefault(DicomTag.InstitutionName, "");
+                    var mfr = ds.GetSingleValueOrDefault(DicomTag.Manufacturer, "");
+                    var refDoc = ds.GetSingleValueOrDefault(DicomTag.ReferringPhysicianName, "");
+
+                    if (study.Description == null && !string.IsNullOrWhiteSpace(desc))
+                        study.Description = desc;
+                    if (study.AccessionNumber == null && !string.IsNullOrWhiteSpace(accNum))
+                        study.AccessionNumber = accNum;
+                    if (study.InstitutionName == null && !string.IsNullOrWhiteSpace(inst))
+                        study.InstitutionName = inst;
+                    if (study.Manufacturer == null && !string.IsNullOrWhiteSpace(mfr))
+                        study.Manufacturer = mfr;
+                    if (study.ReferringPhysicianName == null && !string.IsNullOrWhiteSpace(refDoc))
+                        study.ReferringPhysicianName = refDoc;
+                }
+
+                backfilled++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Backfill failed for {FilePath}", image.FilePath);
+            }
+        }
+
+        if (backfilled > 0)
+        {
+            await db.SaveChangesAsync();
+            _logger.LogInformation("Backfilled metadata from {Count} DICOM files", backfilled);
         }
     }
 
