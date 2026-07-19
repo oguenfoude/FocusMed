@@ -1,0 +1,308 @@
+@page "/"
+@rendermode InteractiveServer
+@inject FocusMedDbContext DbContext
+@inject NavigationManager Navigation
+
+<PageTitle>Études — FocusMed</PageTitle>
+
+
+<!-- Filters -->
+<div class="flex items-center gap-4 mb-6 flex-wrap">
+    <!-- Search -->
+    <div class="relative flex-1 min-w-[200px] max-w-sm">
+        <svg class="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <input type="text" @bind="SearchTerm" @bind:event="oninput"
+               placeholder="Rechercher un patient…"
+               class="w-full pl-10 pr-4 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all" />
+    </div>
+
+    <!-- Single Date input -->
+    <div class="flex items-center gap-2">
+        <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Date</label>
+        <input type="date" @bind="SelectedDate"
+               class="px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all" />
+        @if (SelectedDate.HasValue)
+        {
+            <button @onclick="ClearDateFilter" class="px-3 py-2 text-xs font-semibold text-slate-500 hover:text-red-600 bg-slate-100 rounded-lg hover:bg-red-50 transition-colors" title="Effacer la date">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+        }
+    </div>
+</div>
+
+<!-- Data table -->
+@if (Studies == null)
+{
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-100 flex gap-4">
+            <div class="h-4 bg-slate-200 rounded w-12 animate-pulse"></div>
+            <div class="h-4 bg-slate-200 rounded w-32 animate-pulse"></div>
+            <div class="h-4 bg-slate-200 rounded w-24 animate-pulse"></div>
+        </div>
+        <div class="divide-y divide-slate-100">
+            @for (int i = 0; i < 5; i++)
+            {
+                <div class="px-6 py-4 flex items-center justify-between">
+                    <div class="flex items-center gap-4 w-full">
+                        <div class="h-6 bg-slate-100 rounded w-8 animate-pulse"></div>
+                        <div class="h-4 bg-slate-200 rounded w-48 animate-pulse"></div>
+                        <div class="h-4 bg-slate-100 rounded w-24 animate-pulse ml-auto"></div>
+                        <div class="h-6 bg-slate-100 rounded-full w-16 animate-pulse ml-8"></div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+else if (!FilteredStudies.Any())
+{
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-12 text-center">
+        <div class="mx-auto w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-4">
+            <svg class="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+            </svg>
+        </div>
+        <h3 class="text-sm font-semibold text-slate-900">Aucune étude trouvée</h3>
+        <p class="text-sm text-slate-500 mt-1">Il n'y a aucune étude DICOM correspondant à vos critères.</p>
+    </div>
+}
+else
+{
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm whitespace-nowrap">
+                <thead class="bg-slate-50/50 text-slate-500 font-semibold text-xs uppercase tracking-wider border-b border-slate-200">
+                    <tr>
+                        <th class="px-6 py-4">ID</th>
+                        <th class="px-6 py-4">Nom Patient</th>
+                        <th class="px-6 py-4">Date</th>
+                        <th class="px-6 py-4">Modalité</th>
+                        <th class="px-6 py-4">Statut</th>
+                        <th class="px-6 py-4 text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    @foreach (var study in PagedStudies)
+                    {
+                        var modalities = study.Series.Select(s => s.Modality).Distinct().ToList();
+                        var modalityDisplay = modalities.Any() ? string.Join(", ", modalities) : "N/A";
+                        var patientName = string.IsNullOrWhiteSpace(study.Patient?.PatientName) ? "Inconnu" : study.Patient.PatientName.Replace("^", " ");
+
+                        <tr class="hover:bg-slate-50/80 transition-colors group cursor-pointer" @onclick="() => OpenStudy(study.Id)">
+                            <td class="px-6 py-3.5 text-slate-500">
+                                <span class="bg-slate-100 text-slate-600 py-1 px-2 rounded text-xs font-mono">@study.Id</span>
+                            </td>
+                            <td class="px-6 py-3.5 font-bold text-slate-900">@patientName</td>
+                            <td class="px-6 py-3.5 text-slate-500">@(study.StudyDate?.ToString("dd/MM/yyyy") ?? study.CreatedAt.ToString("dd/MM/yyyy"))</td>
+                            <td class="px-6 py-3.5">
+                                <span class="inline-flex items-center px-2 py-1 rounded text-xs font-bold bg-slate-100 text-slate-700">
+                                    @modalityDisplay
+                                </span>
+                            </td>
+                            <td class="px-6 py-3.5">
+                                @if (study.Status == StudyStatus.Complete)
+                                {
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Terminé
+                                    </span>
+                                }
+                                else if (study.Status == StudyStatus.Receiving)
+                                {
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Réception
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Échoué
+                                    </span>
+                                }
+                            </td>
+                            <td class="px-6 py-3.5 text-right" @onclick:stopPropagation="true">
+                                <div class="flex items-center justify-end gap-2">
+                                    <button class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-brand-700 bg-brand-50 rounded-md hover:bg-brand-100 transition-colors" @onclick="() => OpenStudy(study.Id)">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                        Ouvrir
+                                    </button>
+                                    <button class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-md hover:bg-red-100 transition-colors" @onclick="() => ConfirmDelete(study)">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                        Supprimer
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
+            <span class="text-xs text-slate-500 font-medium">
+                <span class="text-slate-700 font-bold">@FilteredStudies.Count()</span> étude@(FilteredStudies.Count() != 1 ? "s" : "") au total
+                — page <span class="text-slate-700 font-bold">@CurrentPage</span> / <span class="text-slate-700 font-bold">@TotalPages</span>
+            </span>
+            <div class="flex items-center gap-1">
+                <button disabled="@(CurrentPage <= 1)" @onclick="PreviousPage"
+                        class="@($"px-3 py-1.5 rounded-md text-xs font-semibold transition-colors {(CurrentPage <= 1 ? "text-slate-300 bg-slate-50 cursor-not-allowed" : "text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 shadow-sm")}")">
+                    ← Précédent
+                </button>
+                <button disabled="@(CurrentPage >= TotalPages)" @onclick="NextPage"
+                        class="@($"px-3 py-1.5 rounded-md text-xs font-semibold transition-colors {(CurrentPage >= TotalPages ? "text-slate-300 bg-slate-50 cursor-not-allowed" : "text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 shadow-sm")}")">
+                    Suivant →
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Delete Confirmation Modal -->
+@if (StudyToDelete != null)
+{
+    <div class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" @onclick="CancelDelete"></div>
+        <div class="relative w-full max-w-sm mx-auto z-50">
+            <div class="bg-white rounded-xl shadow-2xl overflow-hidden">
+                <div class="p-6 text-center">
+                    <div class="mx-auto w-12 h-12 bg-red-50 rounded-full flex items-center justify-center mb-4">
+                        <svg class="w-6 h-6 text-red-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                        </svg>
+                    </div>
+                    <h3 class="text-lg font-bold text-slate-900">Supprimer cette étude ?</h3>
+                    <p class="text-sm text-slate-500 mt-2">
+                        L'étude de <strong class="text-slate-700">@((StudyToDelete.Patient?.PatientName ?? "Inconnu").Replace("^", " "))</strong> sera définitivement supprimée.
+                        Cette action est irréversible.
+                    </p>
+                </div>
+                <div class="flex border-t border-slate-100">
+                    <button @onclick="CancelDelete" class="flex-1 px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors border-r border-slate-100">
+                        Annuler
+                    </button>
+                    <button @onclick="ExecuteDelete" class="flex-1 px-4 py-3 text-sm font-semibold text-red-600 hover:bg-red-50 transition-colors">
+                        Supprimer
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Study>? Studies;
+    private IEnumerable<Study> FilteredStudies => ApplyFilters();
+    private IEnumerable<Study> PagedStudies => FilteredStudies.Skip((CurrentPage - 1) * PageSize).Take(PageSize);
+
+    private string SearchTerm { get; set; } = "";
+    private DateTime? SelectedDate { get; set; }
+
+    private int CurrentPage = 1;
+    private const int PageSize = 15;
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredStudies.Count() / (double)PageSize));
+
+    private Study? StudyToDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Studies = await DbContext.Studies
+            .Include(s => s.Patient)
+            .Include(s => s.Series)
+            .AsSplitQuery()
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync();
+    }
+
+    private void ClearDateFilter()
+    {
+        SelectedDate = null;
+        CurrentPage = 1;
+    }
+
+    private IEnumerable<Study> ApplyFilters()
+    {
+        if (Studies == null) return [];
+
+        var query = Studies.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(SearchTerm))
+        {
+            query = query.Where(s =>
+                (s.Patient?.PatientName ?? "").Replace("^", " ").Contains(SearchTerm, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (SelectedDate.HasValue)
+        {
+            var date = SelectedDate.Value.Date;
+            query = query.Where(s => s.CreatedAt.ToLocalTime().Date == date || (s.StudyDate.HasValue && s.StudyDate.Value.ToLocalTime().Date == date));
+        }
+
+        return query;
+    }
+
+    private void OpenStudy(int id)
+    {
+        Navigation.NavigateTo($"/study/{id}");
+    }
+
+    private void PreviousPage()
+    {
+        if (CurrentPage > 1) CurrentPage--;
+    }
+
+    private void NextPage()
+    {
+        if (CurrentPage < TotalPages) CurrentPage++;
+    }
+
+    private void ConfirmDelete(Study study)
+    {
+        StudyToDelete = study;
+    }
+
+    private void CancelDelete()
+    {
+        StudyToDelete = null;
+    }
+
+    private async Task ExecuteDelete()
+    {
+        if (StudyToDelete == null) return;
+
+        var studyId = StudyToDelete.Id;
+
+        // Delete frames, images, series, then the study
+        var images = await DbContext.DicomImages
+            .Include(i => i.Frames)
+            .Where(i => i.Series.StudyId == studyId)
+            .ToListAsync();
+
+        foreach (var img in images)
+        {
+            DbContext.DicomFrames.RemoveRange(img.Frames);
+        }
+        DbContext.DicomImages.RemoveRange(images);
+
+        var series = await DbContext.Series
+            .Where(s => s.StudyId == studyId)
+            .ToListAsync();
+        DbContext.Series.RemoveRange(series);
+
+        var study = await DbContext.Studies.FindAsync(studyId);
+        if (study != null)
+        {
+            DbContext.Studies.Remove(study);
+        }
+
+        await DbContext.SaveChangesAsync();
+
+        // Remove from in-memory list
+        Studies?.RemoveAll(s => s.Id == studyId);
+        StudyToDelete = null;
+
+        // Adjust page if needed
+        if (CurrentPage > TotalPages) CurrentPage = TotalPages;
+    }
+}

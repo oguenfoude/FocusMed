@@ -1,0 +1,323 @@
+@page "/study/{Id:int}"
+@rendermode InteractiveServer
+@using FocusMed.Dicom
+@using FellowOakDicom
+@inject FocusMedDbContext DbContext
+@inject PngExtractionService PngExtractionService
+
+<PageTitle>Détails de l'étude — FocusMed</PageTitle>
+
+
+@if (Study == null)
+{
+    if (IsLoading)
+    {
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-1">
+                <div class="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
+                    <div class="h-4 bg-slate-200 rounded w-32 animate-pulse"></div>
+                </div>
+                <div class="p-6 grid grid-cols-2 gap-4">
+                    <div class="col-span-2 h-4 bg-slate-100 rounded animate-pulse"></div>
+                    <div class="col-span-2 h-4 bg-slate-100 rounded animate-pulse w-2/3"></div>
+                    <div class="h-4 bg-slate-100 rounded animate-pulse"></div>
+                    <div class="h-4 bg-slate-100 rounded animate-pulse"></div>
+                </div>
+            </div>
+            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-2">
+                <div class="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
+                    <div class="h-4 bg-slate-200 rounded w-32 animate-pulse"></div>
+                </div>
+                <div class="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="h-4 bg-slate-100 rounded animate-pulse w-3/4"></div>
+                    <div class="h-4 bg-slate-100 rounded animate-pulse w-1/2"></div>
+                    <div class="h-4 bg-slate-100 rounded animate-pulse w-2/3"></div>
+                    <div class="h-4 bg-slate-100 rounded animate-pulse w-5/6"></div>
+                    <div class="h-4 bg-slate-100 rounded animate-pulse w-3/4"></div>
+                    <div class="h-4 bg-slate-100 rounded animate-pulse w-1/2"></div>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-8 text-center">
+            <h2 class="text-lg font-bold text-slate-900">Étude introuvable</h2>
+            <p class="text-sm text-slate-500 mt-1">L'étude avec l'ID @Id n'existe pas ou a été supprimée.</p>
+            <a href="/" class="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors">
+                Retour
+            </a>
+        </div>
+    }
+}
+else
+{
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+        <!-- Patient Info -->
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-1 flex flex-col">
+            <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <a href="/" class="text-slate-400 hover:text-brand-600 transition-colors" title="Retour aux études">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                        </svg>
+                    </a>
+                    <h3 class="text-sm font-bold text-slate-800">Informations Patient</h3>
+                </div>
+            </div>
+            <div class="p-6 grid grid-cols-2 gap-4 flex-1">
+                <div class="col-span-2">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Nom du patient</p>
+                    <p class="text-sm font-semibold text-slate-900">@(string.IsNullOrWhiteSpace(Study.Patient?.PatientName) ? "Inconnu" : Study.Patient.PatientName.Replace("^", " "))</p>
+                </div>
+                <div class="col-span-2">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">ID Patient</p>
+                    <p class="text-sm text-slate-700 font-mono">@(string.IsNullOrWhiteSpace(Study.Patient?.PatientId) ? "N/A" : Study.Patient.PatientId)</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Âge</p>
+                    <p class="text-sm text-slate-700">@PatientAge</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Sexe</p>
+                    <p class="text-sm text-slate-700">@PatientSex</p>
+                </div>
+                <div class="col-span-2">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Date de naissance</p>
+                    <p class="text-sm text-slate-700">@PatientBirthDate</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Study Info -->
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-2">
+            <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                <h3 class="text-sm font-bold text-slate-800">Détails de l'étude</h3>
+                @if (Study.Status == StudyStatus.Complete)
+                {
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Terminé
+                    </span>
+                }
+                else if (Study.Status == StudyStatus.Receiving)
+                {
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                        <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Réception
+                    </span>
+                }
+                else
+                {
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">
+                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Échoué
+                    </span>
+                }
+            </div>
+            <div class="p-6 grid grid-cols-1 md:grid-cols-3 gap-y-6 gap-x-4">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Description</p>
+                    <p class="text-sm text-slate-700 line-clamp-2" title="@StudyDescription">@StudyDescription</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Modalité</p>
+                    <p class="text-sm font-semibold text-slate-900">@(Study.Series.FirstOrDefault()?.Modality ?? "N/A")</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Accession Number</p>
+                    <p class="text-sm text-slate-700 font-mono">@AccessionNumber</p>
+                </div>
+                
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Institution</p>
+                    <p class="text-sm text-slate-700 truncate" title="@InstitutionName">@InstitutionName</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Fabricant</p>
+                    <p class="text-sm text-slate-700">@Manufacturer</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Médecin Référent</p>
+                    <p class="text-sm text-slate-700">@ReferringPhysician</p>
+                </div>
+
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Date de l'étude</p>
+                    <p class="text-sm text-slate-700">@(Study.StudyDate?.ToString("dd/MM/yyyy") ?? "Non spécifiée")</p>
+                </div>
+                <div class="md:col-span-2">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Date de réception</p>
+                    <p class="text-sm text-slate-700">@Study.CreatedAt.ToString("dd/MM/yyyy HH:mm:ss")</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Images Viewer -->
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mb-6">
+        <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+            <h3 class="text-sm font-bold text-slate-800">Visualiseur d'Images</h3>
+            <span class="text-xs font-medium text-slate-500">@Images.Count image(s) extraite(s)</span>
+        </div>
+        <div class="p-6">
+            @if (IsExtractingImages)
+            {
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+                    @for (int i = 0; i < 12; i++)
+                    {
+                        <div class="aspect-square bg-slate-100 rounded-lg animate-pulse border border-slate-200 flex items-center justify-center">
+                            <svg class="w-8 h-8 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                            </svg>
+                        </div>
+                    }
+                </div>
+            }
+            else if (!Images.Any())
+            {
+                <div class="flex flex-col items-center justify-center py-12 gap-2">
+                    <svg class="w-10 h-10 text-slate-300" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    <span class="text-sm font-medium text-slate-600 mt-2">Aucune image disponible</span>
+                    <span class="text-xs text-slate-400">Cette étude ne contient peut-être pas d'images valides.</span>
+                </div>
+            }
+            else
+            {
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+                    @foreach (var img in Images)
+                    {
+                        <div class="group relative rounded-lg overflow-hidden border border-slate-200 bg-slate-50 aspect-square flex items-center justify-center">
+                            <img src="@GetWebPath(img.PngPath)" class="w-full h-full object-contain" alt="DICOM Frame @img.FrameIndex" />
+                            <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-900/80 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <span class="text-[10px] text-white font-medium">Frame @(img.FrameIndex + 1)</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}
+
+
+@code {
+    [Parameter]
+    public int Id { get; set; }
+
+    private Study? Study;
+    private bool IsLoading = true;
+    private bool IsExtractingImages = true;
+    
+    private string PatientAge = "N/A";
+    private string PatientSex = "N/A";
+    private string PatientBirthDate = "N/A";
+    private string AccessionNumber = "N/A";
+    private string ReferringPhysician = "N/A";
+
+    private string StudyDescription = "N/A";
+    private string InstitutionName = "N/A";
+    private string Manufacturer = "N/A";
+
+
+
+    private IReadOnlyList<FrameResult> Images = new List<FrameResult>();
+    private string DataDir = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        IsLoading = true;
+        
+        DataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+
+        await LoadStudyAsync();
+
+        if (Study != null)
+        {
+            // Extract images in background
+            try
+            {
+                Images = await PngExtractionService.GetOrExtractFramesAsync(Study.Id);
+            }
+            catch
+            {
+                Images = new List<FrameResult>();
+            }
+            finally
+            {
+                IsExtractingImages = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task LoadStudyAsync()
+    {
+        Study = await DbContext.Studies
+            .Include(s => s.Patient)
+            .Include(s => s.Series)
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(s => s.Id == Id);
+
+        if (Study != null)
+        {
+            // Try to load additional DICOM metadata from the first file
+            var firstDicomImage = await DbContext.DicomImages
+                .Include(i => i.Series)
+                .Where(i => i.Series.StudyId == Id)
+                .FirstOrDefaultAsync();
+
+            if (firstDicomImage != null && File.Exists(firstDicomImage.FilePath))
+            {
+                try
+                {
+                    var dicomFile = await DicomFile.OpenAsync(firstDicomImage.FilePath);
+                    var ds = dicomFile.Dataset;
+                    
+                    PatientAge = ds.GetSingleValueOrDefault(DicomTag.PatientAge, "N/A");
+                    PatientSex = ds.GetSingleValueOrDefault(DicomTag.PatientSex, "N/A");
+                    var dobStr = ds.GetSingleValueOrDefault(DicomTag.PatientBirthDate, "");
+                    if (dobStr.Length == 8)
+                    {
+                        PatientBirthDate = $"{dobStr.Substring(6,2)}/{dobStr.Substring(4,2)}/{dobStr.Substring(0,4)}";
+                    }
+                    else
+                    {
+                        PatientBirthDate = string.IsNullOrEmpty(dobStr) ? "N/A" : dobStr;
+                    }
+
+                    AccessionNumber = ds.GetSingleValueOrDefault(DicomTag.AccessionNumber, "N/A");
+                    ReferringPhysician = ds.GetSingleValueOrDefault(DicomTag.ReferringPhysicianName, "N/A").Replace("^", " ").Trim();
+                    if (string.IsNullOrWhiteSpace(ReferringPhysician)) ReferringPhysician = "N/A";
+
+                    StudyDescription = ds.GetSingleValueOrDefault(DicomTag.StudyDescription, "N/A");
+                    InstitutionName = ds.GetSingleValueOrDefault(DicomTag.InstitutionName, "N/A");
+                    Manufacturer = ds.GetSingleValueOrDefault(DicomTag.Manufacturer, "N/A");
+                }
+                catch
+                {
+                    // Ignore metadata read errors
+                }
+            }
+        }
+        
+        IsLoading = false;
+        StateHasChanged();
+    }
+
+
+
+    private string GetWebPath(string? absolutePath)
+    {
+        if (string.IsNullOrEmpty(absolutePath)) return "";
+        var imagesDir = Path.Combine(DataDir, "images");
+        if (absolutePath.StartsWith(imagesDir, StringComparison.OrdinalIgnoreCase))
+        {
+            var relative = absolutePath.Substring(imagesDir.Length).Replace('\\', '/');
+            if (relative.StartsWith("/")) relative = relative.Substring(1);
+            
+            var segments = relative.Split('/').Select(Uri.EscapeDataString);
+            return "/images/" + string.Join("/", segments);
+        }
+        return "";
+    }
+}

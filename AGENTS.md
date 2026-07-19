@@ -6,13 +6,14 @@ Compact reference for AI sessions. Every fact here is verified against the curre
 
 ## Project Shape
 
-Three projects, single dependency direction: `Worker` → `Dicom` → `Data` (leaf).
+Four projects, single dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` depends on `Data` + `Dicom` (no `Worker`).
 
 | Project | TFM | Role |
 |---------|-----|------|
 | `FocusMed.Data` | `net10.0` | EF Core (`FocusMedDbContext`), 11 entities, 4 enums (`StorageCommitmentStatus`, `PrintStatus`, `StudyStatus`, `AssociationOutcome`). 17+ indexes. No business logic. |
 | `FocusMed.Dicom` | `net10.0` | `FocusMedScp` (single SCP), `DicomUpsertService`, hosted services, `PrintScuService`, `PrintExecutionService`, `StorageForwardService`. |
-| `FocusMed.Worker` | `net10.0` | `Program.cs`, Serilog, DI wiring, `DicomListenerService`. |
+| `FocusMed.Worker` | `net10.0` | `Program.cs`, Serilog, DI wiring, `DicomListenerService`. Headless DICOM listener. |
+| `FocusMed.Dashboard` | `net10.0` | Blazor Server UI. Razor components, `PngExtractionService` for image viewing. HTTP `:5000`. |
 
 Solution: `FocusMed.slnx` (XML, **not** classic `.sln`).
 
@@ -26,6 +27,17 @@ dotnet run --project src/FocusMed.Worker
 - Terminal **must be Administrator** — binds TCP port `11112`.
 - PostgreSQL on `localhost:5432`, database `focusmed`. `Database.Migrate()` runs on startup.
 - New EF migration (from `src/FocusMed.Data`): `dotnet ef migrations add <Name> --project src/FocusMed.Data --startup-project src/FocusMed.Worker`.
+
+### Dashboard
+
+```powershell
+dotnet run --project src/FocusMed.Dashboard    # HTTP :5000
+.\start.ps1                                     # Starts Worker (background) + Dashboard (foreground)
+```
+
+- **`dotnet watch` lock issue**: `dotnet watch` on Dashboard fails if a previous Dashboard process is still running (file lock on `apphost.exe`). Kill the process by name or PID before restarting: `Stop-Process -Name "FocusMed.Dashboard" -Force`.
+- Dashboard uses Blazor Server (`InteractiveServer` render mode). All UI is in French.
+- Dashboard does NOT run DICOM listener — that's the Worker's job. Run both via `start.ps1` or separately.
 
 ## Runtime Data Layout
 
@@ -184,3 +196,8 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 - `src/FocusMed.Data/FocusMedDbContext.cs` — 11 DbSets, fluent FK config, enum conversion, 17 indexes.
 - `src/FocusMed.Data/Entities/StorageCommitmentStatus.cs` — `Pending=0`, `Completed=1`, `Failed=2`.
 - `src/FocusMed.Data/Migrations/` — 11 EF migrations (latest: `RemoveUnusedIndexesAndPatientCreatedAt`).
+- `src/FocusMed.Dashboard/Program.cs` — Blazor Server entry, registers `PngExtractionService`, serves `/images` from data dir.
+- `src/FocusMed.Dashboard/Components/Pages/Home.razor` — studies list, search, date filter, pagination, delete modal.
+- `src/FocusMed.Dashboard/Components/Pages/StudyDetails.razor` — patient info, study metadata, PNG image grid viewer.
+- `src/FocusMed.Dashboard/Components/Layout/MainLayout.razor` — nav bar (Études), server status badge.
+- `start.ps1` — launches Worker (background) + Dashboard (foreground), kills Worker on Ctrl+C.
