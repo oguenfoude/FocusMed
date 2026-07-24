@@ -4,5 +4,6 @@
     <Project Path="src/FocusMed.Dicom/FocusMed.Dicom.csproj" />
     <Project Path="src/FocusMed.Worker/FocusMed.Worker.csproj" />
     <Project Path="src/FocusMed.Dashboard/FocusMed.Dashboard.csproj" />
+    <Project Path="src/FocusMed.PrintCapture/FocusMed.PrintCapture.csproj" />
   </Folder>
 </Solution>

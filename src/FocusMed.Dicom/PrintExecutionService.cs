@@ -27,6 +27,7 @@ public class PrintExecutionService
         _logger = logger;
     }
 
+    [Obsolete("Not wired to any endpoint per AGENTS.md #14; intentional deferred scope.")]
     public async Task<bool> ExecutePendingPrintJobAsync(int printJobId, CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();

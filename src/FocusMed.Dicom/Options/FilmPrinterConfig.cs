@@ -9,7 +9,6 @@ public class FilmPrinterConfig
     public string PrinterAe { get; set; } = string.Empty;
     public string FilmTarget { get; set; } = "PROCESSOR";
     public string FilmType { get; set; } = "PAPER";
-    public string Priority { get; set; } = "HIGH";
     public PrinterType PrinterType { get; set; } = PrinterType.GrayLevel;
     public bool Enabled { get; set; } = true;
 }

@@ -3,6 +3,7 @@ using System;
 using FocusMed.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace FocusMed.Data.Migrations
 {
     [DbContext(typeof(FocusMedDbContext))]
-    partial class FocusMedDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260719181410_AddArchivedAndExcludeFromMerge")]
+    partial class AddArchivedAndExcludeFromMerge
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -358,6 +361,9 @@ namespace FocusMed.Data.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("text");
 
+                    b.Property<bool>("ExcludeFromMerge")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("InstitutionName")
                         .HasColumnType("text");
 
@@ -371,9 +377,6 @@ namespace FocusMed.Data.Migrations
                         .HasColumnType("integer");
 
                     b.Property<string>("ReferringPhysicianName")
-                        .HasColumnType("text");
-
-                    b.Property<string>("ResumePdfPath")
                         .HasColumnType("text");
 
                     b.Property<int>("Status")

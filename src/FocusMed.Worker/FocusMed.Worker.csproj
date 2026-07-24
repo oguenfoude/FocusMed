@@ -2,10 +2,8 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <!-- <ApplicationManifest>app.manifest</ApplicationManifest> Temporarily disabled for automated headless testing -->
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UserSecretsId>dotnet-FocusMed.Worker-4a186c65-5133-45e7-ad35-6cfe5bc33997</UserSecretsId>
     <NoWarn>$(NoWarn);NU1903</NoWarn>
   </PropertyGroup>
 

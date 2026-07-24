@@ -42,12 +42,30 @@ DICOM listener successfully starting on 0.0.0.0:11112 as AE Title 'FOCUSMED'
 
 ```
 src/
-├── FocusMed.Data/      PostgreSQL + EF Core. 11 entities. No business logic. (net10.0)
-├── FocusMed.Dicom/     fo-dicom-based SCP. Ingestion, MWL, Print, Storage Commitment. (net10.0)
-└── FocusMed.Worker/    Top-level Program.cs, Serilog, DI, listener. (net10.0)
+├── FocusMed.Data/       PostgreSQL + EF Core. 11 entities. No business logic. (net10.0)
+├── FocusMed.Dicom/      fo-dicom-based SCP. Ingestion, MWL, Print, Storage Commitment. (net10.0)
+├── FocusMed.Worker/     Top-level Program.cs, Serilog, DI, listener. (net10.0)
+└── FocusMed.Dashboard/  Blazor Server UI (HTTP :5000). Browse/delete/archive studies, PDF preview. No physical printing. (net10.0)
 ```
 
-Dependency direction: `Worker` → `Dicom` → `Data` (leaf). Solution is `FocusMed.slnx` (XML, not classic `.sln`).
+Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` depends on `Data` + `Dicom`. Solution is `FocusMed.slnx` (XML, not classic `.sln`).
+
+## Dashboard
+
+A separate Blazor Server project for browsing received studies. It is **not** involved in DICOM ingestion — only the Worker receives via TCP port `11112`. To run both:
+
+```powershell
+dotnet run --project src/FocusMed.Worker        # TCP :11112
+dotnet run --project src/FocusMed.Dashboard     # HTTP :5000
+```
+
+The Dashboard provides:
+- **Études** (`/`) — studies list with search, date filter, pagination, soft-delete
+- **Archives** (`/archives`) — archived studies with restore
+- **Supprimées** (`/deleted`) — deleted studies with permanent delete (auto-purge after 30 days)
+- **Study details** (`/study/{id}`) — patient info, image sidebar, A4-portrait PDF preview iframe, lightbox
+
+> **No Dashboard printing.** PDF preview only (in-browser iframe). DICOM-side Print Management is implemented in `FocusMedScp.cs` and `PrintScuService.cs` — that's a separate system at the DICOM protocol level. Physical printer output from the Dashboard was deferred.
 
 ## Features
 
@@ -85,12 +103,16 @@ Data directory resolves in this order:
 
 ```
 %LOCALAPPDATA%\FocusMed\
-├── archive/<PatientName>_<YYYYMMDD>_<Hash>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
-├── images/<PatientName>_<YYYYMMDD>_<Hash>/<SeriesUid>/<SopUid>_<FrameIdx>.png
-└── logs/{focusmed-*, dicom_associations-*}
+├── archive/
+│   ├── <PatientName>_<Modality>_<YYYYMMDD>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
+│   └── <PatientName>_SC_<YYYYMMDD>/{study-info.json, <SeriesUid>/<SopUid>.dcm}
+├── images/
+│   └── <PatientName>_<Modality>_<YYYYMMDD>/<SeriesUid>/   # PNG per frame (on-demand)
+├── pdf-cache/                                # Generated PDFs (60min TTL, auto-cleaned)
+└── logs/                                   # Serilog rolling + association log
 ```
 
-The `<FNV-1a-Hash>` is a 64-bit FNV-1a of the Study's `StudyInstanceUID`, rendered as 16-char uppercase hex. Directory names include Patient Name and Study Date for easy browsing.
+Folders use `<Modality>` from DICOM tag (CT, MR, etc.) or `SC` for print images. All DICOM files stored in single `archive/` folder. Folder lookup uses `DicomImage.FilePath` from DB + `Directory.GetParent()` — never hash substring matching.
 
 ## Environment Variables
 
@@ -135,7 +157,6 @@ All non-default config goes in `src/FocusMed.Worker/appsettings.json`.
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `ConnectionString` | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin` | PostgreSQL |
-| `ArchivePath` | `%FOCUSMED_DATA%/archive` | Raw `.dcm` archive root |
 | `StudyStabilizationSeconds` | `60` | Inactivity before study → Complete |
 
 ### `FilmPrinters[]` (DICOM Print SCU)
@@ -151,7 +172,6 @@ Each entry represents a DICOM Printer SCP that can receive print jobs via the Pr
 | `PrinterAe` | `""` | Printer's AE title |
 | `FilmTarget` | `"PROCESSOR"` | `FilmDestination` attribute |
 | `FilmType` | `"PAPER"` | `MediumType` attribute |
-| `Priority` | `"HIGH"` | `PrintPriority` attribute |
 | `PrinterType` | `"GrayLevel"` | `"GrayLevel"` or `"Multicolor"` — selects SOP Class for Image Box |
 | `Enabled` | `true` | Whether this printer is active |
 
@@ -185,11 +205,26 @@ Existing migrations are auto-applied on app startup. Current set:
 - `20260627232933_AddAssociationAuditEntry`
 - `20260705102645_AddSopClassUidAndStudyInstanceUid`
 - `20260706214141_ConvertStorageCommitmentStatusToEnum`
+- `20260708151541_MakePrintJobAndFilmBoxIdsNullable`
+- `20260713161922_AddPatientAndStudyToPrintJob`
+- `20260713164254_AllowDuplicateStudies`
+- `20260713200338_AddDicomImageSource`
+- `20260714181929_MakeDicomFramePngPathNullable`
+- `20260714190917_AddFkIndexesAndStudyLastUpdatedAt`
+- `20260714210848_RemoveUnusedIndexesAndPatientCreatedAt`
+- `20260719114954_AddMetadataFields`
+- `20260719181410_AddArchivedAndExcludeFromMerge`
+- `20260719201409_RemoveExcludeFromMerge`
+- `20260719205917_AddDeletedStatus`
+- `20260721162736_AddUserPreferences`
+- `20260721215348_UpdateUserPreferences`
+- `20260722150452_AddDocumentEntity`
+- `20260723140556_RemoveUserPreferencesAndDocuments`
 
 ## Out of Scope (by design)
 
 Until explicitly requested, FocusMed does **not** include:
-- PDF generation
+- **Dashboard printing** (physical printer output via SumatraPDF/libreoffice/native libs) — only PDF preview in browser iframe; DICOM-side Print Management still works
 - Installers / MSIs / deployment scripts
 - `.docx` watchers or converters
 

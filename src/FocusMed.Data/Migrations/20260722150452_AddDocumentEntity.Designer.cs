@@ -3,6 +3,7 @@ using System;
 using FocusMed.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace FocusMed.Data.Migrations
 {
     [DbContext(typeof(FocusMedDbContext))]
-    partial class FocusMedDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260722150452_AddDocumentEntity")]
+    partial class AddDocumentEntity
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -129,6 +132,51 @@ namespace FocusMed.Data.Migrations
                     b.HasIndex("Source");
 
                     b.ToTable("DicomImages");
+                });
+
+            modelBuilder.Entity("FocusMed.Data.Entities.Document", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime?>("ConvertedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("text");
+
+                    b.Property<string>("OriginalFileName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("OriginalFilePath")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PdfFilePath")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("StudyId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReceivedAt");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("StudyId");
+
+                    b.ToTable("Documents");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.FilmBox", b =>
@@ -373,9 +421,6 @@ namespace FocusMed.Data.Migrations
                     b.Property<string>("ReferringPhysicianName")
                         .HasColumnType("text");
 
-                    b.Property<string>("ResumePdfPath")
-                        .HasColumnType("text");
-
                     b.Property<int>("Status")
                         .HasColumnType("integer");
 
@@ -397,6 +442,47 @@ namespace FocusMed.Data.Migrations
                     b.HasIndex("StudyInstanceUid");
 
                     b.ToTable("Studies");
+                });
+
+            modelBuilder.Entity("FocusMed.Data.Entities.UserPreference", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("PreferredInputBin")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PreferredOutputColor")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PreferredPaperSize")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PreferredPreset")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PreferredPrinterName")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UserKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserKey")
+                        .IsUnique();
+
+                    b.ToTable("UserPreferences");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.WorklistEntry", b =>
@@ -465,6 +551,16 @@ namespace FocusMed.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Series");
+                });
+
+            modelBuilder.Entity("FocusMed.Data.Entities.Document", b =>
+                {
+                    b.HasOne("FocusMed.Data.Entities.Study", "Study")
+                        .WithMany()
+                        .HasForeignKey("StudyId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Study");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.FilmBox", b =>

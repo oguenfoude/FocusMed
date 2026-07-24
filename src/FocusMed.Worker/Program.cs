@@ -33,6 +33,9 @@ try
                 ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
                 ?? "Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin";
 
+            // Set env var for downstream services
+            Environment.SetEnvironmentVariable("FOCUSMED_DB_CONNECTION", connectionString);
+
             // Register Data & Dicom logic
             services.AddFocusMedData(connectionString);
             services.AddFocusMedDicom(hostContext.Configuration);
@@ -41,8 +44,8 @@ try
             services.AddFellowOakDicom()
                 .AddImageManager<FellowOakDicom.Imaging.ImageSharpImageManager>()
                 .AddTranscoderManager<FellowOakDicom.Imaging.NativeCodec.NativeTranscoderManager>();
-            
-            services.Configure<FellowOakDicom.Network.DicomServiceOptions>(options => 
+
+            services.Configure<FellowOakDicom.Network.DicomServiceOptions>(options =>
             {
                 var dicomNet = hostContext.Configuration
                     .GetSection(DicomNetworkingOptions.SectionName)
@@ -83,10 +86,7 @@ try
         Log.Information("No Storage Forward Targets. Images will be stored locally only.");
 
     var pngOpts = host.Services.GetRequiredService<IOptions<PngExtractionOptions>>().Value;
-    Log.Information("PNG Extraction: {Enabled}, CleanupInterval: {Interval}min, MaxAge: {MaxAge}min",
-        pngOpts.Enabled ? "Enabled" : "Disabled",
-        pngOpts.CleanupIntervalMinutes,
-        pngOpts.MaxAgeMinutes);
+    Log.Information("PNG Extraction: {Enabled}", pngOpts.Enabled ? "Enabled" : "Disabled");
 
     using (var scope = host.Services.CreateScope())
     {

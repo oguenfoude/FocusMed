@@ -95,7 +95,8 @@ public class PngExtractionService
                     currentImage.SopInstanceUid,
                     f.FrameIndex,
                     f.PngPath,
-                    f.PngPath != null && File.Exists(f.PngPath)))
+                    f.PngPath != null && File.Exists(f.PngPath),
+                    currentImage.Series?.Modality))
                 .ToList();
 
             results.AddRange(frames);
@@ -104,6 +105,7 @@ public class PngExtractionService
         return results;
     }
 
+    [Obsolete("Public API reserved for external callers; not used internally per AGENTS.md #52.")]
     public void ReleaseStudyPng(int studyId)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -116,29 +118,6 @@ public class PngExtractionService
         if (string.IsNullOrEmpty(studyUid)) return;
 
         _studyRefCount.AddOrUpdate(studyUid, 0, (_, old) => Math.Max(0, old - 1));
-    }
-
-    internal bool IsStudyInUse(string studyUid)
-    {
-        return _studyRefCount.TryGetValue(studyUid, out var count) && count > 0;
-    }
-
-    public async Task ExtractForStudyAsync(int studyId, CancellationToken ct = default)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-
-        var images = await db.DicomImages
-            .Include(i => i.Series)
-            .ThenInclude(s => s.Study)
-                .ThenInclude(s => s!.Patient)
-            .Where(i => i.Series.StudyId == studyId && i.PngPath == null)
-            .ToListAsync(ct);
-
-        foreach (var image in images)
-        {
-            await ExtractForImageAsync(image, ct);
-        }
     }
 
     public async Task ExtractForImageAsync(DicomImage dicomImage, CancellationToken ct = default)
@@ -179,11 +158,10 @@ public class PngExtractionService
             var studyDate = fresh.Series?.Study?.StudyDate;
             var seriesUid = fresh.Series?.SeriesInstanceUid ?? "";
 
-            var studyHash = DicomHelpers.GetFnv1aHash(studyUid);
             var safePatientName = DicomHelpers.SanitizeFileName(patientName);
             var safeModality = DicomHelpers.SanitizeFileName(modality);
             var datePart = studyDate?.ToString("yyyyMMdd") ?? "nodate";
-            var studyDirName = $"{safePatientName}_{safeModality}_{datePart}_{studyHash}";
+            var studyDirName = $"{safePatientName}_{safeModality}_{datePart}";
 
             var imagesDir = Path.Combine(_imagesPath, studyDirName, seriesUid);
             Directory.CreateDirectory(imagesDir);
@@ -220,14 +198,8 @@ public class PngExtractionService
         finally
         {
             studyLock.Release();
-            _studyRefCount.AddOrUpdate(studyUid, 0, (_, old) => Math.Max(0, old - 1));
-            if (!_studyRefCount.TryGetValue(studyUid, out var remaining) || remaining <= 0)
-            {
-                _studyLocks.TryRemove(studyUid, out _);
-                _studyRefCount.TryRemove(studyUid, out _);
-            }
         }
     }
 }
 
-public record FrameResult(string SopInstanceUid, int FrameIndex, string? PngPath, bool FileExists);
+public record FrameResult(string SopInstanceUid, int FrameIndex, string? PngPath, bool FileExists, string? Modality);

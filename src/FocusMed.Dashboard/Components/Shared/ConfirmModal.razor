@@ -1,0 +1,57 @@
+@if (IsVisible)
+{
+    <div class="fixed inset-0 z-50 flex items-center justify-center" tabindex="0" @onkeydown="HandleKeydown" @ref="ModalRef">
+        <div class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" @onclick="OnCancel"></div>
+        <div class="relative w-full max-w-sm mx-auto z-50">
+            <div class="bg-white rounded-xl shadow-2xl overflow-hidden">
+                <div class="p-6 text-center">
+                    <div class="mx-auto w-12 h-12 @IconBgClass rounded-full flex items-center justify-center mb-4">
+                        <svg class="w-6 h-6 @IconClass" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="@IconPath" />
+                        </svg>
+                    </div>
+                    <h3 class="text-lg font-bold text-slate-900">@Title</h3>
+                    <p class="text-sm text-slate-500 mt-2">@Message</p>
+                </div>
+                <div class="flex border-t border-slate-100">
+                    <button @onclick="OnCancel" class="flex-1 px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors border-r border-slate-100">
+                        @CancelText
+                    </button>
+                    <button @onclick="OnConfirm" class="flex-1 px-4 py-3 text-sm font-semibold @ConfirmClass transition-colors">
+                        @ConfirmText
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsVisible { get; set; }
+    [Parameter] public string Title { get; set; } = "Confirmer l'action";
+    [Parameter] public string Message { get; set; } = "Êtes-vous sûr de vouloir continuer ?";
+    [Parameter] public string ConfirmText { get; set; } = "Confirmer";
+    [Parameter] public string CancelText { get; set; } = "Annuler";
+    [Parameter] public string ConfirmClass { get; set; } = "text-red-600 hover:bg-red-50";
+    [Parameter] public string IconBgClass { get; set; } = "bg-red-50";
+    [Parameter] public string IconClass { get; set; } = "text-red-500";
+    [Parameter] public string IconPath { get; set; } = "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z";
+    [Parameter] public EventCallback OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private ElementReference ModalRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && IsVisible)
+        {
+            try { await ModalRef.FocusAsync(); } catch { }
+        }
+    }
+
+    private void HandleKeydown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            OnCancel.InvokeAsync();
+    }
+}

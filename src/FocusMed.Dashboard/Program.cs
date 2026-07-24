@@ -1,12 +1,17 @@
 using FocusMed.Dashboard.Components;
+using FocusMed.Dashboard.Services;
 using FocusMed.Data;
 using FocusMed.Dicom;
 using FocusMed.Dicom.Options;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.EntityFrameworkCore;
+using QuestPDF.Infrastructure;
 
 using FellowOakDicom;
 
 var builder = WebApplication.CreateBuilder(args);
+
+QuestPDF.Settings.License = LicenseType.Community;
 
 var connectionString = builder.Configuration.GetValue<string>("ConnectionString")
     ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
@@ -21,7 +26,10 @@ builder.Services.AddFellowOakDicom()
 
 builder.Services.Configure<PngExtractionOptions>(options => options.Enabled = true);
 builder.Services.AddSingleton<PngExtractionService>();
-builder.Services.AddLogging();
+builder.Services.AddScoped<StudyService>();
+builder.Services.AddScoped<PdfService>();
+
+builder.Services.AddHostedService<DeletedCleanupService>();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -51,6 +59,22 @@ app.UseStaticFiles(new StaticFileOptions
     RequestPath = "/images",
     ServeUnknownFileTypes = false
 });
+
+var pdfCachePath = Path.Combine(dataDir, "pdf-cache");
+Directory.CreateDirectory(pdfCachePath);
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(pdfCachePath),
+    RequestPath = "/pdf-cache",
+    ServeUnknownFileTypes = true,
+    DefaultContentType = "application/pdf"
+});
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+    db.Database.Migrate();
+}
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

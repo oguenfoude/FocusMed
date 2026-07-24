@@ -1,51 +1,40 @@
 @page "/study/{Id:int}"
 @rendermode InteractiveServer
+@implements IDisposable
 @using FocusMed.Dicom
-@using FellowOakDicom
+@using FocusMed.Dashboard.Services
 @inject FocusMedDbContext DbContext
 @inject PngExtractionService PngExtractionService
+@inject PdfService PdfService
+@inject StudyService StudyService
 @inject ILogger<StudyDetails> Logger
 
 <PageTitle>Détails de l'étude — FocusMed</PageTitle>
-
 
 @if (Study == null)
 {
     if (IsLoading)
     {
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-1">
-                <div class="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
-                    <div class="h-4 bg-slate-200 rounded w-32 animate-pulse"></div>
-                </div>
-                <div class="p-6 grid grid-cols-2 gap-4">
-                    <div class="col-span-2 h-4 bg-slate-100 rounded animate-pulse"></div>
-                    <div class="col-span-2 h-4 bg-slate-100 rounded animate-pulse w-2/3"></div>
-                    <div class="h-4 bg-slate-100 rounded animate-pulse"></div>
-                    <div class="h-4 bg-slate-100 rounded animate-pulse"></div>
-                </div>
-            </div>
-            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-2">
-                <div class="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
-                    <div class="h-4 bg-slate-200 rounded w-32 animate-pulse"></div>
-                </div>
-                <div class="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div class="h-4 bg-slate-100 rounded animate-pulse w-3/4"></div>
-                    <div class="h-4 bg-slate-100 rounded animate-pulse w-1/2"></div>
-                    <div class="h-4 bg-slate-100 rounded animate-pulse w-2/3"></div>
-                    <div class="h-4 bg-slate-100 rounded animate-pulse w-5/6"></div>
-                    <div class="h-4 bg-slate-100 rounded animate-pulse w-3/4"></div>
-                    <div class="h-4 bg-slate-100 rounded animate-pulse w-1/2"></div>
-                </div>
+        <div class="flex items-center justify-center py-20">
+            <div class="flex items-center gap-3 text-slate-400">
+                <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span class="text-sm font-medium">Chargement…</span>
             </div>
         </div>
     }
     else
     {
-        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-8 text-center">
-            <h2 class="text-lg font-bold text-slate-900">Étude introuvable</h2>
-            <p class="text-sm text-slate-500 mt-1">L'étude avec l'ID @Id n'existe pas ou a été supprimée.</p>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-8 text-center max-w-md mx-auto mt-12">
+            <svg class="w-12 h-12 text-slate-300 mx-auto mb-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+            <h2 class="text-base font-bold text-slate-800">Étude introuvable</h2>
+            <p class="text-sm text-slate-500 mt-1">L'étude #@Id n'existe pas ou a été supprimée.</p>
             <a href="/" class="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
                 Retour
             </a>
         </div>
@@ -53,178 +42,278 @@
 }
 else
 {
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-1 flex flex-col">
-            <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                    <a href="/" class="text-slate-400 hover:text-brand-600 transition-colors" title="Retour aux études">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                        </svg>
-                    </a>
-                    <h3 class="text-sm font-bold text-slate-800">Informations Patient</h3>
-                </div>
-            </div>
-            <div class="p-6 grid grid-cols-2 gap-4 flex-1">
-                <div class="col-span-2">
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Nom du patient</p>
-                    <p class="text-sm font-semibold text-slate-900">@(string.IsNullOrWhiteSpace(Study.Patient?.PatientName) ? "Inconnu" : Study.Patient.PatientName.Replace("^", " "))</p>
-                </div>
-                <div class="col-span-2">
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">ID Patient</p>
-                    <p class="text-sm text-slate-700 font-mono">@(string.IsNullOrWhiteSpace(Study.Patient?.PatientId) ? "N/A" : Study.Patient.PatientId)</p>
-                </div>
-                <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Sexe</p>
-                    <p class="text-sm text-slate-700">@FormatSex(Study.Patient?.Sex)</p>
-                </div>
-                <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Âge</p>
-                    <p class="text-sm text-slate-700">@ComputeAge(Study.Patient?.BirthDate)</p>
-                </div>
-                <div class="col-span-2">
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Date de naissance</p>
-                    <p class="text-sm text-slate-700">@FormatBirthDate(Study.Patient?.BirthDate)</p>
-                </div>
-            </div>
-        </div>
+    <!-- Breadcrumb -->
+    <div class="flex items-center gap-2 text-xs text-slate-500 mb-3">
+        <a href="/" class="hover:text-brand-600 transition-colors">Études</a>
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
+        <span class="text-slate-700 font-medium">@(FormatPatientName(Study.Patient?.PatientName))</span>
+        <span class="text-slate-400">·</span>
+        <span class="text-slate-400">@(Study.StudyDate?.ToString("dd/MM/yyyy") ?? Study.CreatedAt.ToString("dd/MM/yyyy"))</span>
+    </div>
 
-        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden lg:col-span-2">
-            <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-                <h3 class="text-sm font-bold text-slate-800">Détails de l'étude</h3>
-                <div class="flex items-center gap-2">
-                    @if (IsPrintStudy)
-                    {
-                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-violet-50 text-violet-700 border border-violet-100">
-                            Impression
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-cyan-50 text-cyan-700 border border-cyan-100">
-                            C-STORE
-                        </span>
-                    }
-                    @if (Study.Status == StudyStatus.Complete)
-                    {
-                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
-                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Terminé
-                        </span>
-                    }
-                    else if (Study.Status == StudyStatus.Receiving)
-                    {
-                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
-                            <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Réception
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">
-                            <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Échoué
-                        </span>
-                    }
+    <!-- Patient + Study info -->
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm mb-4">
+        <div class="px-5 py-3.5 flex flex-wrap items-center gap-x-6 gap-y-3">
+            <!-- Patient block -->
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center shrink-0">
+                    <svg class="w-4 h-4 text-brand-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>
+                </div>
+                <div>
+                    <p class="text-base font-bold text-slate-900 leading-tight">@(FormatPatientName(Study.Patient?.PatientName))</p>
+                    <div class="flex items-center gap-2 mt-0.5 text-xs text-slate-700">
+                        <span class="font-mono font-medium">@(string.IsNullOrWhiteSpace(Study.Patient?.PatientId) ? "" : Study.Patient.PatientId)</span>
+                        @if (!string.IsNullOrWhiteSpace(Study.Patient?.PatientId))
+                        {
+                            <span class="text-slate-400">·</span>
+                        }
+                        <span class="font-medium">@FormatSex(Study.Patient?.Sex)</span>
+                        <span class="text-slate-400">·</span>
+                        <span class="font-medium">@ComputeAge(Study.Patient?.BirthDate)</span>
+                        <span class="text-slate-400">·</span>
+                        <span>@FormatBirthDate(Study.Patient?.BirthDate)</span>
+                    </div>
                 </div>
             </div>
-            <div class="p-6 grid grid-cols-1 md:grid-cols-3 gap-y-6 gap-x-4">
-                <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Description</p>
-                    <p class="text-sm text-slate-700 line-clamp-2" title="@Study.Description">@(Study.Description ?? (IsPrintStudy ? "Image imprimée" : "Non disponible"))</p>
-                </div>
-                <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Modalité</p>
-                    <p class="text-sm font-semibold text-slate-900">@(Study.Series.FirstOrDefault()?.Modality ?? "N/A")</p>
-                </div>
-                <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Accession Number</p>
-                    <p class="text-sm text-slate-700 font-mono">@(Study.AccessionNumber ?? (IsPrintStudy ? "—" : "Non disponible"))</p>
-                </div>
-                
-                <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Institution</p>
-                    <p class="text-sm text-slate-700 truncate" title="@Study.InstitutionName">@(Study.InstitutionName ?? (IsPrintStudy ? "—" : "Non disponible"))</p>
-                </div>
-                <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Fabricant</p>
-                    <p class="text-sm text-slate-700">@(Study.Manufacturer ?? (IsPrintStudy ? "—" : "Non disponible"))</p>
-                </div>
-                <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Médecin Référent</p>
-                    <p class="text-sm text-slate-700">@(string.IsNullOrWhiteSpace(Study.ReferringPhysicianName) ? (IsPrintStudy ? "—" : "Non disponible") : Study.ReferringPhysicianName!.Replace("^", " ").Trim())</p>
-                </div>
 
-                <div>
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Date de l'étude</p>
-                    <p class="text-sm text-slate-700">@(Study.StudyDate?.ToString("dd/MM/yyyy") ?? "Non spécifiée")</p>
-                </div>
-                <div class="md:col-span-2">
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Date de réception</p>
-                    <p class="text-sm text-slate-700">@Study.CreatedAt.ToString("dd/MM/yyyy HH:mm:ss")</p>
+            <div class="h-8 w-px bg-slate-200"></div>
+
+            <!-- Study block -->
+            <div class="flex items-center gap-3">
+                <div class="flex flex-col gap-1">
+                    <div class="flex items-center gap-2">
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-50 text-cyan-700 border border-cyan-100">C-STORE</span>
+                        @if (!string.IsNullOrEmpty(Study.ResumePdfPath))
+                        {
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-50 text-violet-700 border border-violet-100">Résumé</span>
+                            <button @onclick="OpenUnlinkConfirm" disabled="@IsUnlinking"
+                                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-100 hover:bg-red-100 transition-colors disabled:opacity-50"
+                                    title="Supprimer le resume associe a cette etude">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                                Retirer
+                            </button>
+                        }
+                        @if (Study.Status == StudyStatus.Complete)
+                        {
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Terminé</span>
+                        }
+                        else if (Study.Status == StudyStatus.Receiving)
+                        {
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-100"><span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Réception</span>
+                        }
+                        else if (Study.Status == StudyStatus.Archived)
+                        {
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-100"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Archivé</span>
+                        }
+                    </div>
+                    <div class="flex items-center gap-3 text-xs text-slate-700">
+                        <span class="font-bold text-slate-900">@(Study.Series.FirstOrDefault()?.Modality ?? "—")</span>
+                        <span class="text-slate-400">·</span>
+                        <span class="font-medium">@Study.Series.Count série(s)</span>
+                        <span class="text-slate-400">·</span>
+                        <span class="font-medium">@TotalImageCount image(s)</span>
+                        @if (!string.IsNullOrWhiteSpace(Study.InstitutionName))
+                        {
+                            <span class="text-slate-400">·</span>
+                            <span>@Study.InstitutionName</span>
+                        }
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mb-6">
-        <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-            <h3 class="text-sm font-bold text-slate-800">Visualiseur d'Images</h3>
-            <span class="text-xs font-medium text-slate-500">@Images.Count(i => i.FileExists) image(s) disponible(s)</span>
-        </div>
-        <div class="p-6">
-            @if (ImageError != null)
-            {
-                <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-                    <div class="flex items-start gap-3">
-                        <svg class="w-5 h-5 text-red-500 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                        </svg>
-                        <div>
-                            <p class="text-sm font-semibold text-red-800">Erreur lors du chargement des images</p>
-                            <p class="text-xs text-red-600 mt-1">@ImageError</p>
+    <!-- Main content: Sidebar + Image Gallery -->
+    <div class="flex gap-4" style="height: calc(100vh - 220px); min-height: 500px;">
+
+        <!-- IMAGE SIDEBAR (narrow, scrollable) -->
+        <div class="w-80 shrink-0 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+            <!-- Sidebar header -->
+            <div class="px-3 py-2.5 border-b border-slate-100 bg-slate-50/50">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-bold text-slate-800">Images</span>
+                    @if (IsExtracting)
+                    {
+                        <span class="text-[10px] text-brand-600 font-medium flex items-center gap-1">
+                            <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            …
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="text-[10px] text-slate-400 font-medium">@AvailableFrames.Count</span>
+                    }
+                </div>
+                @if (!IsExtracting && AvailableFrames.Count > 0)
+                {
+                    <div class="flex items-center gap-1">
+                        <button @onclick="SelectAllFrames" class="flex-1 px-2 py-1 text-[10px] font-semibold text-brand-700 bg-brand-50 rounded hover:bg-brand-100 transition-colors border border-brand-100">Tout</button>
+                        <button @onclick="DeselectAllFrames" class="flex-1 px-2 py-1 text-[10px] font-semibold text-slate-500 bg-slate-100 rounded hover:bg-slate-200 transition-colors">Aucun</button>
+                    </div>
+                }
+            </div>
+
+            <!-- Thumbnail list (scrollable) -->
+            <div class="flex-1 overflow-y-auto p-2 space-y-1.5">
+                @if (ImageError != null)
+                {
+                    <div class="text-[10px] text-red-600 bg-red-50 rounded-lg p-2">@ImageError</div>
+                }
+                else if (IsExtracting)
+                {
+                    @for (var s = 0; s < 6; s++)
+                    {
+                        <div class="flex items-center gap-2 p-1.5 rounded-lg animate-pulse">
+                            <div class="w-4 h-4 rounded border bg-slate-100"></div>
+                            <div class="w-14 h-10 rounded bg-slate-100"></div>
+                            <div class="flex-1 space-y-1"><div class="h-2 bg-slate-100 rounded w-3/4"></div><div class="h-2 bg-slate-100 rounded w-1/2"></div></div>
                         </div>
+                    }
+                }
+                else if (AvailableFrames.Count == 0)
+                {
+                    <div class="text-center py-8">
+                        <svg class="w-8 h-8 text-slate-300 mx-auto mb-2" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                        <span class="text-[10px] text-slate-400">Aucune image</span>
+                    </div>
+                }
+                else
+                {
+                    var idx = 0;
+                    @foreach (var frame in AvailableFrames)
+                    {
+                        var webPath = GetWebPath(frame.PngPath);
+                        var i = idx;
+                        idx++;
+                        var isSelected = SelectedFrameIds.Contains(frame.SopInstanceUid);
+                        <div class="group flex items-center gap-3 p-2 rounded-xl cursor-pointer transition-colors @(isSelected ? "bg-brand-50 border border-brand-200" : "hover:bg-slate-50 border border-transparent")"
+                             @onclick="() => ToggleFrameSelection(frame.SopInstanceUid)"
+                             @ondblclick="() => OpenLightbox(i)">
+                            <div class="w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors @(isSelected ? "bg-brand-500 border-brand-500" : "border-slate-300 bg-white")">
+                                @if (isSelected)
+                                {
+                                    <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                }
+                            </div>
+                            <div class="w-32 h-24 rounded-lg bg-slate-100 overflow-hidden shrink-0 border border-slate-200">
+                                <img src="@webPath" class="w-full h-full object-contain" alt="Frame @(frame.FrameIndex + 1)" loading="lazy" />
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm font-bold text-slate-900">@(frame.FrameIndex + 1)</span>
+                                    @if (!string.IsNullOrEmpty(frame.Modality))
+                                    {
+                                        <span class="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">@frame.Modality</span>
+                                    }
+                                </div>
+                            </div>
+                            <button @onclick="() => OpenLightbox(i)" @onclick:stopPropagation
+                                    class="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-slate-200 transition-all shrink-0" title="Agrandir">
+                                <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" /></svg>
+                            </button>
+                        </div>
+                    }
+                }
+            </div>
+
+            <!-- Sidebar footer -->
+            <div class="px-3 py-2 border-t border-slate-100 bg-slate-50/50">
+                <span class="text-xs text-slate-600 font-medium">
+                    <span class="text-slate-900 font-bold">@SelectedFrameIds.Count</span> / @AvailableFrames.Count sélectionnée(s)
+                </span>
+            </div>
+        </div>
+
+        <!-- PDF PREVIEW (main area) -->
+        <div class="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden min-w-0">
+            @if (SelectedFrameIds.Count == 0)
+            {
+                <div class="flex-1 flex flex-col items-center justify-center gap-3 text-center p-5">
+                    <svg class="w-16 h-16 text-slate-200" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>
+                    <div>
+                        <p class="text-sm font-semibold text-slate-600">Apercu PDF</p>
+                        <p class="text-xs text-slate-400 mt-1">Selectionnez des images pour generer l'apercu.</p>
                     </div>
                 </div>
             }
-            @if (IsExtractingImages)
+            else if (IsRegeneratingPdf)
             {
-                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-                    @for (int i = 0; i < 12; i++)
-                    {
-                        <div class="aspect-square bg-slate-100 rounded-lg animate-pulse border border-slate-200 flex items-center justify-center">
-                            <svg class="w-8 h-8 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
-                            </svg>
-                        </div>
-                    }
+                <div class="flex-1 flex flex-col items-center justify-center gap-3 text-center p-5">
+                    <svg class="w-8 h-8 text-brand-500 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span class="text-xs text-slate-500 font-medium">Generation du PDF...</span>
                 </div>
             }
-            else if (!Images.Any(i => i.FileExists))
+            else if (!string.IsNullOrEmpty(PdfPreviewUrl))
             {
-                <div class="flex flex-col items-center justify-center py-12 gap-2">
-                    <svg class="w-10 h-10 text-slate-300" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                    <span class="text-sm font-medium text-slate-600 mt-2">Aucune image disponible</span>
-                    <span class="text-xs text-slate-400">Cette étude ne contient peut-être pas d'images valides.</span>
-                </div>
-            }
-            else
-            {
-                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-                    @foreach (var img in Images.Where(i => i.FileExists))
-                    {
-                        <div class="group relative rounded-lg overflow-hidden border border-slate-200 bg-slate-50 aspect-square flex items-center justify-center">
-                            <img src="@GetWebPath(img.PngPath)" class="w-full h-full object-contain" alt="DICOM Frame @img.FrameIndex" loading="lazy" />
-                            <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-900/80 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <span class="text-[10px] text-white font-medium">Frame @(img.FrameIndex + 1)</span>
-                            </div>
-                        </div>
-                    }
-                </div>
+                <iframe src="@PdfPreviewUrl"
+                        style="width: 100%; height: 100%; border: none;"
+                        title="Apercu PDF"></iframe>
             }
         </div>
     </div>
+
+    <!-- Lightbox -->
+    @if (LightboxOpen)
+    {
+        <div class="fixed inset-0 z-50 bg-black/90 flex items-center justify-center outline-none" tabindex="0" @ref="LightboxRef" @onkeydown="HandleLightboxKeydown" @onclick="CloseLightbox">
+            <button @onclick="CloseLightbox" @onclick:stopPropagation
+                    class="absolute top-4 right-4 z-50 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+
+            @if (LightboxIndex > 0)
+            {
+                <button @onclick="PrevImage" @onclick:stopPropagation
+                        class="absolute left-4 top-1/2 -translate-y-1/2 z-50 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" /></svg>
+                </button>
+            }
+            @if (LightboxIndex < AvailableFrames.Count - 1)
+            {
+                <button @onclick="NextImage" @onclick:stopPropagation
+                        class="absolute right-4 top-1/2 -translate-y-1/2 z-50 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
+                </button>
+            }
+
+            <div class="flex items-center justify-center w-full h-full p-16" @onclick:stopPropagation>
+                <img src="@GetWebPath(AvailableFrames[LightboxIndex].PngPath)"
+                     class="max-w-full max-h-full object-contain select-none"
+                     style="transform: scale(@ZoomLevel); transform-origin: center center; transition: transform 0.2s ease;"
+                     draggable="false" />
+            </div>
+
+            <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-white/10 rounded-full px-4 py-2 backdrop-blur-sm">
+                <button @onclick="ZoomOut" @onclick:stopPropagation class="p-1.5 rounded-full hover:bg-white/20 text-white transition-colors" title="Zoom arrière">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" /></svg>
+                </button>
+                <span class="text-xs text-white font-medium min-w-[3rem] text-center">@((int)(ZoomLevel * 100))%</span>
+                <button @onclick="ZoomIn" @onclick:stopPropagation class="p-1.5 rounded-full hover:bg-white/20 text-white transition-colors" title="Zoom avant">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" /></svg>
+                </button>
+                <button @onclick="ZoomReset" @onclick:stopPropagation class="p-1.5 rounded-full hover:bg-white/20 text-white transition-colors ml-1" title="Réinitialiser">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
+                </button>
+            </div>
+
+            <div class="absolute bottom-6 right-6 z-50 text-xs text-white/70 font-medium">
+                @(LightboxIndex + 1) / @AvailableFrames.Count
+            </div>
+        </div>
+    }
 }
 
+<!-- Unlink Resume confirmation modal -->
+<ConfirmModal IsVisible="ShowUnlinkConfirm"
+              Title="Retirer le resume ?"
+              Message="Le fichier PDF du resume sera supprime definitivement et ne pourra plus etre reassocie a cette etude. Continuer ?"
+              ConfirmText="Oui, retirer"
+              CancelText="Annuler"
+              OnConfirm="ConfirmUnlinkResume"
+              OnCancel="CancelUnlinkResume" />
+
+<!-- Toast notification -->
+<ToastNotification Message="@StatusMessage" IsError="@IsError" OnDismiss="ClearToast" />
 
 @code {
     [Parameter]
@@ -232,42 +321,43 @@ else
 
     private Study? Study;
     private bool IsLoading = true;
-    private bool IsExtractingImages = true;
-    private string? ImageError;
-    private bool IsPrintStudy;
+    private int TotalImageCount;
 
-    private IReadOnlyList<FrameResult> Images = new List<FrameResult>();
-    private string DataDir = "";
+    private IReadOnlyList<FrameResult> Frames = new List<FrameResult>();
+    private bool IsExtracting = true;
+    private string? ImageError;
+
+    private string? PdfPreviewUrl;
+    private bool IsRegeneratingPdf;
+    private CancellationTokenSource? _regenCts;
+
+    private bool LightboxOpen;
+    private int LightboxIndex;
+    private double ZoomLevel = 1.0;
+    private ElementReference LightboxRef;
+    private List<FrameResult> _availableFrames = new();
+    private List<FrameResult> AvailableFrames => _availableFrames;
+
+    private HashSet<string> SelectedFrameIds = new();
+
+    private bool ShowUnlinkConfirm;
+    private bool IsUnlinking;
+    private string StatusMessage = "";
+    private bool IsError = false;
 
     protected override async Task OnInitializedAsync()
     {
         IsLoading = true;
-        
-        DataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
-
         await LoadStudyAsync();
 
         if (Study != null)
         {
-            try
-            {
-                Images = await PngExtractionService.GetOrExtractFramesAsync(Study.Id);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "PNG extraction failed for Study {StudyId}", Study.Id);
-                ImageError = $"Échec de l'extraction PNG : {ex.Message}";
-                Images = new List<FrameResult>();
-            }
-            finally
-            {
-                IsExtractingImages = false;
-                await InvokeAsync(StateHasChanged);
-            }
+            TotalImageCount = Study.Series.SelectMany(s => s.Images).Count();
+            _ = ExtractImagesAsync();
         }
         else
         {
-            IsExtractingImages = false;
+            IsExtracting = false;
         }
     }
 
@@ -275,73 +365,285 @@ else
     {
         Study = await DbContext.Studies
             .Include(s => s.Patient)
-            .Include(s => s.Series)
+            .Include(s => s.Series).ThenInclude(s => s.Images)
             .AsSplitQuery()
             .FirstOrDefaultAsync(s => s.Id == Id);
-
-        if (Study != null)
-        {
-            var firstImage = await DbContext.DicomImages
-                .Where(i => i.Series.StudyId == Id)
-                .Select(i => i.Source)
-                .FirstOrDefaultAsync();
-            IsPrintStudy = firstImage == "PRINT";
-        }
 
         IsLoading = false;
         await InvokeAsync(StateHasChanged);
     }
 
-    private string ComputeAge(string? birthDate)
+    private async Task ExtractImagesAsync()
     {
-        if (string.IsNullOrWhiteSpace(birthDate) || birthDate.Length != 8)
-            return "N/A";
+        IsExtracting = true;
+        await InvokeAsync(StateHasChanged);
 
-        if (!DateOnly.TryParseExact(birthDate, "yyyyMMdd", out var dob))
-            return "N/A";
-
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var age = today.Year - dob.Year;
-        if (today.DayOfYear < dob.DayOfYear)
-            age--;
-
-        return $"{age} ans";
-    }
-
-    private string FormatBirthDate(string? birthDate)
-    {
-        if (string.IsNullOrWhiteSpace(birthDate) || birthDate.Length != 8)
-            return "N/A";
-
-        if (DateOnly.TryParseExact(birthDate, "yyyyMMdd", out var dob))
-            return dob.ToString("dd/MM/yyyy");
-
-        return birthDate;
-    }
-
-    private string FormatSex(string? sex)
-    {
-        return sex?.ToUpperInvariant() switch
+        try
         {
-            "M" => "Masculin",
-            "F" => "Féminin",
-            "O" => "Autre",
-            _ => "N/A"
-        };
+            Frames = await PngExtractionService.GetOrExtractFramesAsync(Study!.Id);
+            _availableFrames = Frames.Where(f => f.FileExists).ToList();
+
+            var modalities = _availableFrames.Select(f => f.Modality).Where(m => !string.IsNullOrEmpty(m)).Distinct().ToList();
+            if (modalities.Contains("OT"))
+                SelectedFrameIds = new HashSet<string>(_availableFrames.Where(f => f.Modality == "OT").Select(f => f.SopInstanceUid));
+            else
+                SelectedFrameIds = new HashSet<string>(_availableFrames.Select(f => f.SopInstanceUid));
+
+            if (SelectedFrameIds.Count > 0)
+                await RegeneratePdfPreviewAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "PNG extraction failed for Study {StudyId}", Study!.Id);
+            ImageError = ex.Message;
+            Frames = new List<FrameResult>();
+            _availableFrames = new();
+        }
+        finally
+        {
+            IsExtracting = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
+
+    private async Task RegeneratePdfPreviewAsync()
+    {
+        _regenCts?.Cancel();
+        _regenCts = new CancellationTokenSource();
+        var ct = _regenCts.Token;
+
+        try
+        {
+            await Task.Delay(300, ct);
+
+            if (SelectedFrameIds.Count == 0)
+            {
+                if (!string.IsNullOrEmpty(PdfPreviewUrl))
+                    try { PdfService.DeletePdf(PdfPreviewUrl); } catch { }
+                PdfPreviewUrl = null;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            IsRegeneratingPdf = true;
+            await InvokeAsync(StateHasChanged);
+
+            var imagePaths = Frames
+                .Where(f => f.FileExists && SelectedFrameIds.Contains(f.SopInstanceUid) && !string.IsNullOrEmpty(f.PngPath))
+                .Select(f => f.PngPath!)
+                .ToList();
+
+            if (imagePaths.Count == 0)
+            {
+                PdfPreviewUrl = null;
+                IsRegeneratingPdf = false;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            var patientName = Study?.Patient?.PatientName ?? "";
+            var studyDate = Study?.StudyDate?.ToString("dd/MM/yyyy") ?? "N/A";
+            var studyDescription = Study?.Description ?? "";
+            var resumePdfPath = Study?.ResumePdfPath;
+
+            var oldUrl = PdfPreviewUrl;
+            var newUrl = await Task.Run(() =>
+                PdfService.GenerateBookletPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath), ct);
+
+            if (ct.IsCancellationRequested) return;
+
+            if (!string.IsNullOrEmpty(oldUrl))
+                try { PdfService.DeletePdf(oldUrl); } catch { }
+
+            PdfPreviewUrl = string.IsNullOrEmpty(newUrl) ? null : newUrl;
+            IsRegeneratingPdf = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "PDF preview generation failed for Study {StudyId}", Study?.Id);
+            IsRegeneratingPdf = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ToggleFrameSelection(string sopUid)
+    {
+        if (!SelectedFrameIds.Remove(sopUid))
+            SelectedFrameIds.Add(sopUid);
+        _ = RegeneratePdfPreviewAsync();
+    }
+
+    private void SelectAllFrames()
+    {
+        SelectedFrameIds = new HashSet<string>(AvailableFrames.Select(f => f.SopInstanceUid));
+        _ = RegeneratePdfPreviewAsync();
+    }
+
+    private void DeselectAllFrames()
+    {
+        SelectedFrameIds.Clear();
+        _ = RegeneratePdfPreviewAsync();
+    }
+
+    private void OpenUnlinkConfirm() => ShowUnlinkConfirm = true;
+
+    private void CancelUnlinkResume() => ShowUnlinkConfirm = false;
+
+    private async Task ConfirmUnlinkResume()
+    {
+        if (IsUnlinking || Study == null) return;
+        ShowUnlinkConfirm = false;
+        IsUnlinking = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var success = await StudyService.UnlinkResumeAsync(Study.Id);
+            if (success)
+            {
+                Study.ResumePdfPath = null;
+                StatusMessage = "Resume supprime avec succes.";
+                IsError = false;
+                if (SelectedFrameIds.Count > 0)
+                    await RegeneratePdfPreviewAsync();
+            }
+            else
+            {
+                StatusMessage = "Impossible de retirer le resume.";
+                IsError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Unlink resume failed for Study {StudyId}", Study.Id);
+            StatusMessage = "Erreur lors de la suppression du resume.";
+            IsError = true;
+        }
+        finally
+        {
+            IsUnlinking = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ClearToast()
+    {
+        StatusMessage = "";
+        IsError = false;
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        _regenCts?.Cancel();
+        _regenCts?.Dispose();
+        if (!string.IsNullOrEmpty(PdfPreviewUrl))
+        {
+            try { PdfService.DeletePdf(PdfPreviewUrl); } catch { /* ignore */ }
+        }
+    }
+
+    private void OpenLightbox(int index)
+    {
+        LightboxIndex = index;
+        LightboxOpen = true;
+        ZoomLevel = 1.0;
+        _ = FocusLightboxAsync();
+    }
+
+    private async Task FocusLightboxAsync()
+    {
+        await InvokeAsync(StateHasChanged);
+        try { await LightboxRef.FocusAsync(); } catch { }
+    }
+
+    private void CloseLightbox()
+    {
+        LightboxOpen = false;
+        ZoomLevel = 1.0;
+    }
+
+    private void HandleLightboxKeydown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowLeft": PrevImage(); break;
+            case "ArrowRight": NextImage(); break;
+            case "Escape": CloseLightbox(); break;
+            case "+": case "=": ZoomIn(); break;
+            case "-": ZoomOut(); break;
+            case "0": ZoomReset(); break;
+        }
+        StateHasChanged();
+    }
+
+    private void PrevImage()
+    {
+        if (LightboxIndex > 0)
+        {
+            LightboxIndex--;
+            ZoomLevel = 1.0;
+        }
+    }
+
+    private void NextImage()
+    {
+        if (LightboxIndex < AvailableFrames.Count - 1)
+        {
+            LightboxIndex++;
+            ZoomLevel = 1.0;
+        }
+    }
+
+    private void ZoomIn() => ZoomLevel = Math.Min(ZoomLevel + 0.25, 5.0);
+    private void ZoomOut() => ZoomLevel = Math.Max(ZoomLevel - 0.25, 0.25);
+    private void ZoomReset() => ZoomLevel = 1.0;
 
     private string GetWebPath(string? absolutePath)
     {
         if (string.IsNullOrEmpty(absolutePath)) return "";
-        var imagesDir = Path.Combine(DataDir, "images");
+        var imagesDir = Path.Combine(
+            Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed"),
+            "images");
         if (absolutePath.StartsWith(imagesDir, StringComparison.OrdinalIgnoreCase))
         {
             var relative = absolutePath.Substring(imagesDir.Length).Replace('\\', '/');
             if (relative.StartsWith("/")) relative = relative.Substring(1);
-            
             var segments = relative.Split('/').Select(Uri.EscapeDataString);
             return "/images/" + string.Join("/", segments);
         }
         return "";
     }
+
+    private string ComputeAge(string? birthDate)
+    {
+        if (string.IsNullOrWhiteSpace(birthDate) || birthDate.Length != 8) return "N/A";
+        if (!DateOnly.TryParseExact(birthDate, "yyyyMMdd", out var dob)) return "N/A";
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var age = today.Year - dob.Year;
+        if (today < dob.AddYears(age)) age--;
+        return $"{age} ans";
+    }
+
+    private string FormatBirthDate(string? birthDate)
+    {
+        if (string.IsNullOrWhiteSpace(birthDate) || birthDate.Length != 8) return "N/A";
+        if (DateOnly.TryParseExact(birthDate, "yyyyMMdd", out var dob)) return dob.ToString("dd/MM/yyyy");
+        return birthDate;
+    }
+
+    private string FormatSex(string? sex) => sex?.ToUpperInvariant() switch
+    {
+        "M" => "Masculin",
+        "F" => "Feminin",
+        "O" => "Autre",
+        _ => "N/A"
+    };
+
+    private string FormatPatientName(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? "Inconnu" : name.Replace("^", " ");
 }

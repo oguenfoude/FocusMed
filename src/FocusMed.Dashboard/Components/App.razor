@@ -32,7 +32,8 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-        .row-hover:hover { background-color: rgba(99,102,241,0.04); }
+        @@keyframes slide-in-right { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        .animate-slide-in-right { animation: slide-in-right 0.3s ease-out; }
     </style>
     <ImportMap />
     <link rel="icon" type="image/png" href="favicon.png" />

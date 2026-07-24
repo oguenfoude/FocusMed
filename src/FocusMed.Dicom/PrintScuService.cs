@@ -155,12 +155,7 @@ public sealed class PrintScuService : IPrintScuService
         // Send Phase 1 — N-CREATE requests only (responses populate SCP UIDs)
         await client.SendAsync(ct);
 
-        // Resolve SCP-assigned UIDs
         var resolvedSessionUid = printerFilmSessionUid ?? filmSessionInstanceUid;
-        for (var i = 0; i < imageBoxInstanceUids.Count; i++)
-        {
-            // Re-evaluate from captured closure — at this point callbacks have fired
-        }
 
         // Phase 2: N-SET for each image box, then N-ACTION + N-DELETE
         var phase2Client = DicomClientFactory.Create(printer.PrinterIp, printer.PrinterPort, false, printer.ScuAe, printer.PrinterAe);
