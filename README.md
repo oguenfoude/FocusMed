@@ -45,27 +45,65 @@ src/
 ├── FocusMed.Data/       PostgreSQL + EF Core. 11 entities. No business logic. (net10.0)
 ├── FocusMed.Dicom/      fo-dicom-based SCP. Ingestion, MWL, Print, Storage Commitment. (net10.0)
 ├── FocusMed.Worker/     Top-level Program.cs, Serilog, DI, listener. (net10.0)
-└── FocusMed.Dashboard/  Blazor Server UI (HTTP :5000). Browse/delete/archive studies, PDF preview. No physical printing. (net10.0)
+├── FocusMed.Dashboard/  Blazor Server UI (HTTP :5000). Browse/delete/archive studies, PDF preview, **physical print button** (via PrintService). (net10.0)
+├── FocusMed.PrintCapture/  WPF app — creates the "FocusMed" virtual printer, monitors print spooler, captures printed PDFs as studies. (net10.0-windows)
+└── FocusMed.PrintService/  ASP.NET Core Minimal API (HTTP :5050). Physical printing to Windows-queue printers. (net10.0-windows)
 ```
 
-Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` depends on `Data` + `Dicom`. Solution is `FocusMed.slnx` (XML, not classic `.sln`).
+Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom`. `PrintCapture` → `Data`. `PrintService` is **independent** of all projects — it's a separate OS process that talks to Dashboard only via HTTP. Solution is `FocusMed.slnx` (XML, not classic `.sln`).
 
 ## Dashboard
 
-A separate Blazor Server project for browsing received studies. It is **not** involved in DICOM ingestion — only the Worker receives via TCP port `11112`. To run both:
+A separate Blazor Server project for browsing received studies. It is **not** involved in DICOM ingestion — only the Worker receives via TCP port `11112`. To run everything:
 
 ```powershell
-dotnet run --project src/FocusMed.Worker        # TCP :11112
-dotnet run --project src/FocusMed.Dashboard     # HTTP :5000
+dotnet run --project src/FocusMed.Worker          # TCP :11112
+dotnet run --project src/FocusMed.Dashboard       # HTTP :5000
+dotnet run --project src/FocusMed.PrintService     # HTTP :5050 (Windows only)
 ```
 
 The Dashboard provides:
 - **Études** (`/`) — studies list with search, date filter, pagination, soft-delete
 - **Archives** (`/archives`) — archived studies with restore
 - **Supprimées** (`/deleted`) — deleted studies with permanent delete (auto-purge after 30 days)
-- **Study details** (`/study/{id}`) — patient info, image sidebar, A4-portrait PDF preview iframe, lightbox
+- **Imprimantes** (`/settings/printers`) — read-only list of configured printers
+- **Study details** (`/study/{id}`) — patient info, image sidebar, A4-portrait PDF preview iframe, lightbox, **"Imprimer" button** at upper-right
 
-> **No Dashboard printing.** PDF preview only (in-browser iframe). DICOM-side Print Management is implemented in `FocusMedScp.cs` and `PrintScuService.cs` — that's a separate system at the DICOM protocol level. Physical printer output from the Dashboard was deferred.
+> Printing from the Dashboard uses **`FocusMed.PrintService`** (Phase 1: A4 + optional duplex). Configure printers in `src/FocusMed.PrintService/appsettings.json`. DICOM-side Print Management is still implemented in `FocusMedScp.cs` and `PrintScuService.cs` — that's a separate system at the DICOM protocol level.
+
+## Physical printing (FocusMed.PrintService)
+
+A standalone Windows-only ASP.NET Core Minimal API on `http://localhost:5050`. It receives print jobs from the Dashboard and renders PDFs via **PdfiumPrinter** (which wraps Google's Pdfium + `System.Drawing.Printing.PrintDocument`). It deliberately does **not** use `System.Printing.PrintQueue.AddJob(path)` — sending raw PDF bytes through the spooler is the same bug class that killed the previous SumatraPDF-based path. Rasterising in-process means the printer sees an ordinary rendered bitmap stream instead of raw PDF.
+
+Configure printers in `src/FocusMed.PrintService/appsettings.json`:
+
+```json
+{
+  "Urls": "http://localhost:5050",
+  "PhysicalPrinters": [
+    {
+      "Name": "Brother",
+      "WindowsQueueName": "Brother HL-L2350DW series",
+      "Protocol": "generic-driver",
+      "Enabled": true
+    }
+  ]
+}
+```
+
+- `WindowsQueueName` is **case-sensitive** and must match `Get-Printer | Select Name` byte-for-byte.
+- Phase 1 implements the `generic-driver` protocol (A4 + optional duplex).
+- Phase 2 will add a `konica-booklet` protocol implementation (Konica bizhub C250i with A3 booklet imposition + SNMP tray detection). Same `IPhysicalPrintService` interface, separate implementation class — **no Dashboard change required**.
+
+At startup the service logs every Windows printer it sees and emits an `ERROR` log entry if any configured `WindowsQueueName` is missing (but the service stays up).
+
+### Endpoints exposed to Dashboard
+
+- `POST /print` — body `PrintRequest { PdfPath, PrinterName, Copies = 1, Duplex = false }` → `PrintResult { Success, JobId, ErrorMessage }`
+- `GET /job-status/{printerName}/{jobId:int}` → `JobStatus { State, ErrorMessage }`
+- `GET /printers` → `IReadOnlyList<PrinterInfo>`
+
+All endpoints are HTTP-only on `localhost:5050`. CORS allows `localhost:5000` (the Dashboard).
 
 ## Features
 
@@ -224,7 +262,8 @@ Existing migrations are auto-applied on app startup. Current set:
 ## Out of Scope (by design)
 
 Until explicitly requested, FocusMed does **not** include:
-- **Dashboard printing** (physical printer output via SumatraPDF/libreoffice/native libs) — only PDF preview in browser iframe; DICOM-side Print Management still works
+- Konica bizhub C250i-specific A3 booklet imposition + SNMP tray detection — Phase 2 of `FocusMed.PrintService` (separately implemented class, no Dashboard change)
+- Installers/MSIs, `.docx` watchers, deployment scripts
 - Installers / MSIs / deployment scripts
 - `.docx` watchers or converters
 

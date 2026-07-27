@@ -29,6 +29,13 @@ builder.Services.AddSingleton<PngExtractionService>();
 builder.Services.AddScoped<StudyService>();
 builder.Services.AddScoped<PdfService>();
 
+builder.Services.AddHttpClient<IPrintServiceClient, PrintServiceClient>(client =>
+{
+    client.BaseAddress = new Uri(
+        builder.Configuration["PrintService:BaseUrl"] ?? "http://localhost:5050");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 builder.Services.AddHostedService<DeletedCleanupService>();
 
 builder.Services.AddRazorComponents()

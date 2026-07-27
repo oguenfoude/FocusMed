@@ -1,0 +1,148 @@
+@page "/settings/printers"
+@rendermode InteractiveServer
+@implements IDisposable
+@using FocusMed.Dashboard.Services
+@inject IPrintServiceClient PrintClient
+@inject ILogger<Printers> Logger
+
+<PageTitle>Imprimantes — FocusMed</PageTitle>
+
+<div class="px-4 py-6 max-w-4xl mx-auto">
+    <!-- Breadcrumb -->
+    <div class="flex items-center gap-2 text-xs text-slate-500 mb-3">
+        <a href="/" class="hover:text-brand-600 transition-colors">Études</a>
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
+        <span class="text-slate-700 font-medium">Paramètres</span>
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
+        <span class="text-slate-700 font-medium">Imprimantes</span>
+    </div>
+
+    <!-- Header -->
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm mb-4">
+        <div class="px-6 py-5">
+            <h1 class="text-xl font-bold text-slate-900">Imprimantes configurées</h1>
+            <p class="text-sm text-slate-500 mt-1">
+                Les imprimantes suivantes sont disponibles pour l'impression des études. La liste est gérée
+                dans le fichier <span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">appsettings.json</span>
+                du service <span class="font-semibold">FocusMed.PrintService</span>.
+                N'éteignez pas ce service, l'impression ne fonctionnera pas.
+            </p>
+        </div>
+    </div>
+
+    @if (IsLoading)
+    {
+        <div class="flex items-center justify-center py-16">
+            <div class="flex items-center gap-3 text-slate-400">
+                <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span class="text-sm font-medium">Chargement…</span>
+            </div>
+        </div>
+    }
+    else if (!string.IsNullOrEmpty(ErrorMessage))
+    {
+        <div class="bg-red-50 border border-red-200 rounded-xl p-5">
+            <h3 class="text-sm font-bold text-red-700">Service d'impression inaccessible</h3>
+            <p class="text-sm text-red-600 mt-1">@ErrorMessage</p>
+            <p class="text-xs text-red-500 mt-2">
+                Vérifiez que <span class="font-mono">FocusMed.PrintService</span> est démarré
+                (<span class="font-mono">http://localhost:5050</span>) et réessayez.
+            </p>
+        </div>
+    }
+    else if (ConfiguredPrinters.Count == 0)
+    {
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-5">
+            <h3 class="text-sm font-bold text-amber-700">Aucune imprimante configurée</h3>
+            <p class="text-sm text-amber-600 mt-1">
+                Modifiez <span class="font-mono text-xs bg-white px-1.5 py-0.5 rounded">appsettings.json</span>
+                du service d'impression et ajoutez une entrée dans la section <span class="font-mono">PhysicalPrinters</span>.
+            </p>
+        </div>
+    }
+    else
+    {
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <table class="w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                    <tr>
+                        <th class="px-5 py-3 font-semibold">Imprimante</th>
+                        <th class="px-5 py-3 font-semibold">État</th>
+                        <th class="px-5 py-3 font-semibold">Protocole</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    @foreach (var p in ConfiguredPrinters)
+                    {
+                        <tr class="hover:bg-slate-50/60">
+                            <td class="px-5 py-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                                        <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.72 13.829c-.246.184-.72.171-.72.171V17h-1v-3.018c-1.667 0-3-1.343-3-3 0-1.5 1.06-2.752 2.462-2.973.124-.728.49-1.434 1.066-2.013C6.62 7.97 7.886 7.5 9 7.5c1.5 0 2.5.5 3 1.5h.5l.5 1v8.5l-1 .5H8.263c-.36 0-.788-.146-1.055-.342-.293-.214-.488-.611-.488-.829z" /></svg>
+                                    </div>
+                                    <p class="text-sm font-semibold text-slate-900">@p.Name</p>
+                                </div>
+                            </td>
+                            <td class="px-5 py-4">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">Activée</span>
+                            </td>
+                            <td class="px-5 py-4">
+                                <span class="font-mono text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded">@p.Protocol</span>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+<!-- Toast notification -->
+<ToastNotification Message="@StatusMessage" IsError="@IsError" OnDismiss="ClearToast" />
+
+@code {
+    private List<PrinterInfo> ConfiguredPrinters = new();
+    private bool IsLoading = true;
+    private string? ErrorMessage;
+    private string StatusMessage = "";
+    private bool IsError = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        IsLoading = true;
+        ErrorMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            var list = await PrintClient.GetConfiguredPrintersAsync();
+            ConfiguredPrinters = list.ToList();
+            IsLoading = false;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Print service unreachable");
+            ErrorMessage = ex.Message;
+            IsLoading = false;
+        }
+        StateHasChanged();
+    }
+
+    private void ClearToast()
+    {
+        StatusMessage = "";
+        IsError = false;
+    }
+
+    public void Dispose()
+    {
+    }
+}

@@ -8,7 +8,7 @@ Compact reference for AI sessions. Every fact here is verified against the curre
 
 ## Project Shape
 
-Five projects. Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom`. `PrintCapture` → `Data`.
+**Six** projects. Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom`. `PrintCapture` → `Data`. `PrintService` is **independent** of all other projects — a separate OS process, talks to Dashboard only via HTTP at `http://localhost:5050`.
 
 | Project | TFM | Role |
 |---------|-----|------|
@@ -17,6 +17,7 @@ Five projects. Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Da
 | `FocusMed.Worker` | `net10.0` | `Program.cs`, Serilog, DI wiring, `DicomListenerService`. Headless DICOM listener. |
 | `FocusMed.Dashboard` | `net10.0` | Blazor Server UI (`InteractiveServer`). Razor components, `PngExtractionService`, `PdfService`, `StudyService`. HTTP `:5000`. **No Dashboard printing — DICOM-side Print Management only.** |
 | `FocusMed.PrintCapture` | `net10.0-windows` | WPF desktop app. Creates "FocusMed" virtual printer on Windows, monitors print output, converts to PDF, shows native popup for study selection. |
+| `FocusMed.PrintService` | `net10.0-windows` | ASP.NET Core Minimal API on `http://localhost:5050`. Receives print jobs from Dashboard via HttpClient. Uses `PdfiumPrinter` (Pdfium via `bblanchon.PDFium.Win32`) + `System.Drawing.Printing.PrintDocument` to render PDF pages to bitmaps (no raw-PDF-to-spooler handoff). Phase 1: Brother A4 + optional duplex. Phase 2 (planned): Konica bizhub C250i A3 booklet + SNMP tray detection via new implementation class only. |
 
 Solution: `FocusMed.slnx` (XML, **not** classic `.sln`).
 
@@ -25,6 +26,7 @@ Solution: `FocusMed.slnx` (XML, **not** classic `.sln`).
 ```powershell
 dotnet build
 dotnet run --project src/FocusMed.Worker
+dotnet run --project src/FocusMed.PrintService     # HTTP :5050 (must run on Windows for System.Drawing.Printing)
 ```
 
 - Terminal **must be Administrator** — binds TCP port `11112`.
@@ -209,6 +211,8 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 64. **Unlink Resume button on StudyDetails** (`StudyDetails.razor:89-102`). A red pill button "Retirer" appears next to the violet `Résumé` badge when `Study.ResumePdfPath != null`. Click opens a `ConfirmModal` asking "Le fichier PDF du resume sera supprime definitivement et ne pourra plus etre reassocie a cette etude. Continuer ?". On confirm, `StudyService.UnlinkResumeAsync(Study.Id)` (`StudyService.cs:116-148`) deletes the PDF from `%LOCALAPPDATA%\FocusMed\{study.ResumePdfPath}` AND clears `Study.ResumePdfPath` (file delete is wrapped in try/catch — DB update always succeeds even if the file is already gone). Uses `ToastNotification` for success/error feedback. After unlink, triggers `RegeneratePdfPreviewAsync()` to refresh the iframe without the resume page.
 
+65. **`FocusMed.PrintService` is `net10.0-windows` (the third Windows-only project after `FocusMed.PrintCapture`)**. Required because `System.Drawing.Printing.PrintDocument` / `PrinterSettings.PaperSizes` are Windows-only APIs. It uses the **`PdfiumPrinter` 1.4.1** NuGet (which wraps Pdfium + `System.Drawing.Printing`) along with **`bblanchon.PDFium.Win32`** as the native runtime. **Does NOT use `System.Printing.PrintQueue.AddJob(path)`**: that path sends raw PDF bytes to a driver that may not understand PDF, which is the exact bug class that killed the prior SumatraPDF-based Dashboard printing. `WindowsDriverPrintService` opens the PDF with `PdfDocument.Load`, hands it to `CreatePrintDocument`, and raises the `PrintPage` event handler internally — pages are rasterized to bitmaps and drawn into `Graphics` scaled to `e.PageBounds`. Listens on **`http://localhost:5050` only** (no external). Dashboard talks to it via `PrintServiceClient` (`AddHttpClient<IPrintServiceClient, PrintServiceClient>`). CORS allows `localhost:5000` only. Configured printer validation happens at startup: missing `WindowsQueueName` is logged as ERROR (with the list of `PrinterSettings.InstalledPrinters`) but service stays up. **Phase 1** = generic-driver with A4 + optional duplex. **Phase 2** = `KonicaBookletPrintService` implementing the same `IPhysicalPrintService` interface for Konica bizhub C250i (A3 booklet, SNMP tray detection) without touching Dashboard code. Paper sizes are abstracted via `PaperSizePolicy` (today hard-coded to find A4; Phase 2 will read `config.PreferredPaperSize` and fall back to "PDF page size matched against driver-supported sizes").
+
 ## Quick File Index
 
 - `src/FocusMed.Worker/Program.cs` — entry, Serilog, DI wiring, startup config summary, migration.
@@ -251,3 +255,20 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 - `src/FocusMed.PrintCapture/Services/DatabaseService.cs` — EF Core queries for unassigned studies + resume assignment.
 - `src/FocusMed.PrintCapture/Windows/ResumePickerWindow.xaml` — WPF popup for study selection.
 - `src/FocusMed.PrintCapture/Windows/ResumePickerWindow.xaml.cs` — code-behind for picker window.
+- `src/FocusMed.PrintService/FocusMed.PrintService.csproj` — ASP.NET Core Minimal API (Microsoft.NET.Sdk.Web, net10.0-windows). Listens on `localhost:5050`. References `PdfiumPrinter` + `bblanchon.PDFium.Win32`. Independent of Dicom/Worker/Data.
+- `src/FocusMed.PrintService/Program.cs` — DI registration of `JobStateTracker` + `WindowsDriverPrintService`, 3 endpoint maps (Print, JobStatus, Printers), startup validation that checks configured Windows queue names against `PrinterSettings.InstalledPrinters`. CORS only allows `localhost:5000`.
+- `src/FocusMed.PrintService/Abstractions/IPhysicalPrintService.cs` — interface with `Protocol` field as the extension point (Phase 1: `generic-driver`; Phase 2: `konica-booklet`).
+- `src/FocusMed.PrintService/Abstractions/Dtos.cs` — `PrintRequest`, `PrintResult`, `JobStatus`, `PrinterInfo` records.
+- `src/FocusMed.PrintService/Configuration/PhysicalPrinterOptions.cs` — POCO bound to `"PhysicalPrinters"` section. Each entry: `Name`, `WindowsQueueName` (exact `Get-Printer` output, case-sensitive), `Protocol`, `Enabled`, optional `PreferredPaperSize` for Phase 2.
+- `src/FocusMed.PrintService/Services/PdfPathResolver.cs` — resolves rooted absolute paths or `FOCUSMED_DATA`-relative paths. Returns null if file is missing.
+- `src/FocusMed.PrintService/Services/JobStateTracker.cs` — in-memory `ConcurrentDictionary` keyed by `(printer, jobId)` for tracking job lifecycles. Service restart resets history.
+- `src/FocusMed.PrintService/Services/PaperSizePolicy.cs` — abstracts paper-size selection. Today: hard-coded to find A4. Phase 2 will read `config.PreferredPaperSize` and fall back to "PDF size matched against driver-reported sizes".
+- `src/FocusMed.PrintService/Services/WindowsDriverPrintService.cs` — `IPhysicalPrintService` Phase 1 implementation. Uses `PdfiumPrinter.PdfDocument.Load` + `CreatePrintDocument(PdfPrintSettings)` + binds `PrinterSettings.{Copies, Duplex, PaperSize}` directly. Wraps everything in try/catch returning exact error messages (`ex.GetBaseException().Message`), never throws.
+- `src/FocusMed.PrintService/Endpoints/PrintEndpoint.cs` — POST `/print` body `PrintRequest` → `PrintResult`.
+- `src/FocusMed.PrintService/Endpoints/JobStatusEndpoint.cs` — GET `/job-status/{printerName}/{jobId:int}` → `JobStatus`.
+- `src/FocusMed.PrintService/Endpoints/PrintersEndpoint.cs` — GET `/printers` → `IReadOnlyList<PrinterInfo>`.
+- `src/FocusMed.PrintService/appsettings.json` — `Urls` + `PhysicalPrinters[]` configuration. `WindowsQueueName` is case-sensitive against `Get-Printer` output.
+- `src/FocusMed.Dashboard/Services/PrintServiceClient.cs` — typed HttpClient wrapper around PrintService endpoints. `AddHttpClient<IPrintServiceClient, PrintServiceClient>` registered in `Dashboard/Program.cs`. BaseAddress from `"PrintService:BaseUrl"` config (default `http://localhost:5050`). Maps 3 endpoints to local records `PrintRequest`, `PrintResult`, `JobStatus`, `PrinterInfo`. Returns `PrintResult(false, null, "...")` on HttpRequestException / TaskCanceledException — never throws.
+- `src/FocusMed.Dashboard/Components/Pages/StudyDetails.razor` — added an "Imprimer" pill button next to the existing Unlink button (line ~97 area). When PDF preview is available, click opens a `PrintJobDialog` modal (Copies 1–99 + Duplex toggle). On confirm: `PrintClient.PrintAsync` with resolved absolute path → `ToastNotification` shows `result.ErrorMessage` exactly on failure or "Imprimé sur {printer} (tâche #{jobId})" on success.
+- `src/FocusMed.Dashboard/Components/Pages/Settings/Printers.razor` — `/settings/printers` page, French UI. Read-only list of configured printers (Phase 1 has no admin UI). Shows graceful error card when PrintService is unreachable.
+- `src/FocusMed.Dashboard/Components/Layout/MainLayout.razor` — added "Imprimantes" nav entry at `/settings/printers`.
