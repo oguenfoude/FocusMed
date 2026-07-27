@@ -11,15 +11,21 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
     private readonly IOptionsMonitor<PhysicalPrinterOptions> _options;
     private readonly ILogger<WindowsDriverPrintService> _logger;
     private readonly JobStateTracker _tracker;
+    private readonly PrinterCapabilityDetector _caps;
+    private readonly IBookletImpositionService _booklet;
 
     public WindowsDriverPrintService(
         IOptionsMonitor<PhysicalPrinterOptions> options,
         ILogger<WindowsDriverPrintService> logger,
-        JobStateTracker tracker)
+        JobStateTracker tracker,
+        PrinterCapabilityDetector caps,
+        IBookletImpositionService booklet)
     {
         _options = options;
         _logger = logger;
         _tracker = tracker;
+        _caps = caps;
+        _booklet = booklet;
     }
 
     public Task<PrintResult> PrintAsync(PrintRequest request)
@@ -37,9 +43,19 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
     {
         IReadOnlyList<PrinterInfo> list = _options.CurrentValue.PhysicalPrinters
             .Where(p => p.Enabled)
-            .Select(p => new PrinterInfo(p.Name, p.Enabled, p.Protocol))
+            .Select(p =>
+            {
+                var caps = _caps.Detect(p.Name);
+                return new PrinterInfo(p.Name, p.Enabled, p.Protocol, caps.CanDuplex, caps.SupportedPaperSizes.Count);
+            })
             .ToArray();
         return Task.FromResult(list);
+    }
+
+    public Task<PrinterCapabilities> GetCapabilitiesAsync(string printerName)
+    {
+        var caps = _caps.Detect(printerName);
+        return Task.FromResult(caps);
     }
 
     private PrintResult PrintInternal(PrintRequest req)
@@ -96,25 +112,58 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                 $"Tailles detectees : {availableSizes}.");
         }
 
+        if (req.BookletMode && !probeSettings.CanDuplex)
+        {
+            return Fail(
+                $"Cette imprimante ne supporte pas le recto-verso — livret impossible. " +
+                $"Activez le recto-verso sur une imprimante compatible.");
+        }
+
+        string printPath = resolvedPath;
+        string? bookletTempPath = null;
+
+        if (req.BookletMode)
+        {
+            try
+            {
+                var caps = _caps.Detect(req.PrinterName);
+                var sheetSize = caps.SupportedPaperSizes
+                    .OrderByDescending(p => p.WidthHundredthsMm * p.HeightHundredthsMm)
+                    .FirstOrDefault()
+                    ?? new PaperSizeInfo(paperSize.PaperName, paperSize.Width, paperSize.Height, paperSize.Kind.ToString());
+
+                bookletTempPath = _booklet.ComposeBookletAsync(resolvedPath, sheetSize, new BookletOptions(ShortEdgeBinding: true)).GetAwaiter().GetResult();
+                printPath = bookletTempPath;
+
+                if (!File.Exists(printPath))
+                    return Fail("La generation du livret a echoue — fichier temporaire non cree.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Booklet imposition failed for {Printer}", config.Name);
+                return Fail($"Echec de la generation du livret : {ex.GetBaseException().Message}");
+            }
+        }
+
         var jobId = _tracker.NextId();
         var printerName = config.Name;
         _tracker.Register(printerName, jobId);
 
         try
         {
-            using var doc = PdfDocument.Load(resolvedPath);
+            using var doc = PdfDocument.Load(printPath);
 
             var pdfSettings = new PdfPrintSettings(PdfPrintMode.ShrinkToMargin, multiplePages: null);
 
             using var printDoc = doc.CreatePrintDocument(pdfSettings);
 
-            printDoc.PrinterSettings = probeSettings;
+            printDoc.PrinterSettings.PrinterName = config.WindowsQueueName;
             printDoc.PrinterSettings.Copies = (short)Math.Clamp(req.Copies, 1, 99);
-            printDoc.PrinterSettings.Duplex = req.Duplex
+            printDoc.PrinterSettings.Duplex = req.Duplex || req.BookletMode
                 ? Duplex.Vertical
                 : Duplex.Simplex;
             printDoc.DefaultPageSettings.PaperSize = paperSize;
-            printDoc.DocumentName = $"FocusMed-{jobId:D6}";
+            printDoc.DocumentName = req.BookletMode ? $"FocusMed-Livret-{jobId:D6}" : $"FocusMed-{jobId:D6}";
             printDoc.OriginAtMargins = true;
 
             printDoc.BeginPrint += (_, _) => _tracker.MarkPrinting(printerName, jobId);
@@ -128,9 +177,16 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         {
             var message = ex.GetBaseException().Message;
             _logger.LogError(ex, "Print failed for {Printer} (job #{JobId}) file={Path}",
-                printerName, jobId, resolvedPath);
+                printerName, jobId, printPath);
             _tracker.MarkError(printerName, jobId, message);
             return Fail(message);
+        }
+        finally
+        {
+            if (bookletTempPath != null)
+            {
+                try { if (File.Exists(bookletTempPath)) File.Delete(bookletTempPath); } catch { }
+            }
         }
     }
 

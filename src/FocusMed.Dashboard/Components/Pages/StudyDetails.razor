@@ -350,10 +350,37 @@ else
                                 <input type="number" min="1" max="99" @bind="PrintCopies"
                                        class="mt-1 w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500" />
                             </label>
-                            <label class="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                                <input type="checkbox" @bind="PrintDuplex" class="rounded border-slate-300" />
+                            <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 @(PrinterCapabilities != null && !PrinterCapabilities.CanDuplex ? "opacity-50 cursor-not-allowed" : "")"
+                                   title="@(PrinterCapabilities != null && !PrinterCapabilities.CanDuplex ? "Cette imprimante ne supporte pas le recto-verso" : (PrintDuplex ? "Recto-verso active" : "Desactive par defaut — cochez pour activer"))">
+                                <input type="checkbox" @bind="PrintDuplex"
+                                       disabled="@(PrinterCapabilities != null && !PrinterCapabilities.CanDuplex)"
+                                       class="rounded border-slate-300" />
                                 Recto-verso
+                                @if (PrinterCapabilities != null && !PrinterCapabilities.CanDuplex)
+                                {
+                                    <span class="text-[10px] text-slate-400 font-normal ml-1">(non disponible)</span>
+                                }
+                                else
+                                {
+                                    <span class="text-[10px] text-slate-400 font-normal ml-1">@(PrintDuplex ? "ON" : "OFF par defaut")</span>
+                                }
                             </label>
+                            <label class="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                                <input type="checkbox" @bind="PrintBooklet" class="rounded border-slate-300" />
+                                Livret
+                            </label>
+                            @if (PrintBooklet && PrinterCapabilities != null && !PrinterCapabilities.CanDuplex)
+                            {
+                                <div class="text-[10px] text-red-600 bg-red-50 rounded-lg px-2 py-1">
+                                    Le livret necessite le recto-verso. Cette imprimante ne le supporte pas.
+                                </div>
+                            }
+                            @if (PrinterCapabilities != null && PrinterCapabilities.SupportedPaperSizes.Count > 0)
+                            {
+                                <div class="text-[10px] text-slate-500">
+                                    Tailles de papier : @string.Join(", ", PrinterCapabilities.SupportedPaperSizes.Take(5).Select(p => p.Name))@(PrinterCapabilities.SupportedPaperSizes.Count > 5 ? $" (+{PrinterCapabilities.SupportedPaperSizes.Count - 5})" : "")
+                                </div>
+                            }
                         </div>
                     }
                 </div>
@@ -405,7 +432,9 @@ else
     private bool IsPrinting;
     private int PrintCopies = 1;
     private bool PrintDuplex;
+    private bool PrintBooklet;
     private string? SelectedPrinterName;
+    private PrinterCapabilities? PrinterCapabilities;
     private ElementReference PrintModalRef;
 
     private bool HasPreviewPdf => !string.IsNullOrEmpty(PreviewPdfAbsolutePath);
@@ -615,13 +644,20 @@ else
         if (!HasPreviewPdf) return;
         PrintCopies = 1;
         PrintDuplex = false;
+        PrintBooklet = false;
         IsPrinting = false;
+        PrinterCapabilities = null;
 
         try
         {
             var printers = await PrintClient.GetConfiguredPrintersAsync();
             var first = printers.FirstOrDefault();
             SelectedPrinterName = first?.Name;
+
+            if (first != null)
+            {
+                PrinterCapabilities = await PrintClient.GetCapabilitiesAsync(first.Name);
+            }
         }
         catch
         {
@@ -656,7 +692,8 @@ else
                 PreviewPdfAbsolutePath!,
                 SelectedPrinterName,
                 copies,
-                PrintDuplex));
+                PrintDuplex,
+                PrintBooklet));
 
             if (result.Success)
             {

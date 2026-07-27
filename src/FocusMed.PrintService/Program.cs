@@ -23,6 +23,8 @@ builder.Services.AddOptions<PhysicalPrinterOptions>()
     });
 
 builder.Services.AddSingleton<JobStateTracker>();
+builder.Services.AddSingleton<PrinterCapabilityDetector>();
+builder.Services.AddSingleton<IBookletImpositionService, BookletImpositionService>();
 builder.Services.AddSingleton<IPhysicalPrintService, WindowsDriverPrintService>();
 
 builder.Services.AddCors(options =>
@@ -44,6 +46,7 @@ StartupValidator.Validate(app.Services, builder.Configuration);
 app.MapPrint();
 app.MapJobStatus();
 app.MapPrinters();
+app.MapCapabilities();
 app.MapGet("/", () => "FocusMed.PrintService - localhost only");
 
 app.Run();
@@ -67,15 +70,18 @@ internal static class StartupValidator
             "Imprimantes configurees dans appsettings.json : {Count}",
             configuredPrinters.Count);
 
+        var capsDetector = services.GetRequiredService<PrinterCapabilityDetector>();
+
         foreach (var printer in configuredPrinters)
         {
             var matches = configuredWindowsNames.Any(
                 n => string.Equals(n, printer.WindowsQueueName, StringComparison.OrdinalIgnoreCase));
             if (matches)
             {
+                var caps = capsDetector.Detect(printer.Name);
                 logger.LogInformation(
-                    "Imprimante configuree OK : {Name} -> WindowsQueueName='{Queue}', Protocol={Protocol}, Enabled={Enabled}",
-                    printer.Name, printer.WindowsQueueName, printer.Protocol, printer.Enabled);
+                    "Imprimante configuree OK : {Name} -> WindowsQueueName='{Queue}', Protocol={Protocol}, Enabled={Enabled}, CanDuplex={CanDuplex}, PaperSizes={SizeCount}",
+                    printer.Name, printer.WindowsQueueName, printer.Protocol, printer.Enabled, caps.CanDuplex, caps.SupportedPaperSizes.Count);
             }
             else
             {
