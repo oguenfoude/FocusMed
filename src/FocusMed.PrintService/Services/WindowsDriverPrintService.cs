@@ -74,6 +74,16 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
             return Fail(ex.Message);
         }
 
+        var resolvedQueue = _caps.ResolveBestQueue(config);
+        if (resolvedQueue == null)
+        {
+            var available = string.Join(", ",
+                PrinterSettings.InstalledPrinters.Cast<string>());
+            return Fail(
+                $"Aucune imprimante Windows ne correspond a '{config.Name}'. " +
+                $"Imprimantes disponibles : {available}.");
+        }
+
         string resolvedPath;
         try
         {
@@ -88,14 +98,14 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
 
         var probeSettings = new PrinterSettings
         {
-            PrinterName = config.WindowsQueueName
+            PrinterName = resolvedQueue
         };
         if (!probeSettings.IsValid)
         {
             var available = string.Join(", ",
                 PrinterSettings.InstalledPrinters.Cast<string>());
             return Fail(
-                $"File d'attente '{config.WindowsQueueName}' introuvable. " +
+                $"File d'attente '{resolvedQueue}' introuvable. " +
                 $"Imprimantes Windows disponibles : {available}. " +
                 $"Corrigez appsettings.json (Propriete WindowsQueueName) avec le nom exact de la file.");
         }
@@ -108,7 +118,7 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         {
             var availableSizes = string.Join(", ", PaperSizePolicy.AvailablePaperSizes(probeSettings));
             return Fail(
-                $"Aucune taille de papier utilisable n'a ete trouvee sur '{config.WindowsQueueName}'. " +
+                $"Aucune taille de papier utilisable n'a ete trouvee sur '{resolvedQueue}'. " +
                 $"Tailles detectees : {availableSizes}.");
         }
 
@@ -157,7 +167,7 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
 
             using var printDoc = doc.CreatePrintDocument(pdfSettings);
 
-            printDoc.PrinterSettings.PrinterName = config.WindowsQueueName;
+            printDoc.PrinterSettings.PrinterName = resolvedQueue;
             printDoc.PrinterSettings.Copies = (short)Math.Clamp(req.Copies, 1, 99);
             printDoc.PrinterSettings.Duplex = req.Duplex || req.BookletMode
                 ? Duplex.Vertical

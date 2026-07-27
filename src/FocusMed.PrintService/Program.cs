@@ -74,23 +74,20 @@ internal static class StartupValidator
 
         foreach (var printer in configuredPrinters)
         {
-            var matches = configuredWindowsNames.Any(
-                n => string.Equals(n, printer.WindowsQueueName, StringComparison.OrdinalIgnoreCase));
-            if (matches)
+            var resolvedQueue = capsDetector.ResolveBestQueue(printer);
+            if (resolvedQueue != null)
             {
                 var caps = capsDetector.Detect(printer.Name);
                 logger.LogInformation(
-                    "Imprimante configuree OK : {Name} -> WindowsQueueName='{Queue}', Protocol={Protocol}, Enabled={Enabled}, CanDuplex={CanDuplex}, PaperSizes={SizeCount}",
-                    printer.Name, printer.WindowsQueueName, printer.Protocol, printer.Enabled, caps.CanDuplex, caps.SupportedPaperSizes.Count);
+                    "Imprimante auto-detectee OK : {Name} -> Queue='{Queue}', CanDuplex={CanDuplex}, PaperSizes={SizeCount}",
+                    printer.Name, resolvedQueue, caps.CanDuplex, caps.SupportedPaperSizes.Count);
             }
             else
             {
                 logger.LogError(
-                    "Imprimante configuree INTROUVABLE : {Name} -> WindowsQueueName='{Queue}', Protocol={Protocol}. " +
-                    "Nom exact introuvable parmi les imprimantes Windows detectees. " +
-                    "Corrigez appsettings.json (propriete WindowsQueueName). " +
+                    "Imprimante INTROUVABLE : {Name} -> Aucune file Windows correspondante. " +
                     "Imprimantes disponibles : {List}",
-                    printer.Name, printer.WindowsQueueName, printer.Protocol,
+                    printer.Name,
                     string.Join(", ", configuredWindowsNames));
             }
         }
