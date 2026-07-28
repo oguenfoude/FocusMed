@@ -151,25 +151,34 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                 printPath, pageCount, req.BookletMode);
 
             var images = new List<byte[]>();
+            int pageWidthPx = 0, pageHeightPx = 0;
             for (int i = 0; i < pageCount; i++)
             {
                 using var bitmap = doc.Render(i, 300f, 300f,
                     PdfRenderFlags.ForPrinting | PdfRenderFlags.CorrectFromDpi);
+                if (i == 0)
+                {
+                    pageWidthPx = bitmap.Width;
+                    pageHeightPx = bitmap.Height;
+                }
                 using var ms = new MemoryStream();
                 bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
                 images.Add(ms.ToArray());
             }
-
-            var firstBitmap = doc.Render(0, 300f, 300f, PdfRenderFlags.ForPrinting | PdfRenderFlags.CorrectFromDpi);
-            var pageWidthPx = firstBitmap.Width;
-            var pageHeightPx = firstBitmap.Height;
-            firstBitmap.Dispose();
 
             _logger.LogInformation(
                 "Building XPS from {Count} images ({Width}x{Height}px)",
                 images.Count, pageWidthPx, pageHeightPx);
 
             var xpsBytes = XpsBuilder.CreateXpsFromPngImages(images, pageWidthPx, pageHeightPx);
+
+            var duplexMode = req.BookletMode
+                ? DuplexMode.ShortEdge
+                : req.Duplex
+                    ? DuplexMode.LongEdge
+                    : DuplexMode.Simplex;
+
+            var xpsWithTicket = XpsBuilder.InjectPrintTicket(xpsBytes, duplexMode, req.Copies);
 
             _logger.LogInformation(
                 "Submitting XPS to printer: queue={Queue}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
@@ -190,19 +199,6 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                         return;
                     }
 
-                    var ticket = queue.DefaultPrintTicket.Clone();
-                    ticket.CopyCount = req.Copies;
-                    ticket.PageOrientation = PageOrientation.Portrait;
-
-                    if (req.BookletMode)
-                        ticket.Duplexing = Duplexing.TwoSidedShortEdge;
-                    else if (req.Duplex)
-                        ticket.Duplexing = Duplexing.TwoSidedLongEdge;
-                    else
-                        ticket.Duplexing = Duplexing.OneSided;
-
-                    var xpsWithTicket = XpsBuilder.InjectPrintTicket(xpsBytes, ticket);
-
                     var jobName = req.BookletMode
                         ? $"FocusMed-Livret-{jobId:D6}"
                         : $"FocusMed-{jobId:D6}";
@@ -218,7 +214,7 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                     _tracker.MarkCompleted(printerName, jobId);
                     _logger.LogInformation(
                         "XPS print job submitted: job={JobId}, queue={Queue}, duplex={Duplex}",
-                        job.JobIdentifier, resolvedQueue, ticket.Duplexing);
+                        job.JobIdentifier, resolvedQueue, duplexMode);
 
                     result = new PrintResult(true, job.JobIdentifier, null);
                 }
