@@ -67,16 +67,6 @@ app.UseStaticFiles(new StaticFileOptions
     ServeUnknownFileTypes = false
 });
 
-var pdfCachePath = Path.Combine(dataDir, "pdf-cache");
-Directory.CreateDirectory(pdfCachePath);
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider(pdfCachePath),
-    RequestPath = "/pdf-cache",
-    ServeUnknownFileTypes = true,
-    DefaultContentType = "application/pdf"
-});
-
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();

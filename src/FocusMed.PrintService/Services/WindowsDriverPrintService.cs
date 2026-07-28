@@ -1,7 +1,7 @@
 using System.Drawing;
 using System.Drawing.Printing;
 using System.IO;
-using System.Runtime.InteropServices;
+using System.Printing;
 using FocusMed.PrintService.Abstractions;
 using FocusMed.PrintService.Configuration;
 using Microsoft.Extensions.Options;
@@ -16,19 +16,6 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
     private readonly JobStateTracker _tracker;
     private readonly PrinterCapabilityDetector _caps;
     private readonly IBookletImpositionService _booklet;
-
-    [DllImport("winspool.drv", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern bool OpenPrinter(string pPrinterName, out IntPtr hPrinter, IntPtr pDefault);
-
-    [DllImport("winspool.drv", SetLastError = true)]
-    private static extern bool ClosePrinter(IntPtr hPrinter);
-
-    [DllImport("winspool.drv", CharSet = CharSet.Auto)]
-    private static extern int DocumentProperties(IntPtr hWnd, IntPtr hPrinter, string pDeviceName,
-        IntPtr pDevModeOutput, IntPtr pDevModeInput, int fMode);
-
-    private const int DM_OUT_BUFFER = 0x02;
-    private const int DM_IN_BUFFER = 0x08;
 
     public WindowsDriverPrintService(
         IOptionsMonitor<PhysicalPrinterOptions> options,
@@ -93,8 +80,7 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         var resolvedQueue = _caps.ResolveBestQueue(config);
         if (resolvedQueue == null)
         {
-            var available = string.Join(", ",
-                PrinterSettings.InstalledPrinters.Cast<string>());
+            var available = string.Join(", ", PrinterSettings.InstalledPrinters.Cast<string>());
             return Fail(
                 $"Aucune imprimante Windows ne correspond a '{config.Name}'. " +
                 $"Imprimantes disponibles : {available}.");
@@ -104,55 +90,32 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         try
         {
             resolvedPath = PdfPathResolver.Resolve(req.PdfPath)
-                ?? throw new FileNotFoundException(
-                    $"PDF introuvable : {req.PdfPath}");
+                ?? throw new FileNotFoundException($"PDF introuvable : {req.PdfPath}");
         }
         catch (Exception ex)
         {
             return Fail(ex.Message);
         }
 
-        var probeSettings = new PrinterSettings { PrinterName = resolvedQueue };
-        if (!probeSettings.IsValid)
-        {
-            var available = string.Join(", ",
-                PrinterSettings.InstalledPrinters.Cast<string>());
-            return Fail(
-                $"File d'attente '{resolvedQueue}' introuvable. " +
-                $"Imprimantes Windows disponibles : {available}. " +
-                $"Corrigez appsettings.json (Propriete WindowsQueueName) avec le nom exact de la file.");
-        }
-
         if (!File.Exists(resolvedPath))
             return Fail($"PDF introuvable : {resolvedPath}");
-
-        var paperSize = PaperSizePolicy.Resolve(config, probeSettings);
-        if (paperSize == null)
-        {
-            var availableSizes = string.Join(", ", PaperSizePolicy.AvailablePaperSizes(probeSettings));
-            return Fail(
-                $"Aucune taille de papier utilisable n'a ete trouvee sur '{resolvedQueue}'. " +
-                $"Tailles detectees : {availableSizes}.");
-        }
-
-        if (req.BookletMode)
-        {
-            var caps = _caps.Detect(req.PrinterName);
-            var hasHorizontal = caps.SupportedDuplexModes.Any(m =>
-                string.Equals(m, "Horizontal", StringComparison.OrdinalIgnoreCase));
-            if (!hasHorizontal)
-            {
-                return Fail(
-                    $"Cette imprimante ne supporte pas la reliure sur le petit cote — livret impossible. " +
-                    $"Utilisez une imprimante avec recto-verso court (Horizontal).");
-            }
-        }
 
         string printPath = resolvedPath;
         string? bookletTempPath = null;
 
         if (req.BookletMode)
         {
+            var probeSettings = new PrinterSettings { PrinterName = resolvedQueue };
+            var paperSize = PaperSizePolicy.Resolve(config, probeSettings);
+            if (paperSize == null)
+                return Fail("Impossible de determiner la taille de papier pour le livret.");
+
+            var caps = _caps.Detect(req.PrinterName);
+            var hasHorizontal = caps.SupportedDuplexModes.Any(m =>
+                string.Equals(m, "Horizontal", StringComparison.OrdinalIgnoreCase));
+            if (!hasHorizontal)
+                return Fail("Cette imprimante ne supporte pas la reliure sur le petit cote — livret impossible.");
+
             try
             {
                 var sheetSize = new PaperSizeInfo(
@@ -184,39 +147,95 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
             var pageCount = doc.PageCount;
 
             _logger.LogInformation(
-                "Printing: file={Path}, pages={Pages}, booklet={Booklet}, paper={Paper}, duplex={Duplex}",
-                printPath, pageCount, req.BookletMode, paperSize.PaperName,
-                req.BookletMode ? "Horizontal" : req.Duplex ? "Vertical" : "Simplex");
+                "Rendering PDF to bitmaps: file={Path}, pages={Pages}, booklet={Booklet}",
+                printPath, pageCount, req.BookletMode);
 
-            var pdfSettings = new PdfPrintSettings(PdfPrintMode.ShrinkToMargin, multiplePages: null);
+            var images = new List<byte[]>();
+            for (int i = 0; i < pageCount; i++)
+            {
+                using var bitmap = doc.Render(i, 300f, 300f,
+                    PdfRenderFlags.ForPrinting | PdfRenderFlags.CorrectFromDpi);
+                using var ms = new MemoryStream();
+                bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                images.Add(ms.ToArray());
+            }
 
-            using var printDoc = doc.CreatePrintDocument(pdfSettings);
-
-            printDoc.PrinterSettings.PrinterName = resolvedQueue;
-            printDoc.PrinterSettings.Copies = (short)Math.Clamp(req.Copies, 1, 99);
-            printDoc.PrinterSettings.Duplex = req.BookletMode
-                ? Duplex.Horizontal
-                : req.Duplex
-                    ? Duplex.Vertical
-                    : Duplex.Simplex;
-            printDoc.DefaultPageSettings.PaperSize = paperSize;
-            printDoc.DefaultPageSettings.Landscape = false;
-            printDoc.DocumentName = req.BookletMode ? $"FocusMed-Livret-{jobId:D6}" : $"FocusMed-{jobId:D6}";
-            printDoc.OriginAtMargins = false;
-
-            ResetDriverDevMode(printDoc, resolvedQueue);
+            var firstBitmap = doc.Render(0, 300f, 300f, PdfRenderFlags.ForPrinting | PdfRenderFlags.CorrectFromDpi);
+            var pageWidthPx = firstBitmap.Width;
+            var pageHeightPx = firstBitmap.Height;
+            firstBitmap.Dispose();
 
             _logger.LogInformation(
-                "Print: file={Path}, booklet={Booklet}, paper={Paper} ({PaperW}x{PaperH}), landscape={Landscape}, duplex={Duplex}, originAtMargins={OriginAtMargins}",
-                printPath, req.BookletMode, paperSize.PaperName, paperSize.Width, paperSize.Height,
-                printDoc.DefaultPageSettings.Landscape, printDoc.PrinterSettings.Duplex, printDoc.OriginAtMargins);
+                "Building XPS from {Count} images ({Width}x{Height}px)",
+                images.Count, pageWidthPx, pageHeightPx);
 
-            printDoc.BeginPrint += (_, _) => _tracker.MarkPrinting(printerName, jobId);
-            printDoc.EndPrint += (_, _) => _tracker.MarkCompleted(printerName, jobId);
+            var xpsBytes = XpsBuilder.CreateXpsFromPngImages(images, pageWidthPx, pageHeightPx);
 
-            printDoc.Print();
+            _logger.LogInformation(
+                "Submitting XPS to printer: queue={Queue}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
+                resolvedQueue, req.Duplex, req.BookletMode, req.Copies);
 
-            return new PrintResult(true, jobId, null);
+            PrintResult result = Fail("Thread not executed");
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var server = new LocalPrintServer();
+                    var queue = server.GetPrintQueues().FirstOrDefault(q =>
+                        string.Equals(q.Name, resolvedQueue, StringComparison.OrdinalIgnoreCase));
+
+                    if (queue == null)
+                    {
+                        result = Fail($"File d'attente '{resolvedQueue}' introuvable via System.Printing.");
+                        return;
+                    }
+
+                    var ticket = queue.DefaultPrintTicket.Clone();
+                    ticket.CopyCount = req.Copies;
+                    ticket.PageOrientation = PageOrientation.Portrait;
+
+                    if (req.BookletMode)
+                        ticket.Duplexing = Duplexing.TwoSidedShortEdge;
+                    else if (req.Duplex)
+                        ticket.Duplexing = Duplexing.TwoSidedLongEdge;
+                    else
+                        ticket.Duplexing = Duplexing.OneSided;
+
+                    var xpsWithTicket = XpsBuilder.InjectPrintTicket(xpsBytes, ticket);
+
+                    var jobName = req.BookletMode
+                        ? $"FocusMed-Livret-{jobId:D6}"
+                        : $"FocusMed-{jobId:D6}";
+
+                    _tracker.MarkPrinting(printerName, jobId);
+
+                    var job = queue.AddJob(jobName);
+                    using (var stream = job.JobStream)
+                    {
+                        stream.Write(xpsWithTicket, 0, xpsWithTicket.Length);
+                    }
+
+                    _tracker.MarkCompleted(printerName, jobId);
+                    _logger.LogInformation(
+                        "XPS print job submitted: job={JobId}, queue={Queue}, duplex={Duplex}",
+                        job.JobIdentifier, resolvedQueue, ticket.Duplexing);
+
+                    result = new PrintResult(true, job.JobIdentifier, null);
+                }
+                catch (Exception ex)
+                {
+                    var message = ex.GetBaseException().Message;
+                    _logger.LogError(ex, "XPS print failed for {Queue}", resolvedQueue);
+                    _tracker.MarkError(printerName, jobId, message);
+                    result = Fail(message);
+                }
+            });
+
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            return result!;
         }
         catch (Exception ex)
         {
@@ -232,57 +251,6 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
             {
                 try { if (File.Exists(bookletTempPath)) File.Delete(bookletTempPath); } catch { }
             }
-        }
-    }
-
-    private void ResetDriverDevMode(PrintDocument printDoc, string queueName)
-    {
-        try
-        {
-            if (!OpenPrinter(queueName, out var hPrinter, IntPtr.Zero))
-            {
-                _logger.LogWarning("OpenPrinter failed for {Queue}", queueName);
-                return;
-            }
-
-            try
-            {
-                int bufSize = DocumentProperties(IntPtr.Zero, hPrinter, queueName, IntPtr.Zero, IntPtr.Zero, 0);
-                if (bufSize <= 0)
-                {
-                    _logger.LogWarning("DocumentProperties buffer size failed for {Queue}", queueName);
-                    return;
-                }
-
-                IntPtr pDevMode = Marshal.AllocHGlobal(bufSize);
-                try
-                {
-                    int dmResult = DocumentProperties(IntPtr.Zero, hPrinter, queueName, pDevMode, IntPtr.Zero, DM_OUT_BUFFER);
-                    if (dmResult > 0)
-                    {
-                        var setHdevmode = typeof(PrinterSettings).GetMethod("SetHdevmode",
-                            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                        setHdevmode?.Invoke(printDoc.PrinterSettings, new object[] { pDevMode });
-                        _logger.LogInformation("Reset driver DEVMODE for {Queue} (buffer={Size})", queueName, bufSize);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("DocumentProperties GET failed for {Queue}: {Result}", queueName, dmResult);
-                    }
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(pDevMode);
-                }
-            }
-            finally
-            {
-                ClosePrinter(hPrinter);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not reset driver DEVMODE for {Queue}", queueName);
         }
     }
 
