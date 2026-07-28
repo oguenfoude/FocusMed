@@ -72,27 +72,36 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
 
     private PrintResult PrintInternal(PrintRequest req)
     {
-        PhysicalPrinterConfig config;
-        try
-        {
-            config = _options.CurrentValue.PhysicalPrinters
-                .FirstOrDefault(p => string.Equals(p.Name, req.PrinterName, StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException(
-                    $"L'imprimante configuree '{req.PrinterName}' est introuvable. " +
-                    $"Configurez-la dans appsettings.json (section PhysicalPrinters).");
-        }
-        catch (Exception ex)
-        {
-            return Fail(ex.Message);
-        }
+        // Find config if it exists, otherwise use printer name directly
+        var config = _options.CurrentValue.PhysicalPrinters
+            .FirstOrDefault(p => string.Equals(p.Name, req.PrinterName, StringComparison.OrdinalIgnoreCase));
 
-        var resolvedQueue = _caps.ResolveBestQueue(config);
-        if (resolvedQueue == null)
+        // Resolve the actual Windows queue name
+        string resolvedQueue;
+        if (config != null)
         {
-            var available = string.Join(", ", PrinterSettings.InstalledPrinters.Cast<string>());
-            return Fail(
-                $"Aucune imprimante Windows ne correspond a '{config.Name}'. " +
-                $"Imprimantes disponibles : {available}.");
+            resolvedQueue = _caps.ResolveBestQueue(config);
+            if (resolvedQueue == null)
+            {
+                var available = string.Join(", ", PrinterSettings.InstalledPrinters.Cast<string>());
+                return Fail(
+                    $"Aucune imprimante Windows ne correspond a '{config.Name}'. " +
+                    $"Imprimantes disponibles : {available}.");
+            }
+        }
+        else
+        {
+            // Not in appsettings — check if it exists as a Windows printer directly
+            var exactMatch = PrinterSettings.InstalledPrinters.Cast<string>()
+                .FirstOrDefault(n => string.Equals(n, req.PrinterName, StringComparison.OrdinalIgnoreCase));
+            if (exactMatch == null)
+            {
+                var available = string.Join(", ", PrinterSettings.InstalledPrinters.Cast<string>());
+                return Fail(
+                    $"L'imprimante '{req.PrinterName}' est introuvable. " +
+                    $"Imprimantes disponibles : {available}.");
+            }
+            resolvedQueue = exactMatch;
         }
 
         string resolvedPath;
@@ -115,7 +124,10 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         if (req.BookletMode)
         {
             var probeSettings = new PrinterSettings { PrinterName = resolvedQueue };
-            var paperSize = PaperSizePolicy.Resolve(config, probeSettings);
+            var paperSize = config != null
+                ? PaperSizePolicy.Resolve(config, probeSettings)
+                : probeSettings.PaperSizes.Cast<PaperSize>().FirstOrDefault(ps => ps.Kind == PaperKind.A4)
+                    ?? probeSettings.PaperSizes.Cast<PaperSize>().FirstOrDefault();
             if (paperSize == null)
                 return Fail("Impossible de determiner la taille de papier pour le livret.");
 
@@ -141,13 +153,13 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Booklet imposition failed for {Printer}", config.Name);
+                _logger.LogError(ex, "Booklet imposition failed for {Printer}", req.PrinterName);
                 return Fail($"Echec de la generation du livret : {ex.GetBaseException().Message}");
             }
         }
 
         var jobId = _tracker.NextId();
-        var printerName = config.Name;
+        var printerName = req.PrinterName;
         _tracker.Register(printerName, jobId);
 
         try
