@@ -350,29 +350,57 @@ else
                                 <input type="number" min="1" max="99" @bind="PrintCopies"
                                        class="mt-1 w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500" />
                             </label>
-                            <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 @(PrinterCapabilities != null && !PrinterCapabilities.CanDuplex ? "opacity-50 cursor-not-allowed" : "")"
-                                   title="@(PrinterCapabilities != null && !PrinterCapabilities.CanDuplex ? "Cette imprimante ne supporte pas le recto-verso" : (PrintDuplex ? "Recto-verso active" : "Desactive par defaut — cochez pour activer"))">
-                                <input type="checkbox" @bind="PrintDuplex"
-                                       disabled="@(PrinterCapabilities != null && !PrinterCapabilities.CanDuplex)"
-                                       class="rounded border-slate-300" />
-                                Recto-verso
-                                @if (PrinterCapabilities != null && !PrinterCapabilities.CanDuplex)
-                                {
-                                    <span class="text-[10px] text-slate-400 font-normal ml-1">(non disponible)</span>
-                                }
-                                else
-                                {
-                                    <span class="text-[10px] text-slate-400 font-normal ml-1">@(PrintDuplex ? "ON" : "OFF par defaut")</span>
-                                }
-                            </label>
-                            <label class="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                                <input type="checkbox" @bind="PrintBooklet" class="rounded border-slate-300" />
-                                Livret
-                            </label>
-                            @if (PrintBooklet && PrinterCapabilities != null && !PrinterCapabilities.CanDuplex)
+
+                            <div class="block">
+                                <span class="text-xs font-semibold text-slate-600">Mode d'impression</span>
+                                <div class="mt-2 space-y-2">
+                                    <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer">
+                                        <input type="radio" name="printMode" value="simplex"
+                                               checked="@(PrintMode == "simplex")"
+                                               @onchange="@(() => SetPrintMode("simplex"))"
+                                               class="text-blue-600 focus:ring-blue-500" />
+                                        Recto simple
+                                        <span class="text-[10px] text-slate-400 font-normal ml-1">— Une seule face</span>
+                                    </label>
+                                    <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 @(CanDuplex ? "cursor-pointer" : "opacity-50 cursor-not-allowed")"
+                                           title="@(!CanDuplex ? "Cette imprimante ne supporte pas le recto-verso" : "Recto-verso sur le grand cote (long edge)")">
+                                        <input type="radio" name="printMode" value="duplex"
+                                               checked="@(PrintMode == "duplex")"
+                                               disabled="@(!CanDuplex)"
+                                               @onchange="@(() => SetPrintMode("duplex"))"
+                                               class="text-blue-600 focus:ring-blue-500" />
+                                        Recto-verso
+                                        <span class="text-[10px] text-slate-400 font-normal ml-1">— Les deux faces</span>
+                                        @if (!CanDuplex)
+                                        {
+                                            <span class="text-[10px] text-red-500 font-normal ml-1">(non disponible)</span>
+                                        }
+                                    </label>
+                                    <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 @(CanDuplex && HasShortEdge ? "cursor-pointer" : "opacity-50 cursor-not-allowed")"
+                                           title="@(!CanDuplex ? "Le livret necessite le recto-verso" : (!HasShortEdge ? "Le livret necessite la reliure sur le petit cote (Horizontal). Cette imprimante ne le supporte pas." : "Livret : deux pages par feuille, pliable au milieu"))">
+                                        <input type="radio" name="printMode" value="booklet"
+                                               checked="@(PrintMode == "booklet")"
+                                               disabled="@(!CanDuplex || !HasShortEdge)"
+                                               @onchange="@(() => SetPrintMode("booklet"))"
+                                               class="text-blue-600 focus:ring-blue-500" />
+                                        Livret
+                                        <span class="text-[10px] text-slate-400 font-normal ml-1">— 2 pages par feuille, pliable</span>
+                                        @if (!CanDuplex)
+                                        {
+                                            <span class="text-[10px] text-red-500 font-normal ml-1">(recto-verso requis)</span>
+                                        }
+                                        else if (!HasShortEdge)
+                                        {
+                                            <span class="text-[10px] text-red-500 font-normal ml-1">(reliure petit cote non supportee)</span>
+                                        }
+                                    </label>
+                                </div>
+                            </div>
+
+                            @if (CapabilitiesError)
                             {
                                 <div class="text-[10px] text-red-600 bg-red-50 rounded-lg px-2 py-1">
-                                    Le livret necessite le recto-verso. Cette imprimante ne le supporte pas.
+                                    Impossible de contacter le service d'impression. Seul le recto simple est disponible.
                                 </div>
                             }
                             @if (PrinterCapabilities != null && PrinterCapabilities.SupportedPaperSizes.Count > 0)
@@ -431,10 +459,12 @@ else
     private bool ShowPrintDialog;
     private bool IsPrinting;
     private int PrintCopies = 1;
-    private bool PrintDuplex;
-    private bool PrintBooklet;
+    private string PrintMode = "simplex";
     private string? SelectedPrinterName;
     private PrinterCapabilities? PrinterCapabilities;
+    private bool CanDuplex;
+    private bool HasShortEdge;
+    private bool CapabilitiesError;
     private ElementReference PrintModalRef;
 
     private bool HasPreviewPdf => !string.IsNullOrEmpty(PreviewPdfAbsolutePath);
@@ -643,10 +673,12 @@ else
     {
         if (!HasPreviewPdf) return;
         PrintCopies = 1;
-        PrintDuplex = false;
-        PrintBooklet = false;
+        PrintMode = "simplex";
         IsPrinting = false;
         PrinterCapabilities = null;
+        CanDuplex = false;
+        HasShortEdge = false;
+        CapabilitiesError = false;
 
         try
         {
@@ -657,11 +689,18 @@ else
             if (first != null)
             {
                 PrinterCapabilities = await PrintClient.GetCapabilitiesAsync(first.Name);
+                if (PrinterCapabilities != null && PrinterCapabilities.IsAvailable)
+                {
+                    CanDuplex = PrinterCapabilities.CanDuplex;
+                    HasShortEdge = PrinterCapabilities.SupportedDuplexModes.Any(m =>
+                        string.Equals(m, "Horizontal", StringComparison.OrdinalIgnoreCase));
+                }
             }
         }
         catch
         {
             SelectedPrinterName = null;
+            CapabilitiesError = true;
         }
 
         ShowPrintDialog = true;
@@ -669,6 +708,8 @@ else
     }
 
     private void CancelPrint() => ShowPrintDialog = false;
+
+    private void SetPrintMode(string mode) => PrintMode = mode;
 
     private void HandlePrintKeydown(KeyboardEventArgs e)
     {
@@ -682,6 +723,9 @@ else
         if (!HasPreviewPdf) return;
         var copies = Math.Clamp(PrintCopies, 1, 99);
 
+        var duplex = PrintMode == "duplex" || PrintMode == "booklet";
+        var bookletMode = PrintMode == "booklet";
+
         ShowPrintDialog = false;
         IsPrinting = true;
         await InvokeAsync(StateHasChanged);
@@ -692,12 +736,19 @@ else
                 PreviewPdfAbsolutePath!,
                 SelectedPrinterName,
                 copies,
-                PrintDuplex,
-                PrintBooklet));
+                duplex,
+                bookletMode));
 
             if (result.Success)
             {
-                StatusMessage = $"Imprime sur « {SelectedPrinterName} » (tache #{result.JobId}).";
+                var modeLabel = PrintMode switch
+                {
+                    "simplex" => "recto simple",
+                    "duplex" => "recto-verso",
+                    "booklet" => "livret",
+                    _ => PrintMode
+                };
+                StatusMessage = $"Imprime sur « {SelectedPrinterName} » ({modeLabel}, tache #{result.JobId}).";
                 IsError = false;
             }
             else

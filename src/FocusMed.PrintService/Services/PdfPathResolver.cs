@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace FocusMed.PrintService.Services;
 
 internal static class PdfPathResolver

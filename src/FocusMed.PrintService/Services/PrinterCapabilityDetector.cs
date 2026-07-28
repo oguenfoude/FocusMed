@@ -10,6 +10,10 @@ public sealed class PrinterCapabilityDetector
     private readonly IOptionsMonitor<PhysicalPrinterOptions> _options;
     private readonly ILogger<PrinterCapabilityDetector> _logger;
 
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
+    private readonly Dictionary<string, (PrinterCapabilities Caps, DateTime Expires)> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _cacheLock = new();
+
     private static readonly string[] GenericSuffixes = ["Generic", "Class", "Microsoft", "Driver"];
     private static readonly string[] NativeIndicators = ["PCL", "PS", "XL", "GDI", "XPS", "PostScript"];
 
@@ -22,6 +26,26 @@ public sealed class PrinterCapabilityDetector
     }
 
     public PrinterCapabilities Detect(string printerName)
+    {
+        lock (_cacheLock)
+        {
+            if (_cache.TryGetValue(printerName, out var cached) && cached.Expires > DateTime.UtcNow)
+            {
+                return cached.Caps;
+            }
+        }
+
+        var caps = DetectFresh(printerName);
+
+        lock (_cacheLock)
+        {
+            _cache[printerName] = (caps, DateTime.UtcNow + CacheTtl);
+        }
+
+        return caps;
+    }
+
+    private PrinterCapabilities DetectFresh(string printerName)
     {
         var config = _options.CurrentValue.PhysicalPrinters
             .FirstOrDefault(p => string.Equals(p.Name, printerName, StringComparison.OrdinalIgnoreCase));
@@ -46,13 +70,7 @@ public sealed class PrinterCapabilityDetector
             return new PrinterCapabilities(config.Name, false, false, Array.Empty<string>(), Array.Empty<PaperSizeInfo>());
         }
 
-        var canDuplex = settings.CanDuplex;
-        var duplexModes = new List<string> { "Simplex" };
-        if (canDuplex)
-        {
-            duplexModes.Add("Vertical");
-            duplexModes.Add("Horizontal");
-        }
+        var (canDuplex, duplexModes) = ProbeDuplexFromDriver(queueName, settings);
 
         var paperSizes = new List<PaperSizeInfo>();
         if (settings.PaperSizes != null)
@@ -61,8 +79,8 @@ public sealed class PrinterCapabilityDetector
             {
                 paperSizes.Add(new PaperSizeInfo(
                     ps.PaperName,
-                    ps.Width,
-                    ps.Height,
+                    (int)(ps.Width * 25.4),
+                    (int)(ps.Height * 25.4),
                     ps.Kind.ToString()));
             }
         }
@@ -70,10 +88,38 @@ public sealed class PrinterCapabilityDetector
         var caps = new PrinterCapabilities(config.Name, true, canDuplex, duplexModes, paperSizes);
 
         _logger.LogInformation(
-            "Capabilities for {Printer} (queue={Queue}): CanDuplex={CanDuplex}, PaperSizes={SizeCount}",
-            config.Name, queueName, canDuplex, paperSizes.Count);
+            "Capabilities for {Printer} (queue={Queue}): CanDuplex={CanDuplex}, Modes=[{Modes}], PaperSizes={SizeCount}",
+            config.Name, queueName, canDuplex, string.Join(",", duplexModes), paperSizes.Count);
 
         return caps;
+    }
+
+    /// <summary>
+    /// Fallback when System.Printing is unavailable, blocked, or returns no duplex modes.
+    /// Uses PrinterSettings.CanDuplex (in-memory, not real driver probe but matches what the
+    /// actual print pipeline will do) and assumes both Vertical + Horizontal are supported.
+    /// </summary>
+    private (bool CanDuplex, List<string> Modes) FallbackToPrinterSettings(PrinterSettings settings)
+    {
+        var modes = new List<string> { "Simplex" };
+        if (settings.CanDuplex)
+        {
+            modes.Add("Vertical");
+            modes.Add("Horizontal");
+        }
+        return (settings.CanDuplex, modes);
+    }
+
+    /// <summary>
+    /// Determines duplex support using PrinterSettings (the source of truth for the
+    /// actual print pipeline). System.Printing.PrintQueue was attempted but requires
+    /// a UI dispatcher thread (STA) and throws "different thread owns it" when called
+    /// from the ASP.NET threadpool. PrinterSettings.CanDuplex accurately reflects
+    /// what the driver will accept when PrintDocument runs.
+    /// </summary>
+    private (bool CanDuplex, List<string> Modes) ProbeDuplexFromDriver(string queueName, PrinterSettings settings)
+    {
+        return FallbackToPrinterSettings(settings);
     }
 
     /// <summary>

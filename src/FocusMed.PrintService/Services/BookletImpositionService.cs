@@ -1,6 +1,9 @@
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
 using FocusMed.PrintService.Abstractions;
+using PdfSharpCore.Drawing;
 using PdfSharpCore.Pdf;
-using PdfSharpCore.Pdf.IO;
 
 namespace FocusMed.PrintService.Services;
 
@@ -21,8 +24,8 @@ public sealed class BookletImpositionService : IBookletImpositionService
         if (!File.Exists(sourcePdfPath))
             throw new FileNotFoundException($"PDF source introuvable : {sourcePdfPath}");
 
-        using var sourceDoc = PdfReader.Open(sourcePdfPath, PdfDocumentOpenMode.Import);
-        var pageCount = sourceDoc.PageCount;
+        using var srcDoc = PdfiumPrinter.PdfDocument.Load(sourcePdfPath);
+        var pageCount = srcDoc.PageCount;
 
         if (pageCount == 0)
             throw new InvalidOperationException("Le PDF source ne contient aucune page.");
@@ -31,26 +34,30 @@ public sealed class BookletImpositionService : IBookletImpositionService
         if (paddedCount % 4 != 0)
             paddedCount += 4 - (paddedCount % 4);
 
-        _logger.LogInformation(
-            "Booklet imposition: {SourcePages} pages -> {PaddedPages} padded, target sheet {SheetW}x{SheetH} hundredths-mm",
-            pageCount, paddedCount, targetSheetSize.WidthHundredthsMm, targetSheetSize.HeightHundredthsMm);
-
-        var outputDoc = new PdfDocument();
-
         var sheetWidthPt = targetSheetSize.WidthHundredthsMm / 100.0 * 72.0 / 25.4;
         var sheetHeightPt = targetSheetSize.HeightHundredthsMm / 100.0 * 72.0 / 25.4;
 
+        var portraitW = Math.Min(sheetWidthPt, sheetHeightPt);
+        var portraitH = Math.Max(sheetWidthPt, sheetHeightPt);
+        var halfH = portraitH / 2.0;
+
+        _logger.LogInformation(
+            "Booklet imposition: {SourcePages} pages -> {PaddedPages} padded, portrait {W}x{H}pt ({WMm}x{HMm}mm), half-height {HalfH}pt ({HalfHMm}mm)",
+            pageCount, paddedCount, portraitW, portraitH,
+            (portraitW / 72.0 * 25.4).ToString("F1"), (portraitH / 72.0 * 25.4).ToString("F1"),
+            halfH, (halfH / 72.0 * 25.4).ToString("F1"));
+
+        var outputDoc = new PdfDocument();
+
         for (int sheet = 0; sheet < paddedCount / 4; sheet++)
         {
-            int leftBack = paddedCount - (sheet * 2);
-            int rightFront = sheet * 2 + 1;
-            int leftFront = sheet * 2 + 2;
-            int rightBack = paddedCount - (sheet * 2 + 1);
+            int frontTop = paddedCount - (sheet * 2);
+            int frontBottom = sheet * 2 + 1;
+            int backTop = sheet * 2 + 2;
+            int backBottom = paddedCount - (sheet * 2 + 1);
 
-            AddPageToOutput(outputDoc, sourceDoc, pageCount, rightFront, sheetWidthPt, sheetHeightPt);
-            AddPageToOutput(outputDoc, sourceDoc, pageCount, leftBack, sheetWidthPt, sheetHeightPt);
-            AddPageToOutput(outputDoc, sourceDoc, pageCount, leftFront, sheetWidthPt, sheetHeightPt);
-            AddPageToOutput(outputDoc, sourceDoc, pageCount, rightBack, sheetWidthPt, sheetHeightPt);
+            RenderPortraitSide(outputDoc, srcDoc, pageCount, portraitW, portraitH, halfH, frontTop, frontBottom);
+            RenderPortraitSide(outputDoc, srcDoc, pageCount, portraitW, portraitH, halfH, backTop, backBottom);
         }
 
         var outputPath = Path.Combine(Path.GetTempPath(), $"booklet_{Guid.NewGuid():N}.pdf");
@@ -62,28 +69,47 @@ public sealed class BookletImpositionService : IBookletImpositionService
         return Task.FromResult(outputPath);
     }
 
-    private void AddPageToOutput(
+    private void RenderPortraitSide(
         PdfDocument outputDoc,
-        PdfDocument sourceDoc,
+        PdfiumPrinter.PdfDocument srcDoc,
+        int sourcePageCount,
+        double sheetW,
+        double sheetH,
+        double halfH,
+        int topPageIndex,
+        int bottomPageIndex)
+    {
+        var page = new PdfPage { Width = sheetW, Height = sheetH };
+        outputDoc.AddPage(page);
+
+        using var gfx = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+        DrawHalfPage(gfx, srcDoc, sourcePageCount, topPageIndex, 0, 0, sheetW, halfH);
+        DrawHalfPage(gfx, srcDoc, sourcePageCount, bottomPageIndex, 0, halfH, sheetW, halfH);
+    }
+
+    private void DrawHalfPage(
+        XGraphics gfx,
+        PdfiumPrinter.PdfDocument srcDoc,
         int sourcePageCount,
         int pageIndex,
-        double targetWidth,
-        double targetHeight)
+        double x,
+        double y,
+        double width,
+        double height)
     {
         if (pageIndex < 1 || pageIndex > sourcePageCount)
         {
-            var blankPage = new PdfPage
-            {
-                Width = targetWidth,
-                Height = targetHeight
-            };
-            outputDoc.AddPage(blankPage);
+            gfx.DrawRectangle(XBrushes.White, x, y, width, height);
             return;
         }
 
-        var srcPage = sourceDoc.Pages[pageIndex - 1];
-        var imported = outputDoc.AddPage(srcPage);
-        imported.Width = targetWidth;
-        imported.Height = targetHeight;
+        using var bitmap = srcDoc.Render(pageIndex - 1, 300f, 300f, PdfiumPrinter.PdfRenderFlags.ForPrinting | PdfiumPrinter.PdfRenderFlags.CorrectFromDpi);
+        using var ms = new MemoryStream();
+        bitmap.Save(ms, ImageFormat.Png);
+        ms.Position = 0;
+        var streamFunc = new Func<Stream>(() => new MemoryStream(ms.ToArray()));
+        using var xImage = XImage.FromStream(streamFunc);
+
+        gfx.DrawImage(xImage, x, y, width, height);
     }
 }

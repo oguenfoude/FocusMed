@@ -1,4 +1,7 @@
+using System.Drawing;
 using System.Drawing.Printing;
+using System.IO;
+using System.Runtime.InteropServices;
 using FocusMed.PrintService.Abstractions;
 using FocusMed.PrintService.Configuration;
 using Microsoft.Extensions.Options;
@@ -13,6 +16,19 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
     private readonly JobStateTracker _tracker;
     private readonly PrinterCapabilityDetector _caps;
     private readonly IBookletImpositionService _booklet;
+
+    [DllImport("winspool.drv", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern bool OpenPrinter(string pPrinterName, out IntPtr hPrinter, IntPtr pDefault);
+
+    [DllImport("winspool.drv", SetLastError = true)]
+    private static extern bool ClosePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", CharSet = CharSet.Auto)]
+    private static extern int DocumentProperties(IntPtr hWnd, IntPtr hPrinter, string pDeviceName,
+        IntPtr pDevModeOutput, IntPtr pDevModeInput, int fMode);
+
+    private const int DM_OUT_BUFFER = 0x02;
+    private const int DM_IN_BUFFER = 0x08;
 
     public WindowsDriverPrintService(
         IOptionsMonitor<PhysicalPrinterOptions> options,
@@ -96,10 +112,7 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
             return Fail(ex.Message);
         }
 
-        var probeSettings = new PrinterSettings
-        {
-            PrinterName = resolvedQueue
-        };
+        var probeSettings = new PrinterSettings { PrinterName = resolvedQueue };
         if (!probeSettings.IsValid)
         {
             var available = string.Join(", ",
@@ -122,11 +135,17 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                 $"Tailles detectees : {availableSizes}.");
         }
 
-        if (req.BookletMode && !probeSettings.CanDuplex)
+        if (req.BookletMode)
         {
-            return Fail(
-                $"Cette imprimante ne supporte pas le recto-verso — livret impossible. " +
-                $"Activez le recto-verso sur une imprimante compatible.");
+            var caps = _caps.Detect(req.PrinterName);
+            var hasHorizontal = caps.SupportedDuplexModes.Any(m =>
+                string.Equals(m, "Horizontal", StringComparison.OrdinalIgnoreCase));
+            if (!hasHorizontal)
+            {
+                return Fail(
+                    $"Cette imprimante ne supporte pas la reliure sur le petit cote — livret impossible. " +
+                    $"Utilisez une imprimante avec recto-verso court (Horizontal).");
+            }
         }
 
         string printPath = resolvedPath;
@@ -136,11 +155,11 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         {
             try
             {
-                var caps = _caps.Detect(req.PrinterName);
-                var sheetSize = caps.SupportedPaperSizes
-                    .OrderByDescending(p => p.WidthHundredthsMm * p.HeightHundredthsMm)
-                    .FirstOrDefault()
-                    ?? new PaperSizeInfo(paperSize.PaperName, paperSize.Width, paperSize.Height, paperSize.Kind.ToString());
+                var sheetSize = new PaperSizeInfo(
+                    paperSize.PaperName,
+                    (int)(paperSize.Width * 25.4),
+                    (int)(paperSize.Height * 25.4),
+                    paperSize.Kind.ToString());
 
                 bookletTempPath = _booklet.ComposeBookletAsync(resolvedPath, sheetSize, new BookletOptions(ShortEdgeBinding: true)).GetAwaiter().GetResult();
                 printPath = bookletTempPath;
@@ -162,6 +181,12 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         try
         {
             using var doc = PdfDocument.Load(printPath);
+            var pageCount = doc.PageCount;
+
+            _logger.LogInformation(
+                "Printing: file={Path}, pages={Pages}, booklet={Booklet}, paper={Paper}, duplex={Duplex}",
+                printPath, pageCount, req.BookletMode, paperSize.PaperName,
+                req.BookletMode ? "Horizontal" : req.Duplex ? "Vertical" : "Simplex");
 
             var pdfSettings = new PdfPrintSettings(PdfPrintMode.ShrinkToMargin, multiplePages: null);
 
@@ -169,12 +194,22 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
 
             printDoc.PrinterSettings.PrinterName = resolvedQueue;
             printDoc.PrinterSettings.Copies = (short)Math.Clamp(req.Copies, 1, 99);
-            printDoc.PrinterSettings.Duplex = req.Duplex || req.BookletMode
-                ? Duplex.Vertical
-                : Duplex.Simplex;
+            printDoc.PrinterSettings.Duplex = req.BookletMode
+                ? Duplex.Horizontal
+                : req.Duplex
+                    ? Duplex.Vertical
+                    : Duplex.Simplex;
             printDoc.DefaultPageSettings.PaperSize = paperSize;
+            printDoc.DefaultPageSettings.Landscape = false;
             printDoc.DocumentName = req.BookletMode ? $"FocusMed-Livret-{jobId:D6}" : $"FocusMed-{jobId:D6}";
-            printDoc.OriginAtMargins = true;
+            printDoc.OriginAtMargins = false;
+
+            ResetDriverDevMode(printDoc, resolvedQueue);
+
+            _logger.LogInformation(
+                "Print: file={Path}, booklet={Booklet}, paper={Paper} ({PaperW}x{PaperH}), landscape={Landscape}, duplex={Duplex}, originAtMargins={OriginAtMargins}",
+                printPath, req.BookletMode, paperSize.PaperName, paperSize.Width, paperSize.Height,
+                printDoc.DefaultPageSettings.Landscape, printDoc.PrinterSettings.Duplex, printDoc.OriginAtMargins);
 
             printDoc.BeginPrint += (_, _) => _tracker.MarkPrinting(printerName, jobId);
             printDoc.EndPrint += (_, _) => _tracker.MarkCompleted(printerName, jobId);
@@ -197,6 +232,57 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
             {
                 try { if (File.Exists(bookletTempPath)) File.Delete(bookletTempPath); } catch { }
             }
+        }
+    }
+
+    private void ResetDriverDevMode(PrintDocument printDoc, string queueName)
+    {
+        try
+        {
+            if (!OpenPrinter(queueName, out var hPrinter, IntPtr.Zero))
+            {
+                _logger.LogWarning("OpenPrinter failed for {Queue}", queueName);
+                return;
+            }
+
+            try
+            {
+                int bufSize = DocumentProperties(IntPtr.Zero, hPrinter, queueName, IntPtr.Zero, IntPtr.Zero, 0);
+                if (bufSize <= 0)
+                {
+                    _logger.LogWarning("DocumentProperties buffer size failed for {Queue}", queueName);
+                    return;
+                }
+
+                IntPtr pDevMode = Marshal.AllocHGlobal(bufSize);
+                try
+                {
+                    int dmResult = DocumentProperties(IntPtr.Zero, hPrinter, queueName, pDevMode, IntPtr.Zero, DM_OUT_BUFFER);
+                    if (dmResult > 0)
+                    {
+                        var setHdevmode = typeof(PrinterSettings).GetMethod("SetHdevmode",
+                            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                        setHdevmode?.Invoke(printDoc.PrinterSettings, new object[] { pDevMode });
+                        _logger.LogInformation("Reset driver DEVMODE for {Queue} (buffer={Size})", queueName, bufSize);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("DocumentProperties GET failed for {Queue}: {Result}", queueName, dmResult);
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(pDevMode);
+                }
+            }
+            finally
+            {
+                ClosePrinter(hPrinter);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not reset driver DEVMODE for {Queue}", queueName);
         }
     }
 

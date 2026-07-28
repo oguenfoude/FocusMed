@@ -23,7 +23,7 @@ internal static class PaperSizePolicy
 
         return probe.PaperSizes
             .Cast<PaperSize>()
-            .OrderBy(p => Math.Abs(p.Width - 210) + Math.Abs(p.Height - 297))
+            .OrderBy(p => Math.Abs(p.Width - 827) + Math.Abs(p.Height - 1169))
             .FirstOrDefault();
     }
 
