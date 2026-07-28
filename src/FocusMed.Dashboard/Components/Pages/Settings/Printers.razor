@@ -2,7 +2,9 @@
 @rendermode InteractiveServer
 @implements IDisposable
 @using FocusMed.Dashboard.Services
+@using Microsoft.JSInterop
 @inject IPrintServiceClient PrintClient
+@inject IJSRuntime JS
 @inject ILogger<Printers> Logger
 
 <PageTitle>Imprimantes — FocusMed</PageTitle>
@@ -20,12 +22,10 @@
     <!-- Header -->
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm mb-4">
         <div class="px-6 py-5">
-            <h1 class="text-xl font-bold text-slate-900">Imprimantes configurées</h1>
+            <h1 class="text-xl font-bold text-slate-900">Imprimantes Windows</h1>
             <p class="text-sm text-slate-500 mt-1">
-                Les imprimantes suivantes sont disponibles pour l'impression des études. La liste est gérée
-                dans le fichier <span class="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">appsettings.json</span>
-                du service <span class="font-semibold">FocusMed.PrintService</span>.
-                N'éteignez pas ce service, l'impression ne fonctionnera pas.
+                Selectionnez l'imprimante utilisee pour imprimer les etudes.
+                Toutes les imprimantes installees sur cette machine sont affichees ci-dessous.
             </p>
         </div>
     </div>
@@ -36,8 +36,7 @@
             <div class="flex items-center gap-3 text-slate-400">
                 <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                 <span class="text-sm font-medium">Chargement…</span>
             </div>
         </div>
@@ -48,71 +47,106 @@
             <h3 class="text-sm font-bold text-red-700">Service d'impression inaccessible</h3>
             <p class="text-sm text-red-600 mt-1">@ErrorMessage</p>
             <p class="text-xs text-red-500 mt-2">
-                Vérifiez que <span class="font-mono">FocusMed.PrintService</span> est démarré
-                (<span class="font-mono">http://localhost:5050</span>) et réessayez.
-            </p>
-        </div>
-    }
-    else if (ConfiguredPrinters.Count == 0)
-    {
-        <div class="bg-amber-50 border border-amber-200 rounded-xl p-5">
-            <h3 class="text-sm font-bold text-amber-700">Aucune imprimante configurée</h3>
-            <p class="text-sm text-amber-600 mt-1">
-                Modifiez <span class="font-mono text-xs bg-white px-1.5 py-0.5 rounded">appsettings.json</span>
-                du service d'impression et ajoutez une entrée dans la section <span class="font-mono">PhysicalPrinters</span>.
+                Verifiez que <span class="font-mono">FocusMed.PrintService</span> est demarre
+                (<span class="font-mono">http://localhost:5050</span>) et reessayez.
             </p>
         </div>
     }
     else
     {
-        @foreach (var p in ConfiguredPrinters)
+        <!-- Active printer banner -->
+        @if (!string.IsNullOrEmpty(ActivePrinterName))
         {
-            var caps = PrinterCapabilities.GetValueOrDefault(p.Name);
-            <div class="bg-white rounded-xl border border-slate-200 shadow-sm mb-3 overflow-hidden">
-                <div class="px-5 py-4">
-                    <div class="flex items-center justify-between mb-3">
-                        <div class="flex items-center gap-3">
-                            <div class="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-                                <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.72 13.829c-.246.184-.72.171-.72.171V17h-1v-3.018c-1.667 0-3-1.343-3-3 0-1.5 1.06-2.752 2.462-2.973.124-.728.49-1.434 1.066-2.013C6.62 7.97 7.886 7.5 9 7.5c1.5 0 2.5.5 3 1.5h.5l.5 1v8.5l-1 .5H8.263c-.36 0-.788-.146-1.055-.342-.293-.214-.488-.611-.488-.829z" /></svg>
-                            </div>
-                            <div>
-                                <p class="text-sm font-semibold text-slate-900">@p.Name</p>
-                                <div class="flex items-center gap-2 mt-0.5">
-                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">Activée</span>
-                                    <span class="font-mono text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">@p.Protocol</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-4 text-[10px] text-slate-500">
-                            <span class="flex items-center gap-1">
-                                <svg class="w-3 h-3 @(caps != null && caps.CanDuplex ? "text-emerald-500" : "text-slate-300")" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" /></svg>
-                                @(caps != null && caps.CanDuplex ? "Recto-verso" : "Simplex uniquement")
-                            </span>
-                            <span class="flex items-center gap-1">
-                                <svg class="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" /></svg>
-                                @(caps?.SupportedPaperSizes.Count ?? p.PaperSizeCount) taille(s)
-                            </span>
-                        </div>
-                    </div>
-                    @if (caps != null && caps.SupportedPaperSizes.Count > 0)
-                    {
-                        <div class="border-t border-slate-100 pt-3">
-                            <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Tailles de papier supportées</p>
-                            <div class="flex flex-wrap gap-1.5">
-                                @foreach (var ps in caps.SupportedPaperSizes)
-                                {
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-slate-50 text-slate-600 border border-slate-200"
-                                          title="@($"{ps.WidthHundredthsMm/100.0:F1} x {ps.HeightHundredthsMm/100.0:F1} mm — {ps.Kind}")">
-                                        @ps.Name
-                                        <span class="text-slate-400 ml-1">@($"{ps.WidthHundredthsMm/100.0:F0}x{ps.HeightHundredthsMm/100.0:F0}")</span>
-                                    </span>
-                                }
-                            </div>
-                        </div>
-                    }
+            <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-4 flex items-center gap-3">
+                <div class="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+                    <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.72 13.829c-.246.184-.72.171-.72.171V17h-1v-3.018c-1.667 0-3-1.343-3-3 0-1.5 1.06-2.752 2.462-2.973.124-.728.49-1.434 1.066-2.013C6.62 7.97 7.886 7.5 9 7.5c1.5 0 2.5.5 3 1.5h.5l.5 1v8.5l-1 .5H8.263c-.36 0-.788-.146-1.055-.342-.293-.214-.488-.611-.488-.829z" /></svg>
                 </div>
+                <div class="flex-1">
+                    <p class="text-sm font-bold text-emerald-800">Imprimante active</p>
+                    <p class="text-sm text-emerald-700">@ActivePrinterName</p>
+                </div>
+                <button @onclick="ClearActivePrinter" class="text-xs font-semibold text-emerald-600 hover:text-emerald-800 underline">Retirer</button>
             </div>
         }
+        else
+        {
+            <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+                <p class="text-sm font-semibold text-amber-700">Aucune imprimante selectionnee</p>
+                <p class="text-xs text-amber-600 mt-1">Choisissez une imprimante dans la liste ci-dessous.</p>
+            </div>
+        }
+
+        <!-- Capabilities for selected printer -->
+        @if (!string.IsNullOrEmpty(ActivePrinterName) && ActiveCapabilities != null)
+        {
+            <div class="bg-white rounded-xl border border-slate-200 shadow-sm mb-4 p-5">
+                <h3 class="text-sm font-bold text-slate-800 mb-3">Capacites de « @ActivePrinterName »</h3>
+                <div class="grid grid-cols-2 gap-3 text-sm">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 @(ActiveCapabilities.CanDuplex ? "text-emerald-500" : "text-slate-300")" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" /></svg>
+                        <span class="text-slate-700">@(ActiveCapabilities.CanDuplex ? "Recto-verso" : "Simplex uniquement")</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" /></svg>
+                        <span class="text-slate-700">@ActiveCapabilities.SupportedPaperSizes.Count taille(s) de papier</span>
+                    </div>
+                </div>
+                @if (ActiveCapabilities.SupportedPaperSizes.Count > 0)
+                {
+                    <div class="border-t border-slate-100 mt-3 pt-3">
+                        <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Tailles de papier</p>
+                        <div class="flex flex-wrap gap-1.5">
+                            @foreach (var ps in ActiveCapabilities.SupportedPaperSizes)
+                            {
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-slate-50 text-slate-600 border border-slate-200"
+                                      title="@($"{ps.WidthHundredthsMm/100.0:F1} x {ps.HeightHundredthsMm/100.0:F1} mm")">
+                                    @ps.Name
+                                    <span class="text-slate-400 ml-1">@($"{ps.WidthHundredthsMm/100.0:F0}x{ps.HeightHundredthsMm/100.0:F0}")</span>
+                                </span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+
+        <!-- Printer list -->
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div class="px-5 py-3 border-b border-slate-100 bg-slate-50/50">
+                <span class="text-sm font-bold text-slate-800">@AllPrinters.Count imprimante(s) detectee(s)</span>
+            </div>
+            <div class="divide-y divide-slate-100">
+                @foreach (var p in AllPrinters)
+                {
+                    var isActive = string.Equals(p.Name, ActivePrinterName, StringComparison.OrdinalIgnoreCase);
+                    var isConfigured = ConfiguredNames.Contains(p.Name);
+                    <div class="px-5 py-3 flex items-center gap-4 @(isActive ? "bg-emerald-50" : "hover:bg-slate-50") transition-colors">
+                        <div class="w-9 h-9 rounded-lg @(isActive ? "bg-emerald-100" : "bg-slate-100") flex items-center justify-center shrink-0">
+                            <svg class="w-5 h-5 @(isActive ? "text-emerald-600" : "text-slate-500")" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.72 13.829c-.246.184-.72.171-.72.171V17h-1v-3.018c-1.667 0-3-1.343-3-3 0-1.5 1.06-2.752 2.462-2.973.124-.728.49-1.434 1.066-2.013C6.62 7.97 7.886 7.5 9 7.5c1.5 0 2.5.5 3 1.5h.5l.5 1v8.5l-1 .5H8.263c-.36 0-.788-.146-1.055-.342-.293-.214-.488-.611-.488-.829z" /></svg>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2">
+                                <p class="text-sm font-semibold text-slate-900 truncate">@p.Name</p>
+                                @if (isActive)
+                                {
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700">Active</span>
+                                }
+                                @if (isConfigured)
+                                {
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-100">Configuree</span>
+                                }
+                            </div>
+                            <p class="text-xs text-slate-500 truncate mt-0.5">@(string.IsNullOrEmpty(p.DriverName) ? "Pilote inconnu" : p.DriverName)</p>
+                        </div>
+                        <button @onclick="() => SetActivePrinter(p.Name)"
+                                class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors @(isActive ? "bg-emerald-600 text-white cursor-default" : "bg-slate-100 text-slate-700 hover:bg-slate-200")"
+                                disabled="@isActive">
+                            @(isActive ? "Selectionnee" : "Utiliser")
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
     }
 </div>
 
@@ -120,8 +154,10 @@
 <ToastNotification Message="@StatusMessage" IsError="@IsError" OnDismiss="ClearToast" />
 
 @code {
-    private List<PrinterInfo> ConfiguredPrinters = new();
-    private Dictionary<string, PrinterCapabilities> PrinterCapabilities = new();
+    private List<WindowsPrinterInfo> AllPrinters = new();
+    private HashSet<string> ConfiguredNames = new();
+    private string? ActivePrinterName;
+    private PrinterCapabilities? ActiveCapabilities;
     private bool IsLoading = true;
     private string? ErrorMessage;
     private string StatusMessage = "";
@@ -140,21 +176,17 @@
 
         try
         {
-            var list = await PrintClient.GetConfiguredPrintersAsync();
-            ConfiguredPrinters = list.ToList();
+            ActivePrinterName = await JS.InvokeAsync<string?>("localStorage.getItem", "focusmed_active_printer");
 
-            foreach (var p in ConfiguredPrinters)
+            var all = await PrintClient.GetAllWindowsPrintersAsync();
+            AllPrinters = all.ToList();
+
+            var configured = await PrintClient.GetConfiguredPrintersAsync();
+            ConfiguredNames = new HashSet<string>(configured.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+
+            if (!string.IsNullOrEmpty(ActivePrinterName))
             {
-                try
-                {
-                    var caps = await PrintClient.GetCapabilitiesAsync(p.Name);
-                    if (caps != null)
-                        PrinterCapabilities[p.Name] = caps;
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to load capabilities for {Printer}", p.Name);
-                }
+                ActiveCapabilities = await PrintClient.GetCapabilitiesAsync(ActivePrinterName);
             }
 
             IsLoading = false;
@@ -165,6 +197,32 @@
             ErrorMessage = ex.Message;
             IsLoading = false;
         }
+        StateHasChanged();
+    }
+
+    private async Task SetActivePrinter(string name)
+    {
+        ActivePrinterName = name;
+        ActiveCapabilities = null;
+        await JS.InvokeVoidAsync("localStorage.setItem", "focusmed_active_printer", name);
+        StateHasChanged();
+
+        try
+        {
+            ActiveCapabilities = await PrintClient.GetCapabilitiesAsync(name);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load capabilities for {Printer}", name);
+        }
+        StateHasChanged();
+    }
+
+    private async Task ClearActivePrinter()
+    {
+        ActivePrinterName = null;
+        ActiveCapabilities = null;
+        await JS.InvokeVoidAsync("localStorage.removeItem", "focusmed_active_printer");
         StateHasChanged();
     }
 

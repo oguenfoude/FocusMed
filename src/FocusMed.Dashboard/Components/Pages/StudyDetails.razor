@@ -3,11 +3,13 @@
 @implements IDisposable
 @using FocusMed.Dicom
 @using FocusMed.Dashboard.Services
+@using Microsoft.JSInterop
 @inject FocusMedDbContext DbContext
 @inject PngExtractionService PngExtractionService
 @inject StudyService StudyService
 @inject PdfService PdfService
 @inject IPrintServiceClient PrintClient
+@inject IJSRuntime JS
 @inject ILogger<StudyDetails> Logger
 
 <PageTitle>Détails de l'étude — FocusMed</PageTitle>
@@ -94,7 +96,7 @@ else
                                 Retirer
                             </button>
                         }
-                        @if (HasImages)
+                        @if (HasPreviewPdf)
                         {
                             <button @onclick="OpenPrintDialog" disabled="@IsPrinting"
                                     class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100 transition-colors disabled:opacity-50"
@@ -234,39 +236,30 @@ else
             </div>
         </div>
 
-        <!-- IMAGE PREVIEW (main area) -->
+        <!-- PDF PREVIEW (main area) -->
         <div class="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden min-w-0">
             @if (SelectedFrameIds.Count == 0)
             {
                 <div class="flex-1 flex flex-col items-center justify-center gap-3 text-center p-5">
-                    <svg class="w-16 h-16 text-slate-200" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M2.25 18V6.75a2.25 2.25 0 012.25-2.25h15a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H4.5A2.25 2.25 0 012.25 18z" /></svg>
+                    <svg class="w-16 h-16 text-slate-200" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>
                     <div>
-                        <p class="text-sm font-semibold text-slate-600">Selectionnez des images</p>
-                        <p class="text-xs text-slate-400 mt-1">Cochez des images dans la barre laterale pour les afficher ici.</p>
+                        <p class="text-sm font-semibold text-slate-600">Apercu PDF</p>
+                        <p class="text-xs text-slate-400 mt-1">Selectionnez des images pour generer l'apercu.</p>
                     </div>
                 </div>
             }
-            else
+            else if (IsRegeneratingPdf)
             {
-                <div class="flex-1 overflow-y-auto p-4">
-                    <div class="grid grid-cols-2 xl:grid-cols-3 gap-4">
-                        @foreach (var frame in AvailableFrames.Where(f => SelectedFrameIds.Contains(f.SopInstanceUid)))
-                        {
-                            var webPath = GetWebPath(frame.PngPath);
-                            <div class="relative group rounded-xl overflow-hidden border border-slate-200 bg-slate-50 cursor-pointer"
-                                 @ondblclick="() => OpenLightbox(AvailableFrames.IndexOf(frame))">
-                                <img src="@webPath" class="w-full object-contain" style="max-height: 400px;" alt="Frame @(frame.FrameIndex + 1)" loading="lazy" />
-                                <div class="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/50 text-white text-xs font-bold">
-                                    @(frame.FrameIndex + 1)
-                                </div>
-                                <button @onclick="() => OpenLightbox(AvailableFrames.IndexOf(frame))" @onclick:stopPropagation
-                                        class="absolute top-2 right-2 p-1.5 rounded-lg bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Agrandir">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" /></svg>
-                                </button>
-                            </div>
-                        }
-                    </div>
+                <div class="flex-1 flex flex-col items-center justify-center gap-3 text-center p-5">
+                    <svg class="w-8 h-8 text-brand-500 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span class="text-xs text-slate-500 font-medium">Generation du PDF...</span>
                 </div>
+            }
+            else if (!string.IsNullOrEmpty(PdfPreviewUrl))
+            {
+                <iframe src="@PdfPreviewUrl"
+                        style="width: 100%; height: 100%; border: none;"
+                        title="Apercu PDF"></iframe>
             }
         </div>
     </div>
@@ -354,6 +347,17 @@ else
                     @if (!string.IsNullOrEmpty(SelectedPrinterName))
                     {
                         <div class="mt-5 space-y-3 text-left">
+                            <label class="block">
+                                <span class="text-xs font-semibold text-slate-600">Imprimante</span>
+                                <select @onchange="OnPrinterChanged"
+                                        class="mt-1 w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500">
+                                    @foreach (var p in AvailablePrinters)
+                                    {
+                                        <option value="@p" selected="@(p == SelectedPrinterName)">@p</option>
+                                    }
+                                </select>
+                            </label>
+
                             <label class="block">
                                 <span class="text-xs font-semibold text-slate-600">Nombre d'exemplaires (1-99)</span>
                                 <input type="number" min="1" max="99" @bind="PrintCopies"
@@ -451,6 +455,9 @@ else
     private string? ImageError;
 
     private bool IsGeneratingPrintPdf;
+    private string? PdfPreviewUrl;
+    private bool IsRegeneratingPdf;
+    private CancellationTokenSource? _regenCts;
 
     private bool LightboxOpen;
     private int LightboxIndex;
@@ -473,8 +480,19 @@ else
     private bool HasShortEdge;
     private bool CapabilitiesError;
     private ElementReference PrintModalRef;
+    private List<string> AvailablePrinters = new();
 
     private bool HasImages => AvailableFrames.Count > 0 && SelectedFrameIds.Count > 0;
+
+    private bool HasPreviewPdf => !string.IsNullOrEmpty(PreviewPdfAbsolutePath);
+
+    private string? PreviewPdfAbsolutePath =>
+        string.IsNullOrEmpty(PdfPreviewUrl) ? null
+            : Path.Combine(
+                Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed"),
+                "pdf-cache",
+                Path.GetFileName(PdfPreviewUrl));
 
     private string StatusMessage = "";
     private bool IsError = false;
@@ -524,7 +542,7 @@ else
                 SelectedFrameIds = new HashSet<string>(_availableFrames.Select(f => f.SopInstanceUid));
 
             if (SelectedFrameIds.Count > 0)
-                await InvokeAsync(StateHasChanged);
+                await RegeneratePdfPreviewAsync();
         }
         catch (Exception ex)
         {
@@ -540,23 +558,85 @@ else
         }
     }
 
+    private async Task RegeneratePdfPreviewAsync()
+    {
+        _regenCts?.Cancel();
+        _regenCts = new CancellationTokenSource();
+        var ct = _regenCts.Token;
+
+        try
+        {
+            await Task.Delay(300, ct);
+
+            if (SelectedFrameIds.Count == 0)
+            {
+                if (!string.IsNullOrEmpty(PdfPreviewUrl))
+                    try { PdfService.DeletePdf(PdfPreviewUrl); } catch { }
+                PdfPreviewUrl = null;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            IsRegeneratingPdf = true;
+            await InvokeAsync(StateHasChanged);
+
+            var imagePaths = Frames
+                .Where(f => f.FileExists && SelectedFrameIds.Contains(f.SopInstanceUid) && !string.IsNullOrEmpty(f.PngPath))
+                .Select(f => f.PngPath!)
+                .ToList();
+
+            if (imagePaths.Count == 0)
+            {
+                PdfPreviewUrl = null;
+                IsRegeneratingPdf = false;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            var patientName = Study?.Patient?.PatientName ?? "";
+            var studyDate = Study?.StudyDate?.ToString("dd/MM/yyyy") ?? "N/A";
+            var studyDescription = Study?.Description ?? "";
+            var resumePdfPath = Study?.ResumePdfPath;
+
+            var oldUrl = PdfPreviewUrl;
+            var newUrl = await Task.Run(() =>
+                PdfService.GenerateBookletPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath), ct);
+
+            if (ct.IsCancellationRequested) return;
+
+            if (!string.IsNullOrEmpty(oldUrl))
+                try { PdfService.DeletePdf(oldUrl); } catch { }
+
+            PdfPreviewUrl = string.IsNullOrEmpty(newUrl) ? null : newUrl;
+            IsRegeneratingPdf = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "PDF preview generation failed for Study {StudyId}", Study?.Id);
+            IsRegeneratingPdf = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
     private void ToggleFrameSelection(string sopUid)
     {
         if (!SelectedFrameIds.Remove(sopUid))
             SelectedFrameIds.Add(sopUid);
-        StateHasChanged();
+        _ = RegeneratePdfPreviewAsync();
     }
 
     private void SelectAllFrames()
     {
         SelectedFrameIds = new HashSet<string>(AvailableFrames.Select(f => f.SopInstanceUid));
-        StateHasChanged();
+        _ = RegeneratePdfPreviewAsync();
     }
 
     private void DeselectAllFrames()
     {
         SelectedFrameIds.Clear();
-        StateHasChanged();
+        _ = RegeneratePdfPreviewAsync();
     }
 
     private void OpenUnlinkConfirm() => ShowUnlinkConfirm = true;
@@ -578,6 +658,8 @@ else
                 Study.ResumePdfPath = null;
                 StatusMessage = "Resume supprime avec succes.";
                 IsError = false;
+                if (SelectedFrameIds.Count > 0)
+                    _ = RegeneratePdfPreviewAsync();
             }
             else
             {
@@ -614,16 +696,27 @@ else
         CanDuplex = false;
         HasShortEdge = false;
         CapabilitiesError = false;
+        AvailablePrinters = new();
 
         try
         {
-            var printers = await PrintClient.GetConfiguredPrintersAsync();
-            var first = printers.FirstOrDefault();
-            SelectedPrinterName = first?.Name;
+            var allWindows = await PrintClient.GetAllWindowsPrintersAsync();
+            AvailablePrinters = allWindows.Select(p => p.Name).ToList();
 
-            if (first != null)
+            var savedPrinter = await JS.InvokeAsync<string?>("localStorage.getItem", "focusmed_active_printer");
+
+            if (!string.IsNullOrEmpty(savedPrinter) && AvailablePrinters.Contains(savedPrinter))
             {
-                PrinterCapabilities = await PrintClient.GetCapabilitiesAsync(first.Name);
+                SelectedPrinterName = savedPrinter;
+            }
+            else if (AvailablePrinters.Count > 0)
+            {
+                SelectedPrinterName = AvailablePrinters[0];
+            }
+
+            if (!string.IsNullOrEmpty(SelectedPrinterName))
+            {
+                PrinterCapabilities = await PrintClient.GetCapabilitiesAsync(SelectedPrinterName);
                 if (PrinterCapabilities != null && PrinterCapabilities.IsAvailable)
                 {
                     CanDuplex = PrinterCapabilities.CanDuplex;
@@ -645,6 +738,28 @@ else
     private void CancelPrint() => ShowPrintDialog = false;
 
     private void SetPrintMode(string mode) => PrintMode = mode;
+
+    private async Task OnPrinterChanged(ChangeEventArgs e)
+    {
+        var name = e.Value?.ToString();
+        if (string.IsNullOrEmpty(name)) return;
+        SelectedPrinterName = name;
+        PrinterCapabilities = null;
+        CanDuplex = false;
+        HasShortEdge = false;
+        try
+        {
+            PrinterCapabilities = await PrintClient.GetCapabilitiesAsync(name);
+            if (PrinterCapabilities != null && PrinterCapabilities.IsAvailable)
+            {
+                CanDuplex = PrinterCapabilities.CanDuplex;
+                HasShortEdge = PrinterCapabilities.SupportedDuplexModes.Any(m =>
+                    string.Equals(m, "Horizontal", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        catch { }
+        await InvokeAsync(StateHasChanged);
+    }
 
     private void HandlePrintKeydown(KeyboardEventArgs e)
     {
@@ -748,6 +863,12 @@ else
 
     public void Dispose()
     {
+        _regenCts?.Cancel();
+        _regenCts?.Dispose();
+        if (!string.IsNullOrEmpty(PdfPreviewUrl))
+        {
+            try { PdfService.DeletePdf(PdfPreviewUrl); } catch { }
+        }
     }
 
     private void OpenLightbox(int index)

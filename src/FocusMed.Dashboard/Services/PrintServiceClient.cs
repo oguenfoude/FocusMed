@@ -7,6 +7,7 @@ public interface IPrintServiceClient
     Task<PrintResult> PrintAsync(PrintRequest request, CancellationToken ct = default);
     Task<JobStatus> GetJobStatusAsync(string printerName, int jobId, CancellationToken ct = default);
     Task<IReadOnlyList<PrinterInfo>> GetConfiguredPrintersAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<WindowsPrinterInfo>> GetAllWindowsPrintersAsync(CancellationToken ct = default);
     Task<PrinterCapabilities?> GetCapabilitiesAsync(string printerName, CancellationToken ct = default);
 }
 
@@ -22,6 +23,8 @@ public sealed record PrintResult(bool Success, int? JobId, string? ErrorMessage)
 public sealed record JobStatus(string State, string? ErrorMessage);
 
 public sealed record PrinterInfo(string Name, bool Enabled, string Protocol, bool CanDuplex, int PaperSizeCount);
+
+public sealed record WindowsPrinterInfo(string Name, string DriverName);
 
 public sealed record PaperSizeInfo(string Name, int WidthHundredthsMm, int HeightHundredthsMm, string Kind);
 
@@ -93,6 +96,20 @@ public sealed class PrintServiceClient : IPrintServiceClient
         {
             _logger.LogWarning(ex, "PrintService unreachable when listing printers");
             return Array.Empty<PrinterInfo>();
+        }
+    }
+
+    public async Task<IReadOnlyList<WindowsPrinterInfo>> GetAllWindowsPrintersAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var list = await _client.GetFromJsonAsync<List<WindowsPrinterInfo>>("/printers/all", ct);
+            return (IReadOnlyList<WindowsPrinterInfo>?)list ?? Array.Empty<WindowsPrinterInfo>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "PrintService unreachable when listing all Windows printers");
+            return Array.Empty<WindowsPrinterInfo>();
         }
     }
 

@@ -55,6 +55,15 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         return Task.FromResult(list);
     }
 
+    public Task<IReadOnlyList<WindowsPrinterInfo>> GetAllWindowsPrintersAsync()
+    {
+        var printers = PrinterSettings.InstalledPrinters.Cast<string>()
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Select(name => new WindowsPrinterInfo(name, ""))
+            .ToList();
+        return Task.FromResult<IReadOnlyList<WindowsPrinterInfo>>(printers);
+    }
+
     public Task<PrinterCapabilities> GetCapabilitiesAsync(string printerName)
     {
         var caps = _caps.Detect(printerName);
