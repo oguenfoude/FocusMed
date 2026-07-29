@@ -77,7 +77,7 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
             .FirstOrDefault(p => string.Equals(p.Name, req.PrinterName, StringComparison.OrdinalIgnoreCase));
 
         // Resolve the actual Windows queue name
-        string resolvedQueue;
+        string? resolvedQueue;
         if (config != null)
         {
             resolvedQueue = _caps.ResolveBestQueue(config);

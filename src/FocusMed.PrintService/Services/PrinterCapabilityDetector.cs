@@ -47,30 +47,37 @@ public sealed class PrinterCapabilityDetector
 
     private PrinterCapabilities DetectFresh(string printerName)
     {
+        // First check if it's in the configured list (uses auto-detection for queue name)
         var config = _options.CurrentValue.PhysicalPrinters
             .FirstOrDefault(p => string.Equals(p.Name, printerName, StringComparison.OrdinalIgnoreCase));
 
-        if (config == null)
+        string? queueName;
+        if (config != null)
         {
-            _logger.LogWarning("Capability query for unknown printer: {PrinterName}", printerName);
-            return new PrinterCapabilities(printerName, false, false, Array.Empty<string>(), Array.Empty<PaperSizeInfo>());
+            queueName = ResolveBestQueue(config);
+            if (queueName == null)
+            {
+                return new PrinterCapabilities(printerName, false, false, Array.Empty<string>(), Array.Empty<PaperSizeInfo>());
+            }
         }
-
-        var queueName = ResolveBestQueue(config);
-        if (queueName == null)
+        else
         {
-            _logger.LogWarning("No Windows printer found matching '{Name}'", config.Name);
-            return new PrinterCapabilities(config.Name, false, false, Array.Empty<string>(), Array.Empty<PaperSizeInfo>());
+            // Not configured — probe directly by Windows printer name
+            queueName = PrinterSettings.InstalledPrinters.Cast<string>()
+                .FirstOrDefault(n => string.Equals(n, printerName, StringComparison.OrdinalIgnoreCase));
+            if (queueName == null)
+            {
+                return new PrinterCapabilities(printerName, false, false, Array.Empty<string>(), Array.Empty<PaperSizeInfo>());
+            }
         }
 
         var settings = new PrinterSettings { PrinterName = queueName };
         if (!settings.IsValid)
         {
-            _logger.LogWarning("Printer '{Queue}' not found or offline", queueName);
-            return new PrinterCapabilities(config.Name, false, false, Array.Empty<string>(), Array.Empty<PaperSizeInfo>());
+            return new PrinterCapabilities(printerName, false, false, Array.Empty<string>(), Array.Empty<PaperSizeInfo>());
         }
 
-        var (canDuplex, duplexModes) = ProbeDuplexFromDriver(queueName, settings);
+        var (canDuplex, duplexModes) = FallbackToPrinterSettings(settings);
 
         var paperSizes = new List<PaperSizeInfo>();
         if (settings.PaperSizes != null)
@@ -85,19 +92,17 @@ public sealed class PrinterCapabilityDetector
             }
         }
 
-        var caps = new PrinterCapabilities(config.Name, true, canDuplex, duplexModes, paperSizes);
+        var caps = new PrinterCapabilities(printerName, true, canDuplex, duplexModes, paperSizes);
 
         _logger.LogInformation(
             "Capabilities for {Printer} (queue={Queue}): CanDuplex={CanDuplex}, Modes=[{Modes}], PaperSizes={SizeCount}",
-            config.Name, queueName, canDuplex, string.Join(",", duplexModes), paperSizes.Count);
+            printerName, queueName, canDuplex, string.Join(",", duplexModes), paperSizes.Count);
 
         return caps;
     }
 
     /// <summary>
-    /// Fallback when System.Printing is unavailable, blocked, or returns no duplex modes.
-    /// Uses PrinterSettings.CanDuplex (in-memory, not real driver probe but matches what the
-    /// actual print pipeline will do) and assumes both Vertical + Horizontal are supported.
+    /// Determines duplex support using PrinterSettings.
     /// </summary>
     private (bool CanDuplex, List<string> Modes) FallbackToPrinterSettings(PrinterSettings settings)
     {
@@ -108,18 +113,6 @@ public sealed class PrinterCapabilityDetector
             modes.Add("Horizontal");
         }
         return (settings.CanDuplex, modes);
-    }
-
-    /// <summary>
-    /// Determines duplex support using PrinterSettings (the source of truth for the
-    /// actual print pipeline). System.Printing.PrintQueue was attempted but requires
-    /// a UI dispatcher thread (STA) and throws "different thread owns it" when called
-    /// from the ASP.NET threadpool. PrinterSettings.CanDuplex accurately reflects
-    /// what the driver will accept when PrintDocument runs.
-    /// </summary>
-    private (bool CanDuplex, List<string> Modes) ProbeDuplexFromDriver(string queueName, PrinterSettings settings)
-    {
-        return FallbackToPrinterSettings(settings);
     }
 
     /// <summary>
