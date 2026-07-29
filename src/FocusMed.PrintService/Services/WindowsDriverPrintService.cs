@@ -1,7 +1,5 @@
-using System.Drawing;
 using System.Drawing.Printing;
 using System.IO;
-using System.Printing;
 using FocusMed.PrintService.Abstractions;
 using FocusMed.PrintService.Configuration;
 using Microsoft.Extensions.Options;
@@ -72,11 +70,9 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
 
     private PrintResult PrintInternal(PrintRequest req)
     {
-        // Find config if it exists, otherwise use printer name directly
         var config = _options.CurrentValue.PhysicalPrinters
             .FirstOrDefault(p => string.Equals(p.Name, req.PrinterName, StringComparison.OrdinalIgnoreCase));
 
-        // Resolve the actual Windows queue name
         string? resolvedQueue;
         if (config != null)
         {
@@ -91,7 +87,6 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         }
         else
         {
-            // Not in appsettings — check if it exists as a Windows printer directly
             var exactMatch = PrinterSettings.InstalledPrinters.Cast<string>()
                 .FirstOrDefault(n => string.Equals(n, req.PrinterName, StringComparison.OrdinalIgnoreCase));
             if (exactMatch == null)
@@ -161,107 +156,73 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         var jobId = _tracker.NextId();
         var printerName = req.PrinterName;
         _tracker.Register(printerName, jobId);
+        _tracker.MarkPrinting(printerName, jobId);
 
-        try
+        Exception? threadException = null;
+        var thread = new Thread(() =>
         {
-            using var doc = PdfDocument.Load(printPath);
-            var pageCount = doc.PageCount;
-
-            _logger.LogInformation(
-                "Rendering PDF to bitmaps: file={Path}, pages={Pages}, booklet={Booklet}",
-                printPath, pageCount, req.BookletMode);
-
-            var images = new List<byte[]>();
-            int pageWidthPx = 0, pageHeightPx = 0;
-            for (int i = 0; i < pageCount; i++)
+            try
             {
-                using var bitmap = doc.Render(i, 300f, 300f,
-                    PdfRenderFlags.ForPrinting | PdfRenderFlags.CorrectFromDpi);
-                if (i == 0)
+                using var doc = PdfDocument.Load(printPath);
+                var printSettings = new PdfPrintSettings(PdfPrintMode.ShrinkToMargin, multiplePages: null);
+                using var printDoc = doc.CreatePrintDocument(printSettings);
+
+                printDoc.PrinterSettings = new PrinterSettings
                 {
-                    pageWidthPx = bitmap.Width;
-                    pageHeightPx = bitmap.Height;
+                    PrinterName = resolvedQueue,
+                    Copies = (short)req.Copies,
+                };
+
+                if (req.Duplex || req.BookletMode)
+                {
+                    printDoc.PrinterSettings.Duplex = req.BookletMode
+                        ? Duplex.Vertical
+                        : Duplex.Vertical;
                 }
-                using var ms = new MemoryStream();
-                bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                images.Add(ms.ToArray());
+
+                var jobLabel = req.BookletMode
+                    ? $"FocusMed-Livret-{jobId:D6}"
+                    : $"FocusMed-{jobId:D6}";
+                printDoc.DocumentName = jobLabel;
+
+                _logger.LogInformation(
+                    "Printing PDF: queue={Queue}, pages={Pages}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
+                    resolvedQueue, doc.PageCount, req.Duplex || req.BookletMode, req.BookletMode, req.Copies);
+
+                printDoc.Print();
+
+                _tracker.MarkCompleted(printerName, jobId);
+                _logger.LogInformation(
+                    "Print job completed: job={JobId}, queue={Queue}",
+                    jobId, resolvedQueue);
             }
-
-            var duplexMode = req.BookletMode
-                ? DuplexMode.ShortEdge
-                : req.Duplex
-                    ? DuplexMode.LongEdge
-                    : DuplexMode.Simplex;
-
-            _logger.LogInformation(
-                "Building XPS from {Count} images ({Width}x{Height}px), duplex={Duplex}, copies={Copies}",
-                images.Count, pageWidthPx, pageHeightPx, duplexMode, req.Copies);
-
-            var xpsBytes = XpsBuilder.BuildXpsWithTicket(images, pageWidthPx, pageHeightPx, duplexMode, req.Copies);
-
-            _tracker.MarkPrinting(printerName, jobId);
-
-            _logger.LogInformation(
-                "Submitting XPS to printer: queue={Queue}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
-                resolvedQueue, req.Duplex, req.BookletMode, req.Copies);
-
-            var thread = new Thread(() =>
+            catch (Exception ex)
             {
-                try
-                {
-                    var server = new LocalPrintServer();
-                    var queue = server.GetPrintQueues().FirstOrDefault(q =>
-                        string.Equals(q.Name, resolvedQueue, StringComparison.OrdinalIgnoreCase));
+                threadException = ex;
+                _logger.LogError(ex, "Print failed for {Queue}", resolvedQueue);
+                _tracker.MarkError(printerName, jobId, ex.GetBaseException().Message);
+            }
+        });
 
-                    if (queue == null)
-                    {
-                        _tracker.MarkError(printerName, jobId, $"File d'attente '{resolvedQueue}' introuvable.");
-                        return;
-                    }
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        thread.Join(TimeSpan.FromSeconds(60));
 
-                    var jobName = req.BookletMode
-                        ? $"FocusMed-Livret-{jobId:D6}"
-                        : $"FocusMed-{jobId:D6}";
+        if (threadException != null)
+            return Fail(threadException.GetBaseException().Message);
 
-                    var job = queue.AddJob(jobName);
-                    using (var stream = job.JobStream)
-                    {
-                        stream.Write(xpsBytes, 0, xpsBytes.Length);
-                    }
-
-                    _tracker.MarkCompleted(printerName, jobId);
-                    _logger.LogInformation(
-                        "XPS print job submitted: job={JobId}, queue={Queue}, duplex={Duplex}",
-                        job.JobIdentifier, resolvedQueue, duplexMode);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "XPS print failed for {Queue}", resolvedQueue);
-                    _tracker.MarkError(printerName, jobId, ex.GetBaseException().Message);
-                }
-            });
-
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.IsBackground = true;
-            thread.Start();
-
+        if (thread.IsAlive)
+        {
+            _logger.LogWarning("Print thread still running after 60s timeout for job {JobId}", jobId);
             return new PrintResult(true, jobId, null);
         }
-        catch (Exception ex)
-        {
-            var message = ex.GetBaseException().Message;
-            _logger.LogError(ex, "Print failed for {Printer} (job #{JobId}) file={Path}",
-                printerName, jobId, printPath);
-            _tracker.MarkError(printerName, jobId, message);
-            return Fail(message);
-        }
-        finally
-        {
-            if (bookletTempPath != null)
-            {
-                try { if (File.Exists(bookletTempPath)) File.Delete(bookletTempPath); } catch { }
-            }
-        }
+
+        var status = _tracker.Get(printerName, jobId);
+        if (status.State == "Error")
+            return Fail(status.ErrorMessage ?? "Echec de l'impression.");
+
+        return new PrintResult(true, jobId, null);
     }
 
     private static PrintResult Fail(string message)
