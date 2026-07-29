@@ -1,3 +1,4 @@
+using System.Drawing;
 using System.Drawing.Printing;
 using System.IO;
 using FocusMed.PrintService.Abstractions;
@@ -164,41 +165,96 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
             try
             {
                 using var doc = PdfDocument.Load(printPath);
-                var printSettings = new PdfPrintSettings(PdfPrintMode.CutMargin, multiplePages: null);
-                using var printDoc = doc.CreatePrintDocument(printSettings);
 
-                var settings = new PrinterSettings
+                var pageBitmaps = new List<Image>();
+                try
                 {
-                    PrinterName = resolvedQueue,
-                    Copies = (short)req.Copies,
-                };
+                    for (int i = 0; i < doc.PageCount; i++)
+                    {
+                        using var bitmap = doc.Render(i, 300f, 300f,
+                            PdfRenderFlags.ForPrinting | PdfRenderFlags.CorrectFromDpi);
+                        var copy = new Bitmap(bitmap.Width, bitmap.Height, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                        using (var g = System.Drawing.Graphics.FromImage(copy))
+                        {
+                            g.DrawImage(bitmap, 0, 0, bitmap.Width, bitmap.Height);
+                        }
+                        pageBitmaps.Add(copy);
+                    }
 
-                var a4 = settings.PaperSizes.Cast<PaperSize>()
-                    .FirstOrDefault(ps => ps.Kind == PaperKind.A4)
-                    ?? settings.PaperSizes.Cast<PaperSize>()
-                        .OrderBy(p => Math.Abs(p.Width - 827) + Math.Abs(p.Height - 1169))
-                        .FirstOrDefault();
-                if (a4 != null)
-                    settings.DefaultPageSettings.PaperSize = a4;
+                    var currentPage = 0;
+                    var printDoc = new PrintDocument();
+                    printDoc.DocumentName = req.BookletMode
+                        ? $"FocusMed-Livret-{jobId:D6}"
+                        : $"FocusMed-{jobId:D6}";
 
-                settings.Duplex = req.BookletMode
-                    ? Duplex.Horizontal
-                    : req.Duplex
-                        ? Duplex.Vertical
-                        : Duplex.Simplex;
+                    printDoc.PrinterSettings = new PrinterSettings
+                    {
+                        PrinterName = resolvedQueue,
+                        Copies = (short)req.Copies,
+                    };
 
-                printDoc.PrinterSettings = settings;
+                    var a4 = printDoc.PrinterSettings.PaperSizes.Cast<PaperSize>()
+                        .FirstOrDefault(ps => ps.Kind == PaperKind.A4)
+                        ?? printDoc.PrinterSettings.PaperSizes.Cast<PaperSize>()
+                            .OrderBy(p => Math.Abs(p.Width - 827) + Math.Abs(p.Height - 1169))
+                            .FirstOrDefault();
+                    if (a4 != null)
+                        printDoc.DefaultPageSettings.PaperSize = a4;
 
-                var jobLabel = req.BookletMode
-                    ? $"FocusMed-Livret-{jobId:D6}"
-                    : $"FocusMed-{jobId:D6}";
-                printDoc.DocumentName = jobLabel;
+                    printDoc.PrinterSettings.Duplex = req.BookletMode
+                        ? Duplex.Horizontal
+                        : req.Duplex
+                            ? Duplex.Vertical
+                            : Duplex.Simplex;
 
-                _logger.LogInformation(
-                    "Printing PDF: queue={Queue}, pages={Pages}, paper={Paper}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
-                    resolvedQueue, doc.PageCount, a4?.PaperName ?? "default", settings.Duplex, req.BookletMode, req.Copies);
+                    _logger.LogInformation(
+                        "Printing PDF: queue={Queue}, pages={Pages}, paper={Paper}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
+                        resolvedQueue, pageBitmaps.Count, a4?.PaperName ?? "default",
+                        printDoc.PrinterSettings.Duplex, req.BookletMode, req.Copies);
 
-                printDoc.Print();
+                    printDoc.PrintPage += (sender, e) =>
+                    {
+                        if (currentPage < pageBitmaps.Count)
+                        {
+                            var img = pageBitmaps[currentPage];
+
+                            var pageW = e.PageBounds.Width;
+                            var pageH = e.PageBounds.Height;
+
+                            var imgAspect = (double)img.Width / img.Height;
+                            var pageAspect = pageW / pageH;
+
+                            float drawW, drawH;
+                            if (imgAspect > pageAspect)
+                            {
+                                drawW = pageW;
+                                drawH = (float)(pageW / imgAspect);
+                            }
+                            else
+                            {
+                                drawH = pageH;
+                                drawW = (float)(pageH * imgAspect);
+                            }
+
+                            var x = (pageW - drawW) / 2f + e.MarginBounds.Left - e.PageBounds.Left;
+                            var y = (pageH - drawH) / 2f + e.MarginBounds.Top - e.PageBounds.Top;
+
+                            e.Graphics?.DrawImage(img, x, y, drawW, drawH);
+                            currentPage++;
+
+                            if (currentPage < pageBitmaps.Count)
+                                e.HasMorePages = true;
+                        }
+                    };
+
+                    printDoc.Print();
+                    printDoc.Dispose();
+                }
+                finally
+                {
+                    foreach (var img in pageBitmaps)
+                        img.Dispose();
+                }
 
                 _tracker.MarkCompleted(printerName, jobId);
                 _logger.LogInformation(

@@ -210,15 +210,6 @@ public class PdfService
             }
         }
 
-        // Normalize ALL pages to A4 portrait (595.28 x 841.89 pt = 210mm x 297mm)
-        const double a4WidthPt = 595.28;
-        const double a4HeightPt = 841.89;
-        foreach (PdfPage page in outputDocument.Pages)
-        {
-            page.Width = a4WidthPt;
-            page.Height = a4HeightPt;
-        }
-
         outputDocument.Save(outputPath);
     }
 

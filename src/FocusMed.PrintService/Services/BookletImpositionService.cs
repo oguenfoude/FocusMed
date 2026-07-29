@@ -110,6 +110,24 @@ public sealed class BookletImpositionService : IBookletImpositionService
         var streamFunc = new Func<Stream>(() => new MemoryStream(ms.ToArray()));
         using var xImage = XImage.FromStream(streamFunc);
 
-        gfx.DrawImage(xImage, x, y, width, height);
+        var imgAspect = (double)xImage.PixelWidth / xImage.PixelHeight;
+        var slotAspect = width / height;
+
+        double drawW, drawH;
+        if (imgAspect > slotAspect)
+        {
+            drawW = width;
+            drawH = width / imgAspect;
+        }
+        else
+        {
+            drawH = height;
+            drawW = height * imgAspect;
+        }
+
+        var dx = x + (width - drawW) / 2.0;
+        var dy = y + (height - drawH) / 2.0;
+
+        gfx.DrawImage(xImage, dx, dy, drawW, drawH);
     }
 }
