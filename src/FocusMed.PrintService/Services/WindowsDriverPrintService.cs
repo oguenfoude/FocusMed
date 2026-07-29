@@ -164,21 +164,30 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
             try
             {
                 using var doc = PdfDocument.Load(printPath);
-                var printSettings = new PdfPrintSettings(PdfPrintMode.ShrinkToMargin, multiplePages: null);
+                var printSettings = new PdfPrintSettings(PdfPrintMode.CutMargin, multiplePages: null);
                 using var printDoc = doc.CreatePrintDocument(printSettings);
 
-                printDoc.PrinterSettings = new PrinterSettings
+                var settings = new PrinterSettings
                 {
                     PrinterName = resolvedQueue,
                     Copies = (short)req.Copies,
                 };
 
-                if (req.Duplex || req.BookletMode)
-                {
-                    printDoc.PrinterSettings.Duplex = req.BookletMode
+                var a4 = settings.PaperSizes.Cast<PaperSize>()
+                    .FirstOrDefault(ps => ps.Kind == PaperKind.A4)
+                    ?? settings.PaperSizes.Cast<PaperSize>()
+                        .OrderBy(p => Math.Abs(p.Width - 827) + Math.Abs(p.Height - 1169))
+                        .FirstOrDefault();
+                if (a4 != null)
+                    settings.DefaultPageSettings.PaperSize = a4;
+
+                settings.Duplex = req.BookletMode
+                    ? Duplex.Vertical
+                    : req.Duplex
                         ? Duplex.Vertical
-                        : Duplex.Vertical;
-                }
+                        : Duplex.Simplex;
+
+                printDoc.PrinterSettings = settings;
 
                 var jobLabel = req.BookletMode
                     ? $"FocusMed-Livret-{jobId:D6}"
@@ -186,8 +195,8 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                 printDoc.DocumentName = jobLabel;
 
                 _logger.LogInformation(
-                    "Printing PDF: queue={Queue}, pages={Pages}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
-                    resolvedQueue, doc.PageCount, req.Duplex || req.BookletMode, req.BookletMode, req.Copies);
+                    "Printing PDF: queue={Queue}, pages={Pages}, paper={Paper}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
+                    resolvedQueue, doc.PageCount, a4?.PaperName ?? "default", settings.Duplex, req.BookletMode, req.Copies);
 
                 printDoc.Print();
 
