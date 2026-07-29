@@ -199,11 +199,12 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
 
             var xpsBytes = XpsBuilder.BuildXpsWithTicket(images, pageWidthPx, pageHeightPx, duplexMode, req.Copies);
 
+            _tracker.MarkPrinting(printerName, jobId);
+
             _logger.LogInformation(
                 "Submitting XPS to printer: queue={Queue}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
                 resolvedQueue, req.Duplex, req.BookletMode, req.Copies);
 
-            PrintResult result = Fail("Thread not executed");
             var thread = new Thread(() =>
             {
                 try
@@ -214,15 +215,13 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
 
                     if (queue == null)
                     {
-                        result = Fail($"File d'attente '{resolvedQueue}' introuvable via System.Printing.");
+                        _tracker.MarkError(printerName, jobId, $"File d'attente '{resolvedQueue}' introuvable.");
                         return;
                     }
 
                     var jobName = req.BookletMode
                         ? $"FocusMed-Livret-{jobId:D6}"
                         : $"FocusMed-{jobId:D6}";
-
-                    _tracker.MarkPrinting(printerName, jobId);
 
                     var job = queue.AddJob(jobName);
                     using (var stream = job.JobStream)
@@ -234,23 +233,19 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                     _logger.LogInformation(
                         "XPS print job submitted: job={JobId}, queue={Queue}, duplex={Duplex}",
                         job.JobIdentifier, resolvedQueue, duplexMode);
-
-                    result = new PrintResult(true, job.JobIdentifier, null);
                 }
                 catch (Exception ex)
                 {
-                    var message = ex.GetBaseException().Message;
                     _logger.LogError(ex, "XPS print failed for {Queue}", resolvedQueue);
-                    _tracker.MarkError(printerName, jobId, message);
-                    result = Fail(message);
+                    _tracker.MarkError(printerName, jobId, ex.GetBaseException().Message);
                 }
             });
 
             thread.SetApartmentState(ApartmentState.STA);
+            thread.IsBackground = true;
             thread.Start();
-            thread.Join();
 
-            return result!;
+            return new PrintResult(true, jobId, null);
         }
         catch (Exception ex)
         {
