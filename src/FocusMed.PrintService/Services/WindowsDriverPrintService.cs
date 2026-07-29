@@ -187,19 +187,17 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                 images.Add(ms.ToArray());
             }
 
-            _logger.LogInformation(
-                "Building XPS from {Count} images ({Width}x{Height}px)",
-                images.Count, pageWidthPx, pageHeightPx);
-
-            var xpsBytes = XpsBuilder.CreateXpsFromPngImages(images, pageWidthPx, pageHeightPx);
-
             var duplexMode = req.BookletMode
                 ? DuplexMode.ShortEdge
                 : req.Duplex
                     ? DuplexMode.LongEdge
                     : DuplexMode.Simplex;
 
-            var xpsWithTicket = XpsBuilder.InjectPrintTicket(xpsBytes, duplexMode, req.Copies);
+            _logger.LogInformation(
+                "Building XPS from {Count} images ({Width}x{Height}px), duplex={Duplex}, copies={Copies}",
+                images.Count, pageWidthPx, pageHeightPx, duplexMode, req.Copies);
+
+            var xpsBytes = XpsBuilder.BuildXpsWithTicket(images, pageWidthPx, pageHeightPx, duplexMode, req.Copies);
 
             _logger.LogInformation(
                 "Submitting XPS to printer: queue={Queue}, duplex={Duplex}, booklet={Booklet}, copies={Copies}",
@@ -229,7 +227,7 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                     var job = queue.AddJob(jobName);
                     using (var stream = job.JobStream)
                     {
-                        stream.Write(xpsWithTicket, 0, xpsWithTicket.Length);
+                        stream.Write(xpsBytes, 0, xpsBytes.Length);
                     }
 
                     _tracker.MarkCompleted(printerName, jobId);

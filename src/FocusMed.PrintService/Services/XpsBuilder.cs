@@ -10,91 +10,85 @@ public static class XpsBuilder
     private const string PtContentType = "application/vnd.ms-printing.printticket+xml";
     private const string PtRelType = "http://schemas.microsoft.com/xps/2005/06/printticket";
 
-    public static byte[] CreateXpsFromPngImages(
+    /// <summary>
+    /// Builds a complete XPS package with PrintTicket in a single pass.
+    /// Uses a temp file (Package.Open on MemoryStream doesn't flush properly).
+    /// </summary>
+    public static byte[] BuildXpsWithTicket(
         IReadOnlyList<byte[]> imagePngBytes,
         int pageWidthPx,
-        int pageHeightPx)
+        int pageHeightPx,
+        DuplexMode duplex,
+        int copies,
+        bool portrait = true)
     {
-        using var ms = new MemoryStream();
-        using var pkg = Package.Open(ms, FileMode.Create, FileAccess.ReadWrite);
-
-        WritePart(pkg, "/[Content_Types].xml",
-            "application/vnd.openxmlformats-package.content-types+xml",
-            BuildContentTypes(imagePngBytes.Count));
-
-        WritePart(pkg, "/_rels/.rels",
-            "application/vnd.openxmlformats-package.relationships+xml",
-            BuildPackageRels());
-
-        WritePart(pkg, "/FixedDocumentSequence.fdseq",
-            "application/vnd.ms-xps.fixeddocseq+xml",
-            BuildFixedDocSeq());
-
-        WritePart(pkg, "/FixedDocumentSequence.fdseq.rels",
-            "application/vnd.openxmlformats-package.relationships+xml",
-            BuildDocSeqRels());
-
-        WritePart(pkg, "/Documents/1/FixedDocument.fdoc",
-            "application/vnd.ms-xps.fixeddoc+xml",
-            BuildFixedDoc(imagePngBytes.Count));
-
-        WritePart(pkg, "/Documents/1/_rels/FixedDocument.fdoc.rels",
-            "application/vnd.openxmlformats-package.relationships+xml",
-            BuildFixedDocRels(imagePngBytes.Count));
-
-        for (int i = 0; i < imagePngBytes.Count; i++)
+        var tempPath = Path.Combine(Path.GetTempPath(), $"focusmed_xps_{Guid.NewGuid():N}.xps");
+        try
         {
-            var num = i + 1;
-            WritePart(pkg, $"/Documents/1/Resources/Images/Image_{num}.png",
-                "image/png", imagePngBytes[i]);
+            using (var pkg = Package.Open(tempPath, FileMode.Create, FileAccess.ReadWrite))
+            {
+                var pageCount = imagePngBytes.Count;
 
-            WritePart(pkg, $"/Documents/1/Pages/FixedPage{num}.fpage",
-                "application/vnd.ms-xps.fixedpage+xml",
-                BuildFixedPage(num, pageWidthPx, pageHeightPx));
+                // [Content_Types].xml
+                WritePart(pkg, "/[Content_Types].xml",
+                    "application/vnd.openxmlformats-package.content-types+xml",
+                    BuildContentTypes(pageCount));
 
-            WritePart(pkg, $"/Documents/1/Pages/_rels/FixedPage{num}.fpage.rels",
-                "application/vnd.openxmlformats-package.relationships+xml",
-                BuildPageRels(num));
+                // /_rels/.rels — include PrintTicket relationship
+                var relId = $"Rpt{Guid.NewGuid():N}";
+                WritePart(pkg, "/_rels/.rels",
+                    "application/vnd.openxmlformats-package.relationships+xml",
+                    BuildPackageRels(relId));
+
+                // /FixedDocumentSequence.fdseq
+                WritePart(pkg, "/FixedDocumentSequence.fdseq",
+                    "application/vnd.ms-xps.fixeddocseq+xml",
+                    BuildFixedDocSeq());
+
+                // /FixedDocumentSequence.fdseq.rels
+                WritePart(pkg, "/FixedDocumentSequence.fdseq.rels",
+                    "application/vnd.openxmlformats-package.relationships+xml",
+                    BuildDocSeqRels());
+
+                // /Documents/1/FixedDocument.fdoc
+                WritePart(pkg, "/Documents/1/FixedDocument.fdoc",
+                    "application/vnd.ms-xps.fixeddoc+xml",
+                    BuildFixedDoc(pageCount));
+
+                // /Documents/1/_rels/FixedDocument.fdoc.rels
+                WritePart(pkg, "/Documents/1/_rels/FixedDocument.fdoc.rels",
+                    "application/vnd.openxmlformats-package.relationships+xml",
+                    BuildFixedDocRels(pageCount));
+
+                // Pages + images
+                for (int i = 0; i < pageCount; i++)
+                {
+                    var num = i + 1;
+                    WritePart(pkg, $"/Documents/1/Resources/Images/Image_{num}.png",
+                        "image/png", imagePngBytes[i]);
+
+                    WritePart(pkg, $"/Documents/1/Pages/FixedPage{num}.fpage",
+                        "application/vnd.ms-xps.fixedpage+xml",
+                        BuildFixedPage(num, pageWidthPx, pageHeightPx));
+
+                    WritePart(pkg, $"/Documents/1/Pages/_rels/FixedPage{num}.fpage.rels",
+                        "application/vnd.openxmlformats-package.relationships+xml",
+                        BuildPageRels(num));
+                }
+
+                // PrintTicket — same lifecycle, no reopen needed
+                var ptBytes = Encoding.UTF8.GetBytes(BuildPrintTicket(duplex, copies, portrait));
+                var ptPart = pkg.CreatePart(new Uri("/PrintTicket.pt", UriKind.Relative),
+                    PtContentType, CompressionOption.SuperFast);
+                ptPart.GetStream().Write(ptBytes, 0, ptBytes.Length);
+            }
+
+            return File.ReadAllBytes(tempPath);
         }
-
-        pkg.Flush();
-        return ms.ToArray();
-    }
-
-    public static byte[] InjectPrintTicket(byte[] xpsBytes, DuplexMode duplex, int copies, bool portrait = true)
-    {
-        using var ms = new MemoryStream(xpsBytes);
-        using var pkg = Package.Open(ms, FileMode.Open, FileAccess.ReadWrite);
-
-        var ptBytes = Encoding.UTF8.GetBytes(BuildPrintTicket(duplex, copies, portrait));
-
-        var ptUri = new Uri("/PrintTicket.pt", UriKind.Relative);
-        var existing = pkg.GetPart(ptUri);
-        if (existing != null) pkg.DeletePart(ptUri);
-
-        var ptPart = pkg.CreatePart(ptUri, PtContentType, CompressionOption.SuperFast);
-        ptPart.GetStream().Write(ptBytes, 0, ptBytes.Length);
-
-        var relsUri = new Uri("/_rels/.rels", UriKind.Relative);
-        var relsPart = pkg.GetPart(relsUri);
-        using var relsStream = relsPart.GetStream();
-        var relsText = new StreamReader(relsStream, Encoding.UTF8).ReadToEnd();
-
-        if (!relsText.Contains("printticket", StringComparison.OrdinalIgnoreCase))
+        finally
         {
-            var relId = $"Rpt{Guid.NewGuid():N}";
-            var newRel = $@"<Relationship xmlns=""http://schemas.openxmlformats.org/package/2006/relationships"" Id=""{relId}"" Type=""{PtRelType}"" Target=""PrintTicket.pt""/>";
-            var insertPos = relsText.LastIndexOf("</Relationships>");
-            relsText = relsText.Insert(insertPos, newRel);
+            try { File.Delete(tempPath); } catch { }
         }
-
-        var relsBytes = Encoding.UTF8.GetBytes(relsText);
-        relsStream.Position = 0;
-        relsStream.SetLength(0);
-        relsStream.Write(relsBytes, 0, relsBytes.Length);
-
-        pkg.Flush();
-        return ms.ToArray();
     }
 
     private static void WritePart(Package pkg, string partPath, string contentType, string xml)
@@ -123,11 +117,12 @@ public static class XpsBuilder
 </Types>";
     }
 
-    private static string BuildPackageRels()
+    private static string BuildPackageRels(string printTicketRelId)
     {
         return $@"<?xml version=""1.0"" encoding=""utf-8""?>
 <Relationships xmlns=""http://schemas.openxmlformats.org/package/2006/relationships"">
   <Relationship Id=""R1"" Type=""{XpsNs}/fixeddocseq"" Target=""FixedDocumentSequence.fdseq""/>
+  <Relationship Id=""{printTicketRelId}"" Type=""{PtRelType}"" Target=""PrintTicket.pt""/>
 </Relationships>";
     }
 
