@@ -26,7 +26,7 @@ public class PdfService
         _coverTemplatePath = Path.Combine(env.WebRootPath, "cover.docx");
     }
 
-    public string GenerateBookletPdf(
+    public string GeneratePrintPdf(
         string patientName,
         string studyDate,
         string studyDescription,
@@ -208,6 +208,15 @@ public class PdfService
                 foreach (var page in doc.Pages)
                     outputDocument.AddPage(page);
             }
+        }
+
+        // Normalize ALL pages to A4 portrait (595.28 x 841.89 pt = 210mm x 297mm)
+        const double a4WidthPt = 595.28;
+        const double a4HeightPt = 841.89;
+        foreach (PdfPage page in outputDocument.Pages)
+        {
+            page.Width = a4WidthPt;
+            page.Height = a4HeightPt;
         }
 
         outputDocument.Save(outputPath);

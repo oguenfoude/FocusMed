@@ -570,7 +570,7 @@ else
 
             var oldUrl = PdfPreviewUrl;
             var newUrl = await Task.Run(() =>
-                PdfService.GenerateBookletPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath), ct);
+                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath), ct);
 
             if (ct.IsCancellationRequested) return;
 
@@ -761,7 +761,7 @@ else
             await InvokeAsync(StateHasChanged);
 
             var pdfUrl = await Task.Run(() =>
-                PdfService.GenerateBookletPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath));
+                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath));
 
             IsGeneratingPrintPdf = false;
 

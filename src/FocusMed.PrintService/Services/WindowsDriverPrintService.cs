@@ -182,7 +182,7 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
                     settings.DefaultPageSettings.PaperSize = a4;
 
                 settings.Duplex = req.BookletMode
-                    ? Duplex.Vertical
+                    ? Duplex.Horizontal
                     : req.Duplex
                         ? Duplex.Vertical
                         : Duplex.Simplex;
@@ -230,6 +230,11 @@ public sealed class WindowsDriverPrintService : IPhysicalPrintService
         var status = _tracker.Get(printerName, jobId);
         if (status.State == "Error")
             return Fail(status.ErrorMessage ?? "Echec de l'impression.");
+
+        if (bookletTempPath != null)
+        {
+            try { if (File.Exists(bookletTempPath)) File.Delete(bookletTempPath); } catch { }
+        }
 
         return new PrintResult(true, jobId, null);
     }
