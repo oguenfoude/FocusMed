@@ -145,7 +145,7 @@ else
                         var modalities = study.Series.Select(s => s.Modality).Distinct().ToList();
                         var modalityDisplay = modalities.Any() ? string.Join(", ", modalities) : "N/A";
                         var patientName = string.IsNullOrWhiteSpace(study.Patient?.PatientName) ? "Inconnu" : study.Patient.PatientName.Replace("^", " ");
-                        var imageCount = study.Series.SelectMany(s => s.Images).Count();
+                        var imageCount = _imageCounts.GetValueOrDefault(study.Id, 0);
                         <tr class="hover:bg-slate-50/80 transition-colors group cursor-pointer"
                             @onclick="() => OpenStudy(study.Id)">
                             <td class="px-6 py-3.5 text-slate-500">
@@ -251,6 +251,7 @@ else
 
 @code {
     private List<Study>? Studies;
+    private Dictionary<int, int> _imageCounts = new();
     private IEnumerable<Study>? FilteredStudies;
     private IEnumerable<Study> PagedStudies => FilteredStudies?.Skip((CurrentPage - 1) * PageSize).Take(PageSize) ?? [];
 
@@ -300,11 +301,17 @@ else
     {
         Studies = await DbContext.Studies
             .Include(s => s.Patient)
-            .Include(s => s.Series).ThenInclude(s => s.Images)
-            .AsSplitQuery()
+            .Include(s => s.Series)
             .OrderByDescending(s => s.LastUpdatedAt)
             .ToListAsync();
 
+        // Fetch image counts in one batch query, keyed by StudyId
+        var studyIds = Studies.Select(s => s.Id).ToList();
+        _imageCounts = await DbContext.DicomImages
+            .Where(d => DbContext.Series.Where(sr => studyIds.Contains(sr.StudyId)).Select(sr => sr.Id).Contains(d.SeriesId))
+            .GroupBy(d => d.Series.StudyId)
+            .Select(g => new { StudyId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.StudyId, x => x.Count);
 
         AvailableModalities = Studies
             .SelectMany(s => s.Series)
@@ -316,6 +323,7 @@ else
 
         ApplyFilters();
     }
+
 
     private void ApplyFilters()
     {

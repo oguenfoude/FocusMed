@@ -516,7 +516,7 @@ else
 
         try
         {
-            await Task.Delay(300, ct);
+            await Task.Delay(150, ct);
 
             if (SelectedFrameIds.Count == 0)
             {
@@ -548,18 +548,27 @@ else
             var studyDescription = Study?.Description ?? "";
             var resumePdfPath = Study?.ResumePdfPath;
 
-            var oldUrl = PdfPreviewUrl;
             var newUrl = await Task.Run(() =>
                 PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, "A3", isBooklet: true), ct);
 
+
             if (ct.IsCancellationRequested) return;
 
-            if (!string.IsNullOrEmpty(oldUrl))
-                try { PdfService.DeletePdf(oldUrl); } catch { }
-
-            PdfPreviewUrl = string.IsNullOrEmpty(newUrl) ? null : newUrl;
-            IsRegeneratingPdf = false;
-            await InvokeAsync(StateHasChanged);
+            if (!string.IsNullOrEmpty(newUrl))
+            {
+                var oldUrl = PdfPreviewUrl;
+                PdfPreviewUrl = newUrl;
+                IsRegeneratingPdf = false;
+                await InvokeAsync(StateHasChanged);
+                if (!string.IsNullOrEmpty(oldUrl) && oldUrl != newUrl)
+                    try { PdfService.DeletePdf(oldUrl); } catch { }
+            }
+            else
+            {
+                PdfPreviewUrl = null;
+                IsRegeneratingPdf = false;
+                await InvokeAsync(StateHasChanged);
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
