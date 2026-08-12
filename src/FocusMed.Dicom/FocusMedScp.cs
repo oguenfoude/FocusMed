@@ -760,16 +760,18 @@ public class FocusMedScp : DicomService,
                 {
                     var recentStudy = await db.Studies
                         .Include(s => s.Patient)
-                        .OrderByDescending(s => s.CreatedAt)
+                        .Where(s => s.Status != StudyStatus.Deleted)
+                        .OrderByDescending(s => s.LastUpdatedAt)
                         .FirstOrDefaultAsync();
 
                     if (recentStudy?.Patient != null)
                     {
                         patientId = recentStudy.Patient.PatientId;
                         patientName = recentStudy.Patient.PatientName;
-                        _logger.LogInformation("Patient resolved from most recent study: {PatientId} - {PatientName}", patientId, patientName);
+                        _logger.LogInformation("Patient resolved from most recent active study (LastUpdatedAt): {PatientId} - {PatientName}", patientId, patientName);
                     }
                 }
+
 
                 patientId ??= string.Empty;
                 patientName ??= string.Empty;

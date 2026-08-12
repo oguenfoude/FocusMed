@@ -344,7 +344,8 @@ public class DicomUpsertService
                 .Include(s => s.Patient)
                 .Where(s => s.PatientId == patient.Id && s.Status != StudyStatus.Deleted)
                 .OrderByDescending(s => s.LastUpdatedAt)
-                .FirstOrDefault(s => s.StudyDate.HasValue && s.StudyDate.Value.Date == today);
+                .FirstOrDefault(s => !s.StudyDate.HasValue || s.StudyDate.Value.Date == today || s.LastUpdatedAt >= DateTime.UtcNow.AddHours(-24));
+
 
 
             if (study == null)
