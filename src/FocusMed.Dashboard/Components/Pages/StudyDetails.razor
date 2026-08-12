@@ -258,7 +258,7 @@ else
                     <div class="flex items-center gap-1.5">
                         <label class="font-bold text-slate-600">Images par page:</label>
                         <select @bind="ImagesPerPage" @bind:after="OnGridOptionChanged"
-                                class="px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-semibold shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500">
+                                class="px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500">
                             <option value="1">1 image / page (Défaut)</option>
                             <option value="2">2 images / page</option>
                             <option value="4">4 images (2x2) / page</option>
@@ -266,16 +266,18 @@ else
                         </select>
                     </div>
 
-                    <!-- Gap / Espacement selector -->
+                    <!-- Gap / Espacement numeric input -->
                     <div class="flex items-center gap-1.5">
-                        <label class="font-bold text-slate-600">Espacement (Gap):</label>
-                        <select @bind="GapPx" @bind:after="OnGridOptionChanged"
-                                class="px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-semibold shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500">
-                            <option value="0">0 px</option>
-                            <option value="1">1 px (Défaut)</option>
-                            <option value="2">2 px</option>
-                            <option value="5">5 px</option>
-                        </select>
+                        <label class="font-bold text-slate-600">Gap (px):</label>
+                        <input type="number" min="0" max="50" @bind="GapPx" @bind:after="OnGridOptionChanged"
+                               class="w-16 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500" />
+                    </div>
+
+                    <!-- Margin numeric input -->
+                    <div class="flex items-center gap-1.5">
+                        <label class="font-bold text-slate-600">Marge (px):</label>
+                        <input type="number" min="0" max="50" @bind="MarginPx" @bind:after="OnGridOptionChanged"
+                               class="w-16 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500" />
                     </div>
                 </div>
 
@@ -454,11 +456,13 @@ else
 
     private int ImagesPerPage { get; set; } = 1;
     private int GapPx { get; set; } = 1;
+    private int MarginPx { get; set; } = 10;
 
     private void OnGridOptionChanged()
     {
         _ = RegeneratePdfPreviewAsync();
     }
+
 
     private string? PdfPreviewUrl;
     private bool IsRegeneratingPdf;
@@ -594,7 +598,8 @@ else
             var resumePdfPath = Study?.ResumePdfPath;
 
             var newUrl = await Task.Run(() =>
-                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, "A3", isBooklet: true, imagesPerPage: ImagesPerPage, gapPx: GapPx), ct);
+                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, "A3", isBooklet: true, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx), ct);
+
 
 
 

@@ -37,14 +37,15 @@ public class PdfService
         string pageSize = "A4",
         bool isBooklet = false,
         int imagesPerPage = 1,
-        int gapPx = 1)
+        int gapPx = 1,
+        int marginPx = 10)
     {
         CleanupOldPdfs();
 
         var validPaths = imagePaths.Where(File.Exists).ToList();
         if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
 
-        var inputKey = $"{patientName}|{studyDate}|{resumePdfPath}|{imagesPerPage}|{gapPx}|{string.Join(";", validPaths)}";
+        var inputKey = $"{patientName}|{studyDate}|{resumePdfPath}|{imagesPerPage}|{gapPx}|{marginPx}|{string.Join(";", validPaths)}";
         var hashBytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(inputKey));
         var hashStr = Convert.ToHexString(hashBytes).ToLowerInvariant();
         var fileName = $"cache_{hashStr}.pdf";
@@ -87,7 +88,7 @@ public class PdfService
             if (validPaths.Count > 0)
             {
                 imagesPdfPath = Path.Combine(Path.GetTempPath(), $"images_{Guid.NewGuid():N}.pdf");
-                GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx);
+                GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx);
                 tempFiles.Add(imagesPdfPath);
             }
 
@@ -162,11 +163,12 @@ public class PdfService
         }
     }
 
-    private void GenerateImagesPdf(IReadOnlyList<string> imagePaths, string outputPath, int imagesPerPage, int gapPx)
+    private void GenerateImagesPdf(IReadOnlyList<string> imagePaths, string outputPath, int imagesPerPage, int gapPx, int marginPx)
     {
         var questPageSize = PageSizes.A4.Portrait();
         var perPage = Math.Max(1, imagesPerPage);
         var gap = (float)Math.Max(0, gapPx);
+        var margin = (float)Math.Max(0, marginPx);
 
         var document = QuestPDF.Fluent.Document.Create(container =>
         {
@@ -176,8 +178,8 @@ public class PdfService
                 container.Page(page =>
                 {
                     page.Size(questPageSize);
-                    page.MarginHorizontal(10f);
-                    page.MarginVertical(10f);
+                    page.MarginHorizontal(margin);
+                    page.MarginVertical(margin);
 
                     page.Content().Grid(grid =>
                     {
@@ -211,6 +213,7 @@ public class PdfService
         using var fs = File.Create(outputPath);
         document.GeneratePdf(fs);
     }
+
 
 
     private void MergePdfs(string outputPath, string coverPdfPath, string? resumePdfPath, string? imagesPdfPath)
