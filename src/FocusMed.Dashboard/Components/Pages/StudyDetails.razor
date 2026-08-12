@@ -199,12 +199,12 @@ else
                     @if (IsPrinting)
                     {
                         <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                        Impression…
+                        <span>Impression…</span>
                     }
                     else
                     {
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
-                        Imprimer l'étude
+                        <span>Imprimer l'étude</span>
                     }
                 </button>
             </div>
@@ -459,7 +459,6 @@ else
     private bool IsUnlinking;
 
     private string SelectedPrintMode { get; set; } = "BookletA3";
-    private bool ShowPrintDialog;
     private bool IsPrinting;
     private string? SelectedPrinter;
     private string? SelectedProfileName;
@@ -494,8 +493,8 @@ else
     {
         try
         {
-            AvailablePrinters = await DiscoveryService.GetInstalledPrintersAsync();
-            var savedSettings = await SettingsService.GetSettingsAsync();
+            AvailablePrinters = DiscoveryService.GetAvailablePrinters();
+            var savedSettings = await SettingsStore.GetSettingsAsync();
             var savedPrinter = savedSettings?.DefaultPrinterName;
 
             if (!string.IsNullOrEmpty(savedPrinter) && AvailablePrinters.Any(p => p.Name == savedPrinter))
@@ -693,40 +692,7 @@ else
         IsError = false;
     }
 
-    private async Task OpenPrintDialog()
-    {
-        AvailablePrinters = DiscoveryService.GetAvailablePrinters();
 
-        var savedSettings = await SettingsStore.LoadAsync();
-        var savedPrinter = savedSettings?.DefaultPrinterName;
-        var savedProfile = savedSettings?.DefaultProfileName;
-        var savedCopies = savedSettings?.DefaultCopies ?? 1;
-
-        if (!string.IsNullOrEmpty(savedPrinter) && AvailablePrinters.Any(p => p.Name == savedPrinter))
-            SelectedPrinter = savedPrinter;
-        else if (AvailablePrinters.Count > 0)
-            SelectedPrinter = AvailablePrinters[0].Name;
-        else
-            SelectedPrinter = null;
-
-        Copies = savedCopies;
-        SelectedProfileName = null;
-        AvailableProfiles = new();
-        await LoadProfilesForPrinter();
-
-        if (!string.IsNullOrEmpty(savedProfile) && AvailableProfiles.Any(p => p.Name == savedProfile))
-        {
-            SelectedProfileName = savedProfile;
-            OnProfileChanged();
-        }
-
-        ShowPrintDialog = true;
-    }
-
-    private void ClosePrintDialog()
-    {
-        ShowPrintDialog = false;
-    }
 
     private async Task LoadProfilesForPrinter()
     {
