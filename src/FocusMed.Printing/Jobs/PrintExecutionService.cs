@@ -99,35 +99,60 @@ internal sealed class PrintExecutionService(
         else
             delta.Duplexing = Duplexing.OneSided;
 
-        // ── Step 2: booklet stapling (SaddleStitch = center fold + 2 staples) ──
+        // ── Step 2: booklet stapling & folding via PrintSchema & Driver XML ──
         if (request.Profile.IsBooklet)
         {
-            // Log every stapling option the driver exposes so we know what it really supports
             try
             {
-                var caps = queue.GetPrintCapabilities(delta);
-                var supported = caps.StaplingCapability.Select(s => s.ToString()).ToList();
-                logger.LogInformation("Driver stapling capabilities: [{Options}]", string.Join(", ", supported));
+                // Set standard PrintSchema properties first
+                delta.Stapling = Stapling.SaddleStitch;
 
-                if (caps.StaplingCapability.Any(s => s == Stapling.SaddleStitch))
+                // Inspect driver XML capabilities to discover vendor-specific Fold & Staple feature names
+                using var capsStream = queue.GetPrintCapabilitiesAsXml(delta);
+                var capsDoc = new System.Xml.XmlDocument();
+                capsDoc.Load(capsStream);
+
+                var nsmgr = new System.Xml.XmlNamespaceManager(capsDoc.NameTable);
+                nsmgr.AddNamespace("psf", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework");
+                nsmgr.AddNamespace("psk", "http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords");
+
+                var featureNodes = capsDoc.SelectNodes("//psf:Feature", nsmgr);
+                var discoveredFeatures = new List<string>();
+
+                if (featureNodes != null)
                 {
-                    delta.Stapling = Stapling.SaddleStitch;
-                    logger.LogInformation("✓ SaddleStitch (fold + centre staple) set via Windows Print Schema");
+                    foreach (System.Xml.XmlNode feature in featureNodes)
+                    {
+                        string featName = feature.Attributes?["name"]?.Value ?? "";
+                        if (featName.Contains("Staple", StringComparison.OrdinalIgnoreCase) ||
+                            featName.Contains("Fold", StringComparison.OrdinalIgnoreCase) ||
+                            featName.Contains("Booklet", StringComparison.OrdinalIgnoreCase) ||
+                            featName.Contains("Bind", StringComparison.OrdinalIgnoreCase) ||
+                            featName.Contains("Finish", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var optionNames = new List<string>();
+                            var options = feature.SelectNodes("psf:Option", nsmgr);
+                            if (options != null)
+                            {
+                                foreach (System.Xml.XmlNode opt in options)
+                                {
+                                    optionNames.Add(opt.Attributes?["name"]?.Value ?? "");
+                                }
+                            }
+                            discoveredFeatures.Add($"{featName} => [{string.Join(", ", optionNames)}]");
+                        }
+                    }
                 }
-                else
-                {
-                    // Driver doesn't advertise SaddleStitch in standard schema.
-                    // Set it anyway — some Konica PCL drivers accept it even if not listed.
-                    delta.Stapling = Stapling.SaddleStitch;
-                    logger.LogWarning("SaddleStitch NOT in driver capabilities list — forcing it anyway. " +
-                        "If the finisher ignores it, the driver needs private-namespace XML. Supported: [{Options}]",
-                        string.Join(", ", supported));
-                }
+
+                logger.LogInformation("Discovered finisher features for '{Printer}':\n{Features}",
+                    request.PrinterName, string.Join("\n", discoveredFeatures));
+
+                // Now modify delta PrintTicket XML to inject fold/staple/booklet options if missing
+                delta = InjectBookletXml(delta, capsDoc, nsmgr, logger);
             }
             catch (Exception ex)
             {
-                // GetPrintCapabilities can throw on some drivers; fall back to direct assignment
-                logger.LogWarning(ex, "GetPrintCapabilities failed — setting SaddleStitch without capability check");
+                logger.LogWarning(ex, "Failed to scan PrintCapabilities XML or inject booklet XML");
                 delta.Stapling = Stapling.SaddleStitch;
             }
         }
@@ -137,14 +162,10 @@ internal sealed class PrintExecutionService(
         }
 
         // ── Step 3: MergeAndValidatePrintTicket ─────────────────────────────────
-        // CRITICAL for PCL drivers: without this call the ticket is never committed
-        // to driver-level DevMode and finisher settings are silently ignored.
         PrintTicket finalTicket;
         try
         {
             var merged = queue.MergeAndValidatePrintTicket(queue.DefaultPrintTicket, delta);
-            // System.Printing.ValidationResult: .ValidatedPrintTicket = the merged ticket,
-            //                                   .ValidationStatus      = Valid/Conflict enum
             finalTicket = merged.ValidatedPrintTicket;
 
             logger.LogInformation(
@@ -154,19 +175,9 @@ internal sealed class PrintExecutionService(
                 finalTicket.Duplexing,
                 finalTicket.Stapling,
                 finalTicket.PageMediaSize?.PageMediaSizeName);
-
-            // Detect if the driver stripped our SaddleStitch (conflict resolution)
-            if (request.Profile.IsBooklet && finalTicket.Stapling != Stapling.SaddleStitch)
-            {
-                logger.LogWarning(
-                    "Driver overrode SaddleStitch -> {Actual}. The finisher may need to be configured " +
-                    "through the driver UI or a private-namespace PrintTicket fragment.", finalTicket.Stapling);
-            }
         }
         catch (Exception ex)
         {
-            // MergeAndValidate can fail on some host systems (no XPS/spool service access).
-            // Fall back to the unvalidated ticket — better than nothing.
             logger.LogWarning(ex, "MergeAndValidatePrintTicket failed — using unvalidated delta ticket");
             finalTicket = delta;
         }
@@ -230,6 +241,91 @@ internal sealed class PrintExecutionService(
         };
     }
 
+
+    private static PrintTicket InjectBookletXml(PrintTicket ticket, System.Xml.XmlDocument capsDoc, System.Xml.XmlNamespaceManager capsNsmgr, ILogger logger)
+    {
+        try
+        {
+            using var stream = ticket.GetXmlStream();
+            var doc = new System.Xml.XmlDocument();
+            doc.Load(stream);
+
+            var nsmgr = new System.Xml.XmlNamespaceManager(doc.NameTable);
+            nsmgr.AddNamespace("psf", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework");
+            nsmgr.AddNamespace("psk", "http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords");
+
+            // Look through capsDoc for any Feature related to Fold/Staple/Booklet
+            var featureNodes = capsDoc.SelectNodes("//psf:Feature", capsNsmgr);
+            if (featureNodes != null)
+            {
+                foreach (System.Xml.XmlNode featureNode in featureNodes)
+                {
+                    string featName = featureNode.Attributes?["name"]?.Value ?? "";
+                    if (!featName.Contains("Staple", StringComparison.OrdinalIgnoreCase) &&
+                        !featName.Contains("Fold", StringComparison.OrdinalIgnoreCase) &&
+                        !featName.Contains("Booklet", StringComparison.OrdinalIgnoreCase) &&
+                        !featName.Contains("Bind", StringComparison.OrdinalIgnoreCase) &&
+                        !featName.Contains("Finish", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    // Find options matching booklet / fold / staple
+                    var options = featureNode.SelectNodes("psf:Option", capsNsmgr);
+                    if (options == null) continue;
+
+                    string? selectedOption = null;
+                    foreach (System.Xml.XmlNode opt in options)
+                    {
+                        string optName = opt.Attributes?["name"]?.Value ?? "";
+                        if (optName.Contains("Saddle", StringComparison.OrdinalIgnoreCase) ||
+                            optName.Contains("Booklet", StringComparison.OrdinalIgnoreCase) ||
+                            optName.Contains("CenterFold", StringComparison.OrdinalIgnoreCase) ||
+                            optName.Contains("HalfFold", StringComparison.OrdinalIgnoreCase) ||
+                            optName.Contains("Fold", StringComparison.OrdinalIgnoreCase) ||
+                            optName.Contains("CenterStaple", StringComparison.OrdinalIgnoreCase) ||
+                            optName.Contains("2Position", StringComparison.OrdinalIgnoreCase))
+                        {
+                            selectedOption = optName;
+                            break;
+                        }
+                    }
+
+                    if (selectedOption != null)
+                    {
+                        logger.LogInformation("Injecting XML feature '{Feature}' = '{Option}' into PrintTicket", featName, selectedOption);
+
+                        // Remove existing Feature node if present in ticket doc
+                        var existing = doc.SelectSingleNode($"//psf:Feature[@name='{featName}']", nsmgr);
+                        if (existing != null)
+                        {
+                            existing.ParentNode?.RemoveChild(existing);
+                        }
+
+                        // Create new Feature element
+                        var featElem = doc.CreateElement("psf", "Feature", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework");
+                        featElem.SetAttribute("name", featName);
+
+                        var optElem = doc.CreateElement("psf", "Option", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework");
+                        optElem.SetAttribute("name", selectedOption);
+                        featElem.AppendChild(optElem);
+
+                        doc.DocumentElement?.AppendChild(featElem);
+                    }
+                }
+            }
+
+            using var outStream = new MemoryStream();
+            doc.Save(outStream);
+            outStream.Position = 0;
+            return new PrintTicket(outStream);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to inject XML booklet features into PrintTicket");
+            return ticket;
+        }
+    }
 
     private static T RunInStaThread<T>(Func<T> action)
     {
