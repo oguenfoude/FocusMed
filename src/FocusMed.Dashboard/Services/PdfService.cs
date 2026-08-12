@@ -42,12 +42,21 @@ public class PdfService
         var validPaths = imagePaths.Where(File.Exists).ToList();
         if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
 
-        var fileName = $"{Guid.NewGuid():N}.pdf";
+        var inputKey = $"{patientName}|{studyDate}|{resumePdfPath}|{string.Join(";", validPaths)}";
+        var hashBytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(inputKey));
+        var hashStr = Convert.ToHexString(hashBytes).ToLowerInvariant();
+        var fileName = $"cache_{hashStr}.pdf";
         var finalPath = Path.Combine(_pdfCacheDir, fileName);
+
+        if (File.Exists(finalPath))
+        {
+            return $"/pdf-cache/{fileName}";
+        }
 
         var tempFiles = new List<string>();
         try
         {
+
             // Step 1: Create modified cover.docx with replaced placeholders
             var coverDocxPath = CreateModifiedCoverDocx(patientName, studyDate, tempFiles);
             if (coverDocxPath == null) return "";
