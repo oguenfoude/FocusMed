@@ -155,7 +155,7 @@ else
                 {
                     <div class="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5">
                         <label class="text-xs font-bold text-slate-600">Imprimante:</label>
-                        <select @bind="SelectedPrinter"
+                        <select @bind="SelectedPrinter" @bind:after="OnPrinterChanged"
                                 class="px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 max-w-[150px] truncate">
                             @foreach (var printer in AvailablePrinters)
                             {
@@ -189,7 +189,7 @@ else
                 </div>
 
                 <!-- Direct Print Action Button -->
-                <button @onclick="PrintStudy" disabled="@(IsPrinting || string.IsNullOrEmpty(SelectedPrinter))"
+                <button @onclick="PrintStudy" disabled="@(IsPrinting || IsRegeneratingPdf || string.IsNullOrEmpty(SelectedPrinter) || string.IsNullOrEmpty(PdfPreviewUrl))"
                         class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-brand-600 to-brand-700 hover:from-brand-700 hover:to-brand-800 border border-brand-700 transition-all disabled:opacity-50 shadow-md shadow-brand-500/20 active:scale-[0.98]">
                     @if (IsPrinting)
                     {
@@ -729,6 +729,20 @@ else
         }
     }
 
+    private async Task OnPrinterChanged()
+    {
+        if (string.IsNullOrEmpty(SelectedPrinter)) return;
+        try
+        {
+            var current = await SettingsStore.LoadAsync();
+            await SettingsStore.SaveAsync(current with { DefaultPrinterName = SelectedPrinter });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not persist printer selection");
+        }
+    }
+
     private async Task PrintStudy()
     {
         if (IsPrinting || string.IsNullOrEmpty(SelectedPrinter) || Study == null) return;
@@ -738,6 +752,7 @@ else
         try
         {
             bool isBooklet = SelectedPrintMode == "BookletA3" || SelectedPrintMode == "BookletA4";
+            bool isBookletA3 = SelectedPrintMode == "BookletA3";
             string paperSize = SelectedPrintMode == "BookletA4" || SelectedPrintMode == "StandardA4" ? "A4" : "A3";
 
             var profile = new FocusMed.Printing.Profiles.PrintProfile
@@ -746,7 +761,10 @@ else
                 Description = SelectedPrintMode,
                 IsBooklet = isBooklet,
                 PaperSizeName = paperSize,
-                RequiresDuplex = isBooklet
+                RequiresDuplex = isBooklet,
+                // A3 Booklet: fold on SHORT edge (297mm) = TwoSidedShortEdge → correct landscape booklet binding
+                // A4 Booklet: fold on SHORT edge (210mm) = TwoSidedShortEdge → correct portrait booklet binding
+                UseDuplexShortEdge = isBooklet
             };
 
 
