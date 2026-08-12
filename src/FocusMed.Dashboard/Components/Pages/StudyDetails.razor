@@ -3,7 +3,7 @@
 @implements IDisposable
 @using FocusMed.Dicom
 @using FocusMed.Dashboard.Services
-@inject FocusMedDbContext DbContext
+@inject IDbContextFactory<FocusMedDbContext> DbFactory
 @inject PngExtractionService PngExtractionService
 @inject StudyService StudyService
 @inject PdfService PdfService
@@ -505,7 +505,8 @@ else
 
     private async Task LoadStudyAsync()
     {
-        Study = await DbContext.Studies
+        using var db = await DbFactory.CreateDbContextAsync();
+        Study = await db.Studies
             .Include(s => s.Patient)
             .Include(s => s.Series).ThenInclude(s => s.Images)
             .AsSplitQuery()
