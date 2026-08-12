@@ -264,8 +264,10 @@ else
     private bool IsProcessing;
     private bool HasActiveFilters => SelectedDate.HasValue || !string.IsNullOrWhiteSpace(SearchTerm) || !string.IsNullOrEmpty(SelectedModality) || !string.IsNullOrEmpty(SelectedStatus);
 
+    private List<string> AvailableModalities = [];
     private string StatusMessage = "";
     private bool IsError = false;
+
 
     protected override async Task OnInitializedAsync()
     {

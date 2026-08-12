@@ -339,12 +339,12 @@ public class DicomUpsertService
                 db.Patients.Add(patient);
             }
 
-            var today = DateTime.UtcNow.Date;
             var study = db.Studies
                 .Include(s => s.Patient)
                 .Where(s => s.PatientId == patient.Id && s.Status == StudyStatus.Receiving)
                 .OrderByDescending(s => s.LastUpdatedAt)
-                .FirstOrDefault(s => !s.StudyDate.HasValue || s.StudyDate.Value.Date == today || s.LastUpdatedAt >= DateTime.UtcNow.AddHours(-2));
+                .FirstOrDefault(s => s.LastUpdatedAt >= DateTime.UtcNow.AddMinutes(-2));
+
 
 
 
