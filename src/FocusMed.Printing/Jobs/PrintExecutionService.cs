@@ -100,11 +100,33 @@ internal sealed class PrintExecutionService(
         {
             try
             {
-                ticket.Stapling = Stapling.SaddleStitch;
+                var caps = queue.GetPrintCapabilities(ticket);
+                var staplingCaps = caps.StaplingCapability;
+
+                if (staplingCaps.Contains(Stapling.SaddleStitch))
+                {
+                    ticket.Stapling = Stapling.SaddleStitch;
+                    logger.LogInformation("Stapling set to SaddleStitch");
+                }
+                else if (staplingCaps.Contains(Stapling.StapleDualLeft))
+                {
+                    ticket.Stapling = Stapling.StapleDualLeft;
+                    logger.LogInformation("Stapling set to StapleDualLeft (2 staples on binding edge)");
+                }
+                else if (staplingCaps.Contains(Stapling.StapleDualTop))
+                {
+                    ticket.Stapling = Stapling.StapleDualTop;
+                    logger.LogInformation("Stapling set to StapleDualTop (2 staples on binding edge)");
+                }
+                else
+                {
+                    ticket.Stapling = Stapling.None;
+                    logger.LogInformation("Driver does not support Booklet/Dual stapling; Duplex short-edge fold active");
+                }
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Could not set SaddleStitch stapling on print ticket");
+                logger.LogWarning(ex, "Could not query or set stapling on print ticket");
             }
         }
 

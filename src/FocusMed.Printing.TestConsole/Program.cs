@@ -72,9 +72,98 @@ foreach (var printer in installedPrinters)
     }
 }
 
-// 3. Imposition & Pipeline Health Check
+// 3. Deep Printer Capabilities & PrintTicket XML Inspector (Zero Paper Cost)
 Console.WriteLine("\n================================================================================");
-Console.WriteLine("[3/3] PRINTING PIPELINE HEALTH CHECK:");
+Console.WriteLine("[3/4] DEEP DRIVER XML CAPABILITY & TICKET INSPECTOR:");
+Console.WriteLine("================================================================================");
+
+foreach (var printer in installedPrinters.Where(p => p.Name.Contains("KONICA", StringComparison.OrdinalIgnoreCase) || p.Name.Contains("C250i", StringComparison.OrdinalIgnoreCase) || p.Name.Contains("FocusMed", StringComparison.OrdinalIgnoreCase)))
+{
+    Console.WriteLine($"\n>>> DEEP XML INSPECTION FOR: '{printer.Name}'");
+    Console.WriteLine(new string('-', 80));
+
+    try
+    {
+        using var printServer = new LocalPrintServer();
+        using var queue = printServer.GetPrintQueue(printer.Name);
+
+        // A. Dump all driver XML features & options
+        using var capsStream = queue.GetPrintCapabilitiesAsXml();
+        var capsDoc = new System.Xml.XmlDocument();
+        capsDoc.Load(capsStream);
+
+        var nsmgr = new System.Xml.XmlNamespaceManager(capsDoc.NameTable);
+        nsmgr.AddNamespace("psf", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework");
+        nsmgr.AddNamespace("psk", "http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords");
+
+        var featureNodes = capsDoc.SelectNodes("//psf:Feature", nsmgr);
+        Console.WriteLine($"  [ALL XML FEATURES DISCOVERED ({featureNodes?.Count ?? 0} total)]:");
+
+        if (featureNodes != null)
+        {
+            foreach (System.Xml.XmlNode feat in featureNodes)
+            {
+                string featName = feat.Attributes?["name"]?.Value ?? "Unnamed";
+                var options = feat.SelectNodes("psf:Option", nsmgr);
+                var optionList = new List<string>();
+                if (options != null)
+                {
+                    foreach (System.Xml.XmlNode opt in options)
+                    {
+                        optionList.Add(opt.Attributes?["name"]?.Value ?? "");
+                    }
+                }
+                Console.WriteLine($"    • Feature: {featName}");
+                Console.WriteLine($"      Options ({optionList.Count}): [{string.Join(", ", optionList.Take(12))}{(optionList.Count > 12 ? "..." : "")}]");
+            }
+        }
+
+        // B. Dump UserPrintTicket active XML features
+        var userTicket = queue.UserPrintTicket ?? queue.DefaultPrintTicket;
+        if (userTicket != null)
+        {
+            using var ticketStream = userTicket.GetXmlStream();
+            var ticketDoc = new System.Xml.XmlDocument();
+            ticketDoc.Load(ticketStream);
+
+            var ticketFeatures = ticketDoc.SelectNodes("//psf:Feature", nsmgr);
+            Console.WriteLine($"\n  [USER PRINT TICKET ACTIVE FEATURES ({ticketFeatures?.Count ?? 0} active)]:");
+            if (ticketFeatures != null)
+            {
+                foreach (System.Xml.XmlNode feat in ticketFeatures)
+                {
+                    string featName = feat.Attributes?["name"]?.Value ?? "";
+                    var opt = feat.SelectSingleNode("psf:Option", nsmgr);
+                    string optName = opt?.Attributes?["name"]?.Value ?? "None";
+                    Console.WriteLine($"    • {featName} = {optName}");
+                }
+            }
+        }
+
+        // C. Test MergeAndValidatePrintTicket with Booklet A3 delta
+        var delta = queue.DefaultPrintTicket;
+        delta.PageMediaSize = new PageMediaSize(PageMediaSizeName.ISOA3);
+        delta.PageOrientation = PageOrientation.Landscape;
+        delta.Duplexing = Duplexing.TwoSidedShortEdge;
+        delta.Stapling = Stapling.SaddleStitch;
+
+        var valResult = queue.MergeAndValidatePrintTicket(userTicket ?? queue.DefaultPrintTicket, delta);
+        Console.WriteLine($"\n  [MERGE & VALIDATE TEST FOR BOOKLET A3]:");
+        Console.WriteLine($"    • ConflictStatus   : {valResult.ConflictStatus}");
+        Console.WriteLine($"    • Result MediaSize : {valResult.ValidatedPrintTicket.PageMediaSize?.PageMediaSizeName}");
+        Console.WriteLine($"    • Result Orient    : {valResult.ValidatedPrintTicket.PageOrientation}");
+        Console.WriteLine($"    • Result Duplex    : {valResult.ValidatedPrintTicket.Duplexing}");
+        Console.WriteLine($"    • Result Stapling  : {valResult.ValidatedPrintTicket.Stapling}");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  [ERROR DURING XML INSPECTION]: {ex.Message}");
+    }
+}
+
+// 4. Imposition & Pipeline Health Check
+Console.WriteLine("\n================================================================================");
+Console.WriteLine("[4/4] PRINTING PIPELINE HEALTH CHECK:");
 Console.WriteLine("================================================================================");
 
 Console.WriteLine("  • Discovery Service      : OPERATIONAL");
@@ -86,6 +175,7 @@ Console.WriteLine("  • Print Execution Engine : OPERATIONAL (300 DPI SkiaSharp
 Console.WriteLine("\n================================================================================");
 Console.WriteLine("           FOCUSMED PRINTING SYSTEM STATUS: ALL SYSTEMS OPERATIONAL             ");
 Console.WriteLine("================================================================================");
+
 
 
 
