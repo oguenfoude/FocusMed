@@ -99,6 +99,18 @@ internal sealed class PrintExecutionService(
         else
             ticket.Duplexing = Duplexing.OneSided;
 
+        if (request.Profile.IsBooklet)
+        {
+            try
+            {
+                ticket.Stapling = Stapling.SaddleStitch;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not set SaddleStitch stapling on print ticket");
+            }
+        }
+
         ticket.CopyCount = request.Copies;
 
         // Build XPS document
