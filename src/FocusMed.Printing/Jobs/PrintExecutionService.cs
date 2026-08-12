@@ -79,107 +79,33 @@ internal sealed class PrintExecutionService(
         // Setup print queue
         using var printServer = new LocalPrintServer();
         using var queue = printServer.GetPrintQueue(request.PrinterName);
+        var ticket = queue.UserPrintTicket ?? queue.DefaultPrintTicket;
 
-        // ── Step 1: build our desired delta ticket ──────────────────────────────
-        // Start from the driver's own default so vendor-specific fields are intact
-        var delta = queue.DefaultPrintTicket;
-
-        delta.PageMediaSize = isA4
+        ticket.PageMediaSize = isA4
             ? new PageMediaSize(PageMediaSizeName.ISOA4)
             : new PageMediaSize(PageMediaSizeName.ISOA3);
 
-        delta.PageOrientation = isLandscape ? PageOrientation.Landscape : PageOrientation.Portrait;
-        delta.InputBin        = InputBin.AutoSelect;
-        delta.CopyCount       = request.Copies;
+        ticket.PageOrientation = isLandscape ? PageOrientation.Landscape : PageOrientation.Portrait;
+        ticket.InputBin = InputBin.AutoSelect;
+        ticket.CopyCount = request.Copies;
 
         if (request.Profile.RequiresDuplex)
-            delta.Duplexing = request.Profile.UseDuplexShortEdge
-                ? Duplexing.TwoSidedShortEdge   // A3/A4 Booklet: fold on short axis
+            ticket.Duplexing = request.Profile.UseDuplexShortEdge
+                ? Duplexing.TwoSidedShortEdge
                 : Duplexing.TwoSidedLongEdge;
         else
-            delta.Duplexing = Duplexing.OneSided;
+            ticket.Duplexing = Duplexing.OneSided;
 
-        // ── Step 2: booklet stapling & folding via PrintSchema & Driver XML ──
         if (request.Profile.IsBooklet)
         {
             try
             {
-                // Set standard PrintSchema properties first
-                delta.Stapling = Stapling.SaddleStitch;
-
-                // Inspect driver XML capabilities to discover vendor-specific Fold & Staple feature names
-                using var capsStream = queue.GetPrintCapabilitiesAsXml(delta);
-                var capsDoc = new System.Xml.XmlDocument();
-                capsDoc.Load(capsStream);
-
-                var nsmgr = new System.Xml.XmlNamespaceManager(capsDoc.NameTable);
-                nsmgr.AddNamespace("psf", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework");
-                nsmgr.AddNamespace("psk", "http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords");
-
-                var featureNodes = capsDoc.SelectNodes("//psf:Feature", nsmgr);
-                var discoveredFeatures = new List<string>();
-
-                if (featureNodes != null)
-                {
-                    foreach (System.Xml.XmlNode feature in featureNodes)
-                    {
-                        string featName = feature.Attributes?["name"]?.Value ?? "";
-                        if (featName.Contains("Staple", StringComparison.OrdinalIgnoreCase) ||
-                            featName.Contains("Fold", StringComparison.OrdinalIgnoreCase) ||
-                            featName.Contains("Booklet", StringComparison.OrdinalIgnoreCase) ||
-                            featName.Contains("Bind", StringComparison.OrdinalIgnoreCase) ||
-                            featName.Contains("Finish", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var optionNames = new List<string>();
-                            var options = feature.SelectNodes("psf:Option", nsmgr);
-                            if (options != null)
-                            {
-                                foreach (System.Xml.XmlNode opt in options)
-                                {
-                                    optionNames.Add(opt.Attributes?["name"]?.Value ?? "");
-                                }
-                            }
-                            discoveredFeatures.Add($"{featName} => [{string.Join(", ", optionNames)}]");
-                        }
-                    }
-                }
-
-                logger.LogInformation("Discovered finisher features for '{Printer}':\n{Features}",
-                    request.PrinterName, string.Join("\n", discoveredFeatures));
-
-                // Now modify delta PrintTicket XML to inject fold/staple/booklet options if missing
-                delta = InjectBookletXml(delta, capsDoc, nsmgr, logger);
+                ticket.Stapling = Stapling.SaddleStitch;
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Failed to scan PrintCapabilities XML or inject booklet XML");
-                delta.Stapling = Stapling.SaddleStitch;
+                logger.LogWarning(ex, "Could not set SaddleStitch stapling on print ticket");
             }
-        }
-        else
-        {
-            delta.Stapling = Stapling.None;
-        }
-
-        // ── Step 3: MergeAndValidatePrintTicket ─────────────────────────────────
-        PrintTicket finalTicket;
-        try
-        {
-            var merged = queue.MergeAndValidatePrintTicket(queue.DefaultPrintTicket, delta);
-            finalTicket = merged.ValidatedPrintTicket;
-
-            logger.LogInformation(
-                "Ticket merge/validate: conflict={Status} | Orient={Orient} | Duplex={Duplex} | Staple={Staple} | Size={Size}",
-                merged.ConflictStatus,
-                finalTicket.PageOrientation,
-                finalTicket.Duplexing,
-                finalTicket.Stapling,
-                finalTicket.PageMediaSize?.PageMediaSizeName);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "MergeAndValidatePrintTicket failed — using unvalidated delta ticket");
-            finalTicket = delta;
         }
 
         // ── Step 4: build XPS document ──────────────────────────────────────────
@@ -221,8 +147,8 @@ internal sealed class PrintExecutionService(
             fixedDoc.Pages.Add(pc);
         }
 
-        // ── Step 5: send to printer using the validated ticket ───────────────────
-        PrintQueue.CreateXpsDocumentWriter(queue).Write(fixedDoc, finalTicket);
+        // ── Step 5: send to printer using the UserPrintTicket ───────────────────
+        PrintQueue.CreateXpsDocumentWriter(queue).Write(fixedDoc, ticket);
 
         logger.LogInformation("Sent: {Pages} pages {W}x{H}mm -> '{Printer}'",
             pageCount, mmW, mmH, request.PrinterName);
@@ -239,92 +165,6 @@ internal sealed class PrintExecutionService(
             ImposedPdfPath   = request.Profile.IsBooklet ? pdfPath : null,
             DetectedBookletPaper = request.Profile.IsBooklet ? resolvedPaperSize : null
         };
-    }
-
-
-    private static PrintTicket InjectBookletXml(PrintTicket ticket, System.Xml.XmlDocument capsDoc, System.Xml.XmlNamespaceManager capsNsmgr, ILogger logger)
-    {
-        try
-        {
-            using var stream = ticket.GetXmlStream();
-            var doc = new System.Xml.XmlDocument();
-            doc.Load(stream);
-
-            var nsmgr = new System.Xml.XmlNamespaceManager(doc.NameTable);
-            nsmgr.AddNamespace("psf", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework");
-            nsmgr.AddNamespace("psk", "http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords");
-
-            // Look through capsDoc for any Feature related to Fold/Staple/Booklet
-            var featureNodes = capsDoc.SelectNodes("//psf:Feature", capsNsmgr);
-            if (featureNodes != null)
-            {
-                foreach (System.Xml.XmlNode featureNode in featureNodes)
-                {
-                    string featName = featureNode.Attributes?["name"]?.Value ?? "";
-                    if (!featName.Contains("Staple", StringComparison.OrdinalIgnoreCase) &&
-                        !featName.Contains("Fold", StringComparison.OrdinalIgnoreCase) &&
-                        !featName.Contains("Booklet", StringComparison.OrdinalIgnoreCase) &&
-                        !featName.Contains("Bind", StringComparison.OrdinalIgnoreCase) &&
-                        !featName.Contains("Finish", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    // Find options matching booklet / fold / staple
-                    var options = featureNode.SelectNodes("psf:Option", capsNsmgr);
-                    if (options == null) continue;
-
-                    string? selectedOption = null;
-                    foreach (System.Xml.XmlNode opt in options)
-                    {
-                        string optName = opt.Attributes?["name"]?.Value ?? "";
-                        if (optName.Contains("Saddle", StringComparison.OrdinalIgnoreCase) ||
-                            optName.Contains("Booklet", StringComparison.OrdinalIgnoreCase) ||
-                            optName.Contains("CenterFold", StringComparison.OrdinalIgnoreCase) ||
-                            optName.Contains("HalfFold", StringComparison.OrdinalIgnoreCase) ||
-                            optName.Contains("Fold", StringComparison.OrdinalIgnoreCase) ||
-                            optName.Contains("CenterStaple", StringComparison.OrdinalIgnoreCase) ||
-                            optName.Contains("2Position", StringComparison.OrdinalIgnoreCase))
-                        {
-                            selectedOption = optName;
-                            break;
-                        }
-                    }
-
-                    if (selectedOption != null)
-                    {
-                        logger.LogInformation("Injecting XML feature '{Feature}' = '{Option}' into PrintTicket", featName, selectedOption);
-
-                        // Remove existing Feature node if present in ticket doc
-                        var existing = doc.SelectSingleNode($"//psf:Feature[@name='{featName}']", nsmgr);
-                        if (existing != null)
-                        {
-                            existing.ParentNode?.RemoveChild(existing);
-                        }
-
-                        // Create new Feature element
-                        var featElem = doc.CreateElement("psf", "Feature", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework");
-                        featElem.SetAttribute("name", featName);
-
-                        var optElem = doc.CreateElement("psf", "Option", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework");
-                        optElem.SetAttribute("name", selectedOption);
-                        featElem.AppendChild(optElem);
-
-                        doc.DocumentElement?.AppendChild(featElem);
-                    }
-                }
-            }
-
-            using var outStream = new MemoryStream();
-            doc.Save(outStream);
-            outStream.Position = 0;
-            return new PrintTicket(outStream);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to inject XML booklet features into PrintTicket");
-            return ticket;
-        }
     }
 
     private static T RunInStaThread<T>(Func<T> action)
