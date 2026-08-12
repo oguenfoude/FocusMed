@@ -13,10 +13,12 @@ public class PdfService
     private readonly string _pdfCacheDir;
     private readonly string _coverTemplatePath;
     private readonly ILogger<PdfService> _logger;
+    private readonly FocusMed.Printing.Imposition.IBookletImpositionService _bookletService;
 
-    public PdfService(ILogger<PdfService> logger, IWebHostEnvironment env)
+    public PdfService(ILogger<PdfService> logger, IWebHostEnvironment env, FocusMed.Printing.Imposition.IBookletImpositionService bookletService)
     {
         _logger = logger;
+        _bookletService = bookletService;
 
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
@@ -31,7 +33,9 @@ public class PdfService
         string studyDate,
         string studyDescription,
         IReadOnlyList<string> imagePaths,
-        string? resumePdfPath = null)
+        string? resumePdfPath = null,
+        string pageSize = "A4",
+        bool isBooklet = false)
     {
         CleanupOldPdfs();
 
@@ -67,7 +71,7 @@ public class PdfService
                 }
             }
 
-            // Step 4: Generate image pages with QuestPDF → images.pdf
+            // Step 4: Generate image pages with QuestPDF → images.pdf (always A4 Portrait)
             string? imagesPdfPath = null;
             if (validPaths.Count > 0)
             {
@@ -76,8 +80,13 @@ public class PdfService
                 tempFiles.Add(imagesPdfPath);
             }
 
-            // Step 5: Merge all PDFs using PdfSharpCore
-            MergePdfs(finalPath, coverPdfPath, resumeFullPath, imagesPdfPath);
+            // Step 5: Merge all A4 pages
+            var tempMergedA4 = Path.Combine(Path.GetTempPath(), $"merged_a4_{Guid.NewGuid():N}.pdf");
+            tempFiles.Add(tempMergedA4);
+            MergePdfs(tempMergedA4, coverPdfPath, resumeFullPath, imagesPdfPath);
+
+            // Step 6: Save clean Master A4 Portrait PDF file directly
+            File.Copy(tempMergedA4, finalPath, overwrite: true);
 
             return $"/pdf-cache/{fileName}";
         }
@@ -144,6 +153,8 @@ public class PdfService
 
     private void GenerateImagesPdf(IReadOnlyList<string> imagePaths, string outputPath)
     {
+        var questPageSize = PageSizes.A4.Portrait();
+
         var document = QuestPDF.Fluent.Document.Create(container =>
         {
             foreach (var imgPath in imagePaths)
@@ -153,7 +164,7 @@ public class PdfService
                     var imgBytes = File.ReadAllBytes(imgPath);
                     container.Page(page =>
                     {
-                        page.Size(PageSizes.A4.Portrait());
+                        page.Size(questPageSize);
                         page.MarginHorizontal(15f);
                         page.MarginVertical(15f);
                         page.Content()
@@ -207,6 +218,21 @@ public class PdfService
             {
                 foreach (var page in doc.Pages)
                     outputDocument.AddPage(page);
+            }
+        }
+
+        // Pad with blank pages so total page count is a multiple of 4 (e.g. 4 pages for 1 A3 sheet),
+        // ensuring Page 4 (the outer back cover) remains completely EMPTY/BLANK.
+        int currentPages = outputDocument.Pages.Count;
+        int remainder = currentPages % 4;
+        if (remainder != 0)
+        {
+            int needed = 4 - remainder;
+            for (int i = 0; i < needed; i++)
+            {
+                var blankPage = outputDocument.AddPage();
+                blankPage.Width = PdfSharpCore.Drawing.XUnit.FromMillimeter(210);
+                blankPage.Height = PdfSharpCore.Drawing.XUnit.FromMillimeter(297);
             }
         }
 

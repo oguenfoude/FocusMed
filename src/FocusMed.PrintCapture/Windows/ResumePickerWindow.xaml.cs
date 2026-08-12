@@ -7,7 +7,7 @@ namespace FocusMed.PrintCapture.Windows;
 
 public partial class ResumePickerWindow : Window
 {
-    private readonly DatabaseService? _databaseService;
+    private readonly DatabaseService _databaseService;
     private readonly string _pdfPath = "";
     private List<StudyItem> _studies = new();
 
@@ -21,8 +21,6 @@ public partial class ResumePickerWindow : Window
 
     private async Task LoadStudiesAsync()
     {
-        if (_databaseService == null) return;
-
         try
         {
             StatusText.Text = "Chargement...";
@@ -59,18 +57,17 @@ public partial class ResumePickerWindow : Window
 
     private async void ConfirmButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_databaseService == null) return;
         if (StudiesGrid.SelectedItem is not StudyItem selected) return;
 
         if (string.IsNullOrEmpty(_pdfPath) || !File.Exists(_pdfPath))
         {
-            MessageBox.Show("Aucun document a associer.", "FocusMed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            System.Windows.MessageBox.Show("Aucun document a associer.", "FocusMed", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
         if (selected.HasResume)
         {
-            var result = MessageBox.Show(
+            var result = System.Windows.MessageBox.Show(
                 $"Cette etude a deja un resume associe.\n\nVoulez-vous le remplacer par celui-ci ?\n\n(L'ancien fichier PDF sera supprime definitivement.)",
                 "FocusMed",
                 MessageBoxButton.YesNo,
@@ -92,7 +89,7 @@ public partial class ResumePickerWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Erreur de copie: {ex.Message}", "FocusMed", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show($"Erreur de copie: {ex.Message}", "FocusMed", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
 

@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\FocusMed.Data\FocusMed.Data.csproj" />
     <ProjectReference Include="..\FocusMed.Dicom\FocusMed.Dicom.csproj" />
+    <ProjectReference Include="..\FocusMed.Printing\FocusMed.Printing.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -13,7 +14,7 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>

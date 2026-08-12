@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using FocusMed.Data;
 using FocusMed.PrintCapture.Services;
@@ -9,11 +11,12 @@ using Serilog;
 
 namespace FocusMed.PrintCapture;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     private ServiceProvider? _serviceProvider;
     private PrintJobMonitorService? _monitor;
     private DatabaseService? _databaseService;
+    private System.Windows.Forms.NotifyIcon? _trayIcon;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -91,7 +94,9 @@ public partial class App : Application
             _monitor.OnNewResumePdf += OnNewResumePdf;
             _monitor.Start();
 
-            Log.Information("Status:    Running (background)");
+            SetupTrayIcon();
+
+            Log.Information("Status:    Running (system tray)");
             Log.Information("===========================================");
             Log.Information("Print any document to '{Printer}' to capture it.", printerName);
             Log.Information("===========================================");
@@ -103,9 +108,73 @@ public partial class App : Application
         }
     }
 
+    private void SetupTrayIcon()
+    {
+        var iconStream = Assembly.GetExecutingAssembly()
+            .GetManifestResourceStream("FocusMed.PrintCapture.icon.ico");
+
+        var icon = iconStream != null
+            ? new System.Drawing.Icon(iconStream)
+            : System.Drawing.SystemIcons.Application;
+
+        var contextMenu = new System.Windows.Forms.ContextMenuStrip();
+
+        var openItem = new System.Windows.Forms.ToolStripMenuItem("Ouvrir le Dashboard");
+        openItem.Click += (_, _) => OpenDashboard();
+        contextMenu.Items.Add(openItem);
+
+        contextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+
+        var quitItem = new System.Windows.Forms.ToolStripMenuItem("Quitter");
+        quitItem.Click += (_, _) =>
+        {
+            Log.Information("User quit from tray menu");
+            Shutdown();
+        };
+        contextMenu.Items.Add(quitItem);
+
+        _trayIcon = new System.Windows.Forms.NotifyIcon
+        {
+            Icon = icon,
+            Text = "FocusMed PrintCapture",
+            ContextMenuStrip = contextMenu,
+            Visible = true
+        };
+
+        _trayIcon.DoubleClick += (_, _) => OpenDashboard();
+
+        _trayIcon.ShowBalloonTip(
+            3000,
+            "FocusMed PrintCapture",
+            "En attente d'impressions...",
+            System.Windows.Forms.ToolTipIcon.Info);
+    }
+
+    private void OpenDashboard()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "http://localhost:5000",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Could not open dashboard");
+        }
+    }
+
     private void OnNewResumePdf(string pdfPath)
     {
         Log.Information("Print detected, opening popup: {Path}", pdfPath);
+
+        _trayIcon?.ShowBalloonTip(
+            5000,
+            "FocusMed — Document imprimé",
+            "Un document a été capturé. Sélectionnez une étude.",
+            System.Windows.Forms.ToolTipIcon.Info);
 
         Dispatcher.BeginInvoke(() =>
         {
@@ -120,6 +189,13 @@ public partial class App : Application
         Log.Information("Shutting down...");
         _monitor?.Dispose();
         _serviceProvider?.Dispose();
+
+        if (_trayIcon != null)
+        {
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+        }
+
         Log.CloseAndFlush();
         base.OnExit(e);
     }

@@ -11,7 +11,7 @@ public class PrintJobMonitorService : IDisposable
     private readonly string _watchFolder;
     private readonly string _resumesFolder;
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private Timer? _pollTimer;
+    private System.Threading.Timer? _pollTimer;
     private long _lastSeenSize = -1;
     private DateTime _lastChangeTime = DateTime.MinValue;
 
@@ -29,7 +29,7 @@ public class PrintJobMonitorService : IDisposable
         Directory.CreateDirectory(_watchFolder);
         Directory.CreateDirectory(_resumesFolder);
 
-        _pollTimer = new Timer(_ => _ = PollAsync(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(200));
+        _pollTimer = new System.Threading.Timer(_ => _ = PollAsync(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(200));
 
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
@@ -148,7 +148,7 @@ public class PrintJobMonitorService : IDisposable
         if (!IsPdfFile(incomingPath))
         {
             _logger.LogWarning("Invalid PDF header, skipping: incoming.pdf");
-            TryZeroFile(incomingPath);
+            await TryZeroFileAsync(incomingPath);
             return null;
         }
 
@@ -173,11 +173,11 @@ public class PrintJobMonitorService : IDisposable
         sw.Stop();
         _logger.LogInformation("Captured: {File} ({Size:N0} bytes in {Ms}ms)", destFileName, fileInfo.Length, sw.ElapsedMilliseconds);
 
-        TryZeroFile(incomingPath);
+        await TryZeroFileAsync(incomingPath);
         return destPath;
     }
 
-    private void TryZeroFile(string path)
+    private async Task TryZeroFileAsync(string path)
     {
         for (var i = 0; i < 5; i++)
         {
@@ -187,8 +187,8 @@ public class PrintJobMonitorService : IDisposable
                 fs.SetLength(0);
                 return;
             }
-            catch (IOException) { Thread.Sleep(200); }
-            catch (UnauthorizedAccessException) { Thread.Sleep(200); }
+            catch (IOException) { await Task.Delay(200); }
+            catch (UnauthorizedAccessException) { await Task.Delay(200); }
             catch
             {
                 return;

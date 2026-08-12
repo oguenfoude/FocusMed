@@ -19,6 +19,9 @@ public class FocusMedScp : DicomService,
     IDicomCMoveProvider,
     IDicomNServiceProvider
 {
+    private const string StorageCommitmentSopClassUid = "1.2.840.10008.1.20.1";
+    private const string StorageCommitmentSopInstanceUid = "1.2.840.10008.1.20.1.1";
+
     private readonly DicomUpsertService _upsertService;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger _logger;
@@ -107,7 +110,7 @@ public class FocusMedScp : DicomService,
                 || syntax == DicomUID.Printer
                 || syntax == DicomUID.PrintJob
                 || syntax == DicomUID.ModalityWorklistInformationModelFind
-                || syntax == DicomUID.Parse("1.2.840.10008.1.20.1"))
+                || syntax == DicomUID.Parse(StorageCommitmentSopClassUid))
             {
                 var requestedSyntaxes = pc.GetTransferSyntaxes();
                 var syntaxesToAccept = requestedSyntaxes.Intersect(_acceptedTransferSyntaxes).ToArray();
@@ -571,17 +574,20 @@ public class FocusMedScp : DicomService,
 
                 if (printJob == null)
                 {
+                    var cutoff = DateTime.UtcNow.AddSeconds(-60);
                     printJob = await db.PrintJobs
-                        .Where(p => p.Status == PrintStatus.Pending)
+                        .Where(p => p.CreatedAt >= cutoff && !p.FilmBoxes.Any())
                         .OrderByDescending(p => p.CreatedAt)
                         .FirstOrDefaultAsync();
-                    if (printJob != null)
-                        _logger.LogInformation("FilmBox N-CREATE: matched PrintJob #{PrintJobId} via pending fallback", printJob.Id);
-                }
 
-                if (printJob == null)
-                {
-                    _logger.LogWarning("FilmBox N-CREATE: no PrintJob found, creating orphaned FilmBox");
+                    if (printJob != null)
+                    {
+                        _logger.LogInformation("FilmBox N-CREATE: linked to recent PrintJob #{PrintJobId} (UID '{PrintJobUid}' missing or unmatched)", printJob.Id, printJobUid ?? "(empty)");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("FilmBox N-CREATE: no PrintJob found for UID '{PrintJobUid}', creating orphaned FilmBox", printJobUid ?? "(empty)");
+                    }
                 }
 
                 var filmBox = new FilmBox
@@ -752,15 +758,26 @@ public class FocusMedScp : DicomService,
 
                 if (string.IsNullOrEmpty(patientId))
                 {
-                    _logger.LogWarning("No patient info in print image box {SopUid}, skipping image ingestion", sopUid);
-                    await db.SaveChangesAsync();
-                    return new DicomNSetResponse(request, DicomStatus.ProcessingFailure);
+                    var recentStudy = await db.Studies
+                        .Include(s => s.Patient)
+                        .OrderByDescending(s => s.CreatedAt)
+                        .FirstOrDefaultAsync();
+
+                    if (recentStudy?.Patient != null)
+                    {
+                        patientId = recentStudy.Patient.PatientId;
+                        patientName = recentStudy.Patient.PatientName;
+                        _logger.LogInformation("Patient resolved from most recent study: {PatientId} - {PatientName}", patientId, patientName);
+                    }
                 }
+
+                patientId ??= string.Empty;
+                patientName ??= string.Empty;
 
                 if (imageSeq != null)
                 {
                     var innerDataset = imageSeq.Items[0];
-                    var storedFile = await _upsertService.IngestPrintImageAsync(innerDataset, patientId, patientName!);
+                    var storedFile = await _upsertService.IngestPrintImageAsync(innerDataset, patientId, patientName);
                     if (storedFile != null)
                     {
                         var newSopUid = storedFile.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
@@ -852,7 +869,7 @@ public class FocusMedScp : DicomService,
                         }
                     }
                 }
-                else if (sopClassUid == "1.2.840.10008.1.20.1")
+                else if (sopClassUid == StorageCommitmentSopClassUid)
                 {
                     var transactionUid = request.Dataset.GetSingleValueOrDefault(DicomTag.TransactionUID, string.Empty);
                     if (request.Dataset.TryGetSequence(DicomTag.ReferencedSOPSequence, out var referencedSopSeq)

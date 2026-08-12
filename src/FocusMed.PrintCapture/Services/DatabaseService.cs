@@ -27,13 +27,14 @@ public class DatabaseService
         var studies = await db.Studies
             .Include(s => s.Patient)
             .Include(s => s.Series)
+                .ThenInclude(ss => ss.Images)
+            .AsSplitQuery()
             .Where(s => s.Status != StudyStatus.Deleted
-                && s.Status != StudyStatus.Archived
-                && s.ResumePdfPath == null)
+                && s.Status != StudyStatus.Archived)
             .OrderByDescending(s => s.CreatedAt)
             .ToListAsync();
 
-        _logger.LogInformation("Found {Count} studies without resume", studies.Count);
+        _logger.LogInformation("Found {Count} selectable studies", studies.Count);
         return studies;
     }
 

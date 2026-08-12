@@ -14,6 +14,9 @@ namespace FocusMed.Dicom;
 
 public class StorageCommitmentScuService : BackgroundService
 {
+    private const string StorageCommitmentSopClassUid = "1.2.840.10008.1.20.1";
+    private const string StorageCommitmentSopInstanceUid = "1.2.840.10008.1.20.1.1";
+
     private readonly ILogger<StorageCommitmentScuService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IOptions<DicomNetworkingOptions> _networkingOptions;
@@ -126,8 +129,8 @@ public class StorageCommitmentScuService : BackgroundService
         }
         dataset.Add(seq);
 
-        var storageCommitmentSopClass = DicomUID.Parse("1.2.840.10008.1.20.1");
-        var storageCommitmentSopInstance = DicomUID.Parse("1.2.840.10008.1.20.1.1");
+        var storageCommitmentSopClass = DicomUID.Parse(StorageCommitmentSopClassUid);
+        var storageCommitmentSopInstance = DicomUID.Parse(StorageCommitmentSopInstanceUid);
         var request = new DicomNEventReportRequest(storageCommitmentSopClass, storageCommitmentSopInstance, 1)
         {
             Dataset = dataset
@@ -176,8 +179,8 @@ public class StorageCommitmentScuService : BackgroundService
         }
         dataset.Add(seq);
 
-        var storageCommitmentSopClass = DicomUID.Parse("1.2.840.10008.1.20.1");
-        var storageCommitmentSopInstance = DicomUID.Parse("1.2.840.10008.1.20.1.1");
+        var storageCommitmentSopClass = DicomUID.Parse(StorageCommitmentSopClassUid);
+        var storageCommitmentSopInstance = DicomUID.Parse(StorageCommitmentSopInstanceUid);
         var request = new DicomNEventReportRequest(storageCommitmentSopClass, storageCommitmentSopInstance, 2)
         {
             Dataset = dataset

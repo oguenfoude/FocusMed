@@ -3,13 +3,15 @@
 @implements IDisposable
 @using FocusMed.Dicom
 @using FocusMed.Dashboard.Services
-@using Microsoft.JSInterop
 @inject FocusMedDbContext DbContext
 @inject PngExtractionService PngExtractionService
 @inject StudyService StudyService
 @inject PdfService PdfService
-@inject IPrintServiceClient PrintClient
-@inject IJSRuntime JS
+@inject FocusMed.Printing.Discovery.IPrinterDiscoveryService DiscoveryService
+@inject FocusMed.Printing.Discovery.IPrinterCapabilityService CapabilityService
+@inject FocusMed.Printing.Profiles.IPrintProfileBuilder ProfileBuilder
+@inject FocusMed.Printing.Jobs.IPrintExecutionService ExecutionService
+@inject FocusMed.Printing.Profiles.IPrinterSettingsStore SettingsStore
 @inject ILogger<StudyDetails> Logger
 
 <PageTitle>Détails de l'étude — FocusMed</PageTitle>
@@ -91,18 +93,9 @@ else
                             <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-50 text-violet-700 border border-violet-100">Résumé</span>
                             <button @onclick="OpenUnlinkConfirm" disabled="@IsUnlinking"
                                     class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-100 hover:bg-red-100 transition-colors disabled:opacity-50"
-                                    title="Supprimer le resume associe a cette etude">
+                                    title="Supprimer le résumé associé à cette étude">
                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
                                 Retirer
-                            </button>
-                        }
-                        @if (HasPreviewPdf)
-                        {
-                            <button @onclick="OpenPrintDialog" disabled="@IsPrinting"
-                                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100 transition-colors disabled:opacity-50"
-                                    title="Lancer l'impression sur l'imprimante configuree">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.72 13.829c-.246.184-.72.171-.72.171V17h-1v-3.018c-1.667 0-3-1.343-3-3 0-1.5 1.06-2.752 2.462-2.973.124-.728.49-1.434 1.066-2.013C6.62 7.97 7.886 7.5 9 7.5c1.5 0 2.5.5 3 1.5h.5l.5 1v8.5l-1 .5H8.263c-.36 0-.788-.146-1.055-.342-.293-.214-.488-.611-.488-.829zm13.56-.328c0 1.657-1.343 3-3 3v3h-1v-3.001c-.451 0-.9-.058-1.305-.168L14.5 14.5l1.5-1.5V8c0-1.5-.5-2-2-2-1.5 0-2 .5-2 2v5l-1.5 1.5 1.025 1.832c.6.11 1.235.168 1.975.168v1z" /></svg>
-                                Imprimer
                             </button>
                         }
                         @if (Study.Status == StudyStatus.Complete)
@@ -119,29 +112,6 @@ else
                         }
                     </div>
 
-                    <!-- Print mode selector -->
-                    @if (HasPreviewPdf && (CanDuplex || HasShortEdge || true))
-                    {
-                        <div class="flex items-center gap-1 mt-2">
-                            <span class="text-[10px] text-slate-400 font-semibold mr-1">Impression :</span>
-                            <button @onclick='() => SetPrintMode("simplex")'
-                                    class="px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors @(PrintMode == "simplex" ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")"
-                                    title="Recto simple — une seule face">
-                                Recto simple
-                            </button>
-                            <button @onclick='() => SetPrintMode("duplex")' disabled="@(!CanDuplex)"
-                                    class="px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors @(PrintMode == "duplex" ? "bg-blue-600 text-white" : (!CanDuplex ? "bg-slate-50 text-slate-300 cursor-not-allowed" : "bg-slate-100 text-slate-600 hover:bg-slate-200"))"
-                                    title="@(!CanDuplex ? "Cette imprimante ne supporte pas le recto-verso" : "Recto-verso — les deux faces")">
-                                Recto-verso
-                            </button>
-                            <button @onclick='() => SetPrintMode("booklet")' disabled="@(!CanDuplex || !HasShortEdge)"
-                                    class="px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors @(PrintMode == "booklet" ? "bg-blue-600 text-white" : (!CanDuplex || !HasShortEdge ? "bg-slate-50 text-slate-300 cursor-not-allowed" : "bg-slate-100 text-slate-600 hover:bg-slate-200"))"
-                                    title="@(!CanDuplex ? "Le livret necessite le recto-verso" : (!HasShortEdge ? "Le livret necessite la reliure petit cote" : "Livret — 2 pages par feuille, pliable"))">
-                                Livret
-                            </button>
-                        </div>
-                    }
-
                     <div class="flex items-center gap-3 text-xs text-slate-700">
                         <span class="font-bold text-slate-900">@(Study.Series.FirstOrDefault()?.Modality ?? "—")</span>
                         <span class="text-slate-400">·</span>
@@ -155,6 +125,12 @@ else
                         }
                     </div>
                 </div>
+
+                <button @onclick="OpenPrintDialog" disabled="@IsPrinting"
+                        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white bg-brand-600 hover:bg-brand-700 border border-brand-700 transition-colors disabled:opacity-50 shadow-sm">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+                    Imprimer
+                </button>
             </div>
         </div>
     </div>
@@ -267,8 +243,8 @@ else
                 <div class="flex-1 flex flex-col items-center justify-center gap-3 text-center p-5">
                     <svg class="w-16 h-16 text-slate-200" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>
                     <div>
-                        <p class="text-sm font-semibold text-slate-600">Apercu PDF</p>
-                        <p class="text-xs text-slate-400 mt-1">Selectionnez des images pour generer l'apercu.</p>
+                        <p class="text-sm font-semibold text-slate-600">Aperçu PDF</p>
+                        <p class="text-xs text-slate-400 mt-1">Sélectionnez des images pour générer l'aperçu.</p>
                     </div>
                 </div>
             }
@@ -276,14 +252,14 @@ else
             {
                 <div class="flex-1 flex flex-col items-center justify-center gap-3 text-center p-5">
                     <svg class="w-8 h-8 text-brand-500 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    <span class="text-xs text-slate-500 font-medium">Generation du PDF...</span>
+                    <span class="text-xs text-slate-500 font-medium">Génération du PDF...</span>
                 </div>
             }
             else if (!string.IsNullOrEmpty(PdfPreviewUrl))
             {
                 <iframe src="@PdfPreviewUrl"
                         style="width: 100%; height: 100%; border: none;"
-                        title="Apercu PDF"></iframe>
+                        title="Aperçu PDF"></iframe>
             }
         </div>
     </div>
@@ -341,60 +317,87 @@ else
 
 <!-- Unlink Resume confirmation modal -->
 <ConfirmModal IsVisible="ShowUnlinkConfirm"
-              Title="Retirer le resume ?"
-              Message="Le fichier PDF du resume sera supprime definitivement et ne pourra plus etre reassocie a cette etude. Continuer ?"
+              Title="Retirer le résumé ?"
+              Message="Le fichier PDF du résumé sera supprimé définitivement et ne pourra plus être réassocié à cette étude. Continuer ?"
               ConfirmText="Oui, retirer"
               CancelText="Annuler"
               OnConfirm="ConfirmUnlinkResume"
               OnCancel="CancelUnlinkResume" />
 
-<!-- Print job dialog -->
+<!-- Print dialog -->
 @if (ShowPrintDialog)
 {
-    <div class="fixed inset-0 z-50 flex items-center justify-center" tabindex="0" @onkeydown="HandlePrintKeydown" @ref="PrintModalRef">
-        <div class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" @onclick="CancelPrint"></div>
-        <div class="relative w-full max-w-sm mx-auto z-50">
-            <div class="bg-white rounded-xl shadow-2xl overflow-hidden">
-                <div class="p-6">
-                    <div class="mx-auto w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center mb-4">
-                        <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M6.72 13.829c-.246.184-.72.171-.72.171V17h-1v-3.018c-1.667 0-3-1.343-3-3 0-1.5 1.06-2.752 2.462-2.973.124-.728.49-1.434 1.066-2.013C6.62 7.97 7.886 7.5 9 7.5c1.5 0 2.5.5 3 1.5h.5l.5 1v8.5l-1 .5H8.263c-.36 0-.788-.146-1.055-.342-.293-.214-.488-.611-.488-.829z" />
-                        </svg>
-                    </div>
-                    <h3 class="text-lg font-bold text-slate-900 text-center">Lancer l'impression</h3>
-                    <p class="text-sm text-slate-500 mt-2 text-center">
-                        @(string.IsNullOrEmpty(SelectedPrinterName)
-                            ? "Aucune imprimante selectionnee. Allez dans Parametres > Imprimantes."
-                            : $"Sur « {SelectedPrinterName} » — {PrintModeLabel}.")
-                    </p>
-
-                    @if (!string.IsNullOrEmpty(SelectedPrinterName))
-                    {
-                        <div class="mt-5 space-y-3 text-left">
-                            <label class="block">
-                                <span class="text-xs font-semibold text-slate-600">Nombre d'exemplaires (1-99)</span>
-                                <input type="number" min="1" max="99" @bind="PrintCopies"
-                                       class="mt-1 w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500" />
-                            </label>
-
-                            @if (CapabilitiesError)
+    <div class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center" @onclick="ClosePrintDialog">
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg" @onclick:stopPropagation>
+            <div class="px-6 py-4 border-b border-slate-100">
+                <h2 class="text-lg font-bold text-slate-900">Imprimer l'étude</h2>
+                <p class="text-sm text-slate-500 mt-0.5">@FormatPatientName(Study?.Patient?.PatientName) — @(Study?.StudyDate?.ToString("dd/MM/yyyy") ?? "N/A")</p>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+                @* Printer selection *@
+                <div>
+                    <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1.5 block">Imprimante</label>
+                    <select @bind="SelectedPrinter" @bind:after="LoadProfilesForPrinter"
+                            class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+                        @foreach (var printer in AvailablePrinters)
+                        {
+                            <option value="@printer.Name">@printer.Name</option>
+                        }
+                    </select>
+                </div>
+                @* Profile selection *@
+                @if (AvailableProfiles.Count > 0)
+                {
+                    <div>
+                        <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1.5 block">Profil</label>
+                        <select @bind="SelectedProfileName" @bind:after="OnProfileChanged"
+                                class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+                            @foreach (var profile in AvailableProfiles)
                             {
-                                <div class="text-[10px] text-red-600 bg-red-50 rounded-lg px-2 py-1">
-                                    Impossible de contacter le service d'impression.
-                                </div>
+                                <option value="@profile.Name">@profile.Name — @profile.Description</option>
                             }
-                        </div>
+                        </select>
+                    </div>
+                }
+                @* Paper size selection *@
+                @if (AvailablePaperSizes.Count > 0)
+                {
+                    <div>
+                        <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1.5 block">Format de papier</label>
+                        <select @bind="SelectedPaperSize"
+                                class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
+                            @foreach (var ps in AvailablePaperSizes)
+                            {
+                                <option value="@ps.Name">@ps.Name (@ps.WidthMm.ToString("F0") x @ps.HeightMm.ToString("F0") mm)</option>
+                            }
+                        </select>
+                    </div>
+                }
+                @* Copies *@
+                <div>
+                    <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1.5 block">Copies</label>
+                    <input type="number" min="1" max="99" @bind="Copies"
+                           class="w-24 text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500" />
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                <button @onclick="ClosePrintDialog"
+                        class="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                    Annuler
+                </button>
+                <button @onclick="PrintStudy" disabled="@(IsPrinting || string.IsNullOrEmpty(SelectedPrinter))"
+                        class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 border border-brand-700 rounded-lg transition-colors disabled:opacity-50 shadow-sm">
+                    @if (IsPrinting)
+                    {
+                        <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        @:Impression en cours...
                     }
-                </div>
-                <div class="flex border-t border-slate-100">
-                    <button @onclick="CancelPrint" class="flex-1 px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors border-r border-slate-100">
-                        Annuler
-                    </button>
-                    <button @onclick="ConfirmPrint" disabled="@(IsPrinting || IsGeneratingPrintPdf || string.IsNullOrEmpty(SelectedPrinterName))"
-                            class="flex-1 px-4 py-3 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors">
-                        @(IsGeneratingPrintPdf ? "Preparation..." : "Imprimer")
-                    </button>
-                </div>
+                    else
+                    {
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+                        @:Imprimer
+                    }
+                </button>
             </div>
         </div>
     </div>
@@ -415,7 +418,6 @@ else
     private bool IsExtracting = true;
     private string? ImageError;
 
-    private bool IsGeneratingPrintPdf;
     private string? PdfPreviewUrl;
     private bool IsRegeneratingPdf;
     private CancellationTokenSource? _regenCts;
@@ -431,36 +433,16 @@ else
 
     private bool ShowUnlinkConfirm;
     private bool IsUnlinking;
+
     private bool ShowPrintDialog;
     private bool IsPrinting;
-    private int PrintCopies = 1;
-    private string PrintMode = "simplex";
-    private string? SelectedPrinterName;
-    private PrinterCapabilities? PrinterCapabilities;
-    private bool CanDuplex;
-    private bool HasShortEdge;
-    private bool CapabilitiesError;
-    private ElementReference PrintModalRef;
-
-    private string PrintModeLabel => PrintMode switch
-    {
-        "simplex" => "recto simple",
-        "duplex" => "recto-verso",
-        "booklet" => "livret",
-        _ => "recto simple"
-    };
-
-    private bool HasImages => AvailableFrames.Count > 0 && SelectedFrameIds.Count > 0;
-
-    private bool HasPreviewPdf => !string.IsNullOrEmpty(PreviewPdfAbsolutePath);
-
-    private string? PreviewPdfAbsolutePath =>
-        string.IsNullOrEmpty(PdfPreviewUrl) ? null
-            : Path.Combine(
-                Environment.GetEnvironmentVariable("FOCUSMED_DATA")
-                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed"),
-                "pdf-cache",
-                Path.GetFileName(PdfPreviewUrl));
+    private string? SelectedPrinter;
+    private string? SelectedProfileName;
+    private string? SelectedPaperSize;
+    private int Copies = 1;
+    private IReadOnlyList<FocusMed.Printing.Discovery.InstalledPrinter> AvailablePrinters = [];
+    private List<FocusMed.Printing.Profiles.PrintProfile> AvailableProfiles = new();
+    private List<FocusMed.Printing.Discovery.PaperSizeInfo> AvailablePaperSizes = new();
 
     private string StatusMessage = "";
     private bool IsError = false;
@@ -511,8 +493,6 @@ else
 
             if (SelectedFrameIds.Count > 0)
                 await RegeneratePdfPreviewAsync();
-
-            await LoadPrinterCapabilitiesAsync();
         }
         catch (Exception ex)
         {
@@ -570,7 +550,7 @@ else
 
             var oldUrl = PdfPreviewUrl;
             var newUrl = await Task.Run(() =>
-                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath), ct);
+                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, "A3", isBooklet: true), ct);
 
             if (ct.IsCancellationRequested) return;
 
@@ -595,27 +575,6 @@ else
         if (!SelectedFrameIds.Remove(sopUid))
             SelectedFrameIds.Add(sopUid);
         _ = RegeneratePdfPreviewAsync();
-    }
-
-    private async Task LoadPrinterCapabilitiesAsync()
-    {
-        try
-        {
-            var savedPrinter = await JS.InvokeAsync<string?>("localStorage.getItem", "focusmed_active_printer");
-            if (!string.IsNullOrEmpty(savedPrinter))
-            {
-                SelectedPrinterName = savedPrinter;
-                var caps = await PrintClient.GetCapabilitiesAsync(savedPrinter);
-                if (caps != null && caps.IsAvailable)
-                {
-                    PrinterCapabilities = caps;
-                    CanDuplex = caps.CanDuplex;
-                    HasShortEdge = caps.SupportedDuplexModes.Any(m =>
-                        string.Equals(m, "Horizontal", StringComparison.OrdinalIgnoreCase));
-                }
-            }
-        }
-        catch { }
     }
 
     private void SelectAllFrames()
@@ -647,21 +606,21 @@ else
             if (success)
             {
                 Study.ResumePdfPath = null;
-                StatusMessage = "Resume supprime avec succes.";
+                StatusMessage = "Résumé supprimé avec succès.";
                 IsError = false;
                 if (SelectedFrameIds.Count > 0)
                     _ = RegeneratePdfPreviewAsync();
             }
             else
             {
-                StatusMessage = "Impossible de retirer le resume.";
+                StatusMessage = "Impossible de retirer le résumé.";
                 IsError = true;
             }
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Unlink resume failed for Study {StudyId}", Study.Id);
-            StatusMessage = "Erreur lors de la suppression du resume.";
+            StatusMessage = "Erreur lors de la suppression du résumé.";
             IsError = true;
         }
         finally
@@ -679,137 +638,143 @@ else
 
     private async Task OpenPrintDialog()
     {
-        if (!HasImages) return;
-        PrintCopies = 1;
-        IsPrinting = false;
-        PrinterCapabilities = null;
-        CapabilitiesError = false;
+        AvailablePrinters = DiscoveryService.GetAvailablePrinters();
 
-        try
-        {
-            var savedPrinter = await JS.InvokeAsync<string?>("localStorage.getItem", "focusmed_active_printer");
+        var savedSettings = await SettingsStore.LoadAsync();
+        var savedPrinter = savedSettings?.DefaultPrinterName;
+        var savedProfile = savedSettings?.DefaultProfileName;
+        var savedCopies = savedSettings?.DefaultCopies ?? 1;
 
-            if (!string.IsNullOrEmpty(savedPrinter))
-            {
-                SelectedPrinterName = savedPrinter;
-                PrinterCapabilities = await PrintClient.GetCapabilitiesAsync(savedPrinter);
-                if (PrinterCapabilities != null && PrinterCapabilities.IsAvailable)
-                {
-                    CanDuplex = PrinterCapabilities.CanDuplex;
-                    HasShortEdge = PrinterCapabilities.SupportedDuplexModes.Any(m =>
-                        string.Equals(m, "Horizontal", StringComparison.OrdinalIgnoreCase));
-                }
-            }
-            else
-            {
-                SelectedPrinterName = null;
-            }
-        }
-        catch
+        if (!string.IsNullOrEmpty(savedPrinter) && AvailablePrinters.Any(p => p.Name == savedPrinter))
+            SelectedPrinter = savedPrinter;
+        else if (AvailablePrinters.Count > 0)
+            SelectedPrinter = AvailablePrinters[0].Name;
+        else
+            SelectedPrinter = null;
+
+        Copies = savedCopies;
+        SelectedProfileName = null;
+        AvailableProfiles = new();
+        await LoadProfilesForPrinter();
+
+        if (!string.IsNullOrEmpty(savedProfile) && AvailableProfiles.Any(p => p.Name == savedProfile))
         {
-            SelectedPrinterName = null;
-            CapabilitiesError = true;
+            SelectedProfileName = savedProfile;
+            OnProfileChanged();
         }
 
         ShowPrintDialog = true;
-        await InvokeAsync(StateHasChanged);
     }
 
-    private void CancelPrint() => ShowPrintDialog = false;
-
-    private void SetPrintMode(string mode) => PrintMode = mode;
-
-    private void HandlePrintKeydown(KeyboardEventArgs e)
+    private void ClosePrintDialog()
     {
-        if (e.Key == "Escape") CancelPrint();
-    }
-
-    private async Task ConfirmPrint()
-    {
-        if (IsPrinting) return;
-        if (string.IsNullOrEmpty(SelectedPrinterName)) return;
-        if (!HasImages) return;
-        var copies = Math.Clamp(PrintCopies, 1, 99);
-
-        var duplex = PrintMode == "duplex" || PrintMode == "booklet";
-        var bookletMode = PrintMode == "booklet";
-
         ShowPrintDialog = false;
+    }
+
+    private async Task LoadProfilesForPrinter()
+    {
+        if (string.IsNullOrEmpty(SelectedPrinter))
+        {
+            AvailableProfiles = new();
+            AvailablePaperSizes = new();
+            return;
+        }
+        try
+        {
+            var snapshot = await CapabilityService.GetSnapshotAsync(SelectedPrinter);
+            AvailableProfiles = ProfileBuilder.BuildProfiles(snapshot).ToList();
+            AvailablePaperSizes = snapshot.PaperSizes.ToList();
+            if (AvailableProfiles.Count > 0)
+                SelectedProfileName = AvailableProfiles[0].Name;
+            // Default to the profile's paper size
+            if (AvailablePaperSizes.Count > 0)
+            {
+                var defaultPaper = AvailableProfiles.FirstOrDefault()?.PaperSizeName;
+                SelectedPaperSize = defaultPaper ?? AvailablePaperSizes.FirstOrDefault()?.Name;
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            AvailableProfiles = new();
+            AvailablePaperSizes = new();
+        }
+    }
+
+    private void OnProfileChanged()
+    {
+        var selectedProfile = AvailableProfiles.FirstOrDefault(p => p.Name == SelectedProfileName);
+        if (selectedProfile != null && AvailablePaperSizes.Count > 0)
+        {
+            SelectedPaperSize = AvailablePaperSizes.FirstOrDefault(ps => ps.Name == selectedProfile.PaperSizeName)?.Name
+                ?? AvailablePaperSizes.FirstOrDefault()?.Name;
+        }
+    }
+
+    private async Task PrintStudy()
+    {
+        if (IsPrinting || string.IsNullOrEmpty(SelectedPrinter) || Study == null) return;
         IsPrinting = true;
         await InvokeAsync(StateHasChanged);
 
         try
         {
-            var imagePaths = Frames
-                .Where(f => f.FileExists && SelectedFrameIds.Contains(f.SopInstanceUid) && !string.IsNullOrEmpty(f.PngPath))
-                .Select(f => f.PngPath!)
-                .ToList();
-
-            if (imagePaths.Count == 0)
+            var profile = AvailableProfiles.FirstOrDefault(p => p.Name == SelectedProfileName) ?? AvailableProfiles.FirstOrDefault();
+            if (profile == null)
             {
-                StatusMessage = "Aucune image a imprimer.";
+                StatusMessage = "Aucun profil d'impression disponible.";
                 IsError = true;
                 return;
             }
 
-            var patientName = Study?.Patient?.PatientName ?? "";
-            var studyDate = Study?.StudyDate?.ToString("dd/MM/yyyy") ?? "N/A";
-            var studyDescription = Study?.Description ?? "";
-            var resumePdfPath = Study?.ResumePdfPath;
-
-            IsGeneratingPrintPdf = true;
-            await InvokeAsync(StateHasChanged);
-
-            var pdfUrl = await Task.Run(() =>
-                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath));
-
-            IsGeneratingPrintPdf = false;
-
-            if (string.IsNullOrEmpty(pdfUrl))
+            // Override paper size if user selected a different one
+            if (!string.IsNullOrEmpty(SelectedPaperSize) && SelectedPaperSize != profile.PaperSizeName)
             {
-                StatusMessage = "Echec de la generation du PDF pour impression.";
+                profile = profile with { PaperSizeName = SelectedPaperSize };
+            }
+
+            if (string.IsNullOrEmpty(PdfPreviewUrl))
+            {
+                StatusMessage = "Veuillez d'abord générer l'aperçu PDF.";
                 IsError = true;
-                await InvokeAsync(StateHasChanged);
                 return;
             }
 
-            var pdfAbsolutePath = Path.Combine(
-                Environment.GetEnvironmentVariable("FOCUSMED_DATA")
-                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed"),
-                "pdf-cache",
-                Path.GetFileName(pdfUrl));
+            var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+            var pdfPath = Path.Combine(dataDir, PdfPreviewUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(pdfPath))
+            {
+                StatusMessage = "Fichier PDF introuvable. Régénérez l'aperçu.";
+                IsError = true;
+                return;
+            }
 
-            var result = await PrintClient.PrintAsync(new PrintRequest(
-                pdfAbsolutePath,
-                SelectedPrinterName,
-                copies,
-                duplex,
-                bookletMode));
-
-            try { PdfService.DeletePdf(pdfUrl); } catch { }
+            var result = await ExecutionService.PrintAsync(new FocusMed.Printing.Jobs.PrintJobRequest
+            {
+                PdfPath = pdfPath,
+                Profile = profile,
+                PrinterName = SelectedPrinter,
+                Copies = Copies,
+                ForceGrayscale = profile.ForceGrayscale
+            });
 
             if (result.Success)
             {
-                var modeLabel = PrintMode switch
-                {
-                    "simplex" => "recto simple",
-                    "duplex" => "recto-verso",
-                    "booklet" => "livret",
-                    _ => PrintMode
-                };
-                StatusMessage = $"Imprime sur « {SelectedPrinterName} » ({modeLabel}, tache #{result.JobId}).";
+                StatusMessage = $"Impression envoyée à '{SelectedPrinter}'.";
                 IsError = false;
+                ShowPrintDialog = false;
             }
             else
             {
-                StatusMessage = result.ErrorMessage ?? "Erreur inconnue.";
+                StatusMessage = $"Échec de l'impression: {result.ErrorMessage ?? "Erreur inconnue"}";
                 IsError = true;
             }
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Print failed");
-            StatusMessage = ex.Message;
+            Logger.LogError(ex, "Print failed for Study {StudyId}", Study.Id);
+            StatusMessage = $"Erreur: {ex.Message}";
             IsError = true;
         }
         finally
@@ -923,7 +888,7 @@ else
     private string FormatSex(string? sex) => sex?.ToUpperInvariant() switch
     {
         "M" => "Masculin",
-        "F" => "Feminin",
+        "F" => "Féminin",
         "O" => "Autre",
         _ => "N/A"
     };

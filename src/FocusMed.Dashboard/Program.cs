@@ -3,6 +3,7 @@ using FocusMed.Dashboard.Services;
 using FocusMed.Data;
 using FocusMed.Dicom;
 using FocusMed.Dicom.Options;
+using FocusMed.Printing;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Infrastructure;
@@ -29,14 +30,9 @@ builder.Services.AddSingleton<PngExtractionService>();
 builder.Services.AddScoped<StudyService>();
 builder.Services.AddScoped<PdfService>();
 
-builder.Services.AddHttpClient<IPrintServiceClient, PrintServiceClient>(client =>
-{
-    client.BaseAddress = new Uri(
-        builder.Configuration["PrintService:BaseUrl"] ?? "http://localhost:5050");
-    client.Timeout = TimeSpan.FromSeconds(30);
-});
-
 builder.Services.AddHostedService<DeletedCleanupService>();
+
+builder.Services.AddFocusMedPrinting();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
