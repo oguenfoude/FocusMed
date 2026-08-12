@@ -254,16 +254,11 @@ else
             <!-- Layout Options Toolbar -->
             <div class="px-4 py-2 border-b border-slate-200 bg-slate-50/80 flex items-center justify-between flex-wrap gap-2 text-xs">
                 <div class="flex items-center gap-4 flex-wrap">
-                    <!-- Images per page selector -->
+                    <!-- Images per page numeric input -->
                     <div class="flex items-center gap-1.5">
-                        <label class="font-bold text-slate-600">Images par page:</label>
-                        <select @bind="ImagesPerPage" @bind:after="OnGridOptionChanged"
-                                class="px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500">
-                            <option value="1">1 image / page (Défaut)</option>
-                            <option value="2">2 images / page</option>
-                            <option value="4">4 images (2x2) / page</option>
-                            <option value="6">6 images (2x3) / page</option>
-                        </select>
+                        <label class="font-bold text-slate-600">Images / page:</label>
+                        <input type="number" min="1" max="50" @bind="ImagesPerPage" @bind:after="OnGridOptionChanged"
+                               class="w-16 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500" />
                     </div>
 
                     <!-- Gap / Espacement numeric input -->
@@ -309,9 +304,20 @@ else
             }
             else if (!string.IsNullOrEmpty(PdfPreviewUrl))
             {
-                <iframe src="@PdfPreviewUrl"
-                        style="width: 100%; height: 100%; border: none;"
-                        title="Aperçu PDF"></iframe>
+                <div class="relative flex-1 w-full h-full">
+                    <iframe src="@PdfPreviewUrl"
+                            style="width: 100%; height: 100%; border: none;"
+                            title="Aperçu PDF"></iframe>
+                    @if (IsRegeneratingPdf)
+                    {
+                        <div class="absolute inset-0 bg-white/40 backdrop-blur-[1px] flex items-center justify-center pointer-events-none transition-all z-10">
+                            <div class="bg-white/95 shadow-xl border border-slate-200 px-4 py-2 rounded-xl flex items-center gap-2 text-xs font-bold text-brand-700">
+                                <svg class="w-4 h-4 text-brand-600 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                Mise à jour du PDF…
+                            </div>
+                        </div>
+                    }
+                </div>
             }
         </div>
     </div>

@@ -170,6 +170,19 @@ public class PdfService
         var gap = (float)Math.Max(0, gapPx);
         var margin = (float)Math.Max(0, marginPx);
 
+        int cols = perPage switch
+        {
+            1 => 1,
+            2 => 2,
+            3 => 3,
+            4 => 2,
+            5 or 6 => 3,
+            7 or 8 or 9 => 3,
+            10 or 11 or 12 => 4,
+            13 or 14 or 15 or 16 => 4,
+            _ => (int)Math.Ceiling(Math.Sqrt(perPage))
+        };
+
         var document = QuestPDF.Fluent.Document.Create(container =>
         {
             for (int i = 0; i < imagePaths.Count; i += perPage)
@@ -184,14 +197,7 @@ public class PdfService
                     page.Content().Grid(grid =>
                     {
                         grid.Spacing(gap);
-                        if (perPage == 1 || perPage == 2)
-                        {
-                            grid.Columns(1);
-                        }
-                        else
-                        {
-                            grid.Columns(2);
-                        }
+                        grid.Columns(cols);
 
                         foreach (var imgPath in batch)
                         {
@@ -213,6 +219,7 @@ public class PdfService
         using var fs = File.Create(outputPath);
         document.GeneratePdf(fs);
     }
+
 
 
 
