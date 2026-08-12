@@ -332,15 +332,31 @@ public class DicomUpsertService
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
-            var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId);
+            var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId || (!string.IsNullOrEmpty(patientName) && p.PatientName == patientName));
             if (patient == null)
             {
                 patient = new Patient { PatientId = patientId, PatientName = patientName };
                 db.Patients.Add(patient);
             }
 
-            var study = new Study { Patient = patient, StudyInstanceUid = studyUid, StudyDate = DateTime.UtcNow };
-            db.Studies.Add(study);
+            var today = DateTime.UtcNow.Date;
+            var study = db.Studies
+                .Include(s => s.Patient)
+                .Where(s => s.PatientId == patient.Id && s.Status != StudyStatus.Deleted)
+                .OrderByDescending(s => s.LastUpdatedAt)
+                .FirstOrDefault(s => s.StudyDate.HasValue && s.StudyDate.Value.Date == today);
+
+
+            if (study == null)
+            {
+                study = new Study { Patient = patient, StudyInstanceUid = studyUid, StudyDate = DateTime.UtcNow, Status = StudyStatus.Receiving };
+                db.Studies.Add(study);
+            }
+            else
+            {
+                studyUid = study.StudyInstanceUid;
+                study.LastUpdatedAt = DateTime.UtcNow;
+            }
 
             var series = new Series { Study = study, SeriesInstanceUid = seriesUid, Modality = "OT" };
             db.Series.Add(series);
@@ -348,6 +364,7 @@ public class DicomUpsertService
             var studyHash = DicomHelpers.GetFnv1aHash(studyUid);
             var safePatientName = DicomHelpers.SanitizeFileName(patientName);
             var datePart = DateTime.UtcNow.ToString("yyyyMMdd");
+
             var studyDirName = $"{safePatientName}_SC_{datePart}_{studyHash}";
             var studyDir = Path.Combine(_archivePath, studyDirName);
             Directory.CreateDirectory(studyDir);
