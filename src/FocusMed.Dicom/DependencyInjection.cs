@@ -14,6 +14,7 @@ public static class DependencyInjection
         services.Configure<PngExtractionOptions>(
             configuration.GetSection(PngExtractionOptions.SectionName));
 
+        services.AddSingleton<IStudyNotificationService, StudyNotificationService>();
         services.AddSingleton<DicomUpsertService>();
         services.AddSingleton<PngExtractionService>();
         services.AddSingleton<IPrintScuService, PrintScuService>();
@@ -22,6 +23,7 @@ public static class DependencyInjection
         services.AddHostedService<StorageCommitmentScuService>();
         services.AddSingleton<IStorageForwardQueue, StorageForwardQueue>();
         services.AddHostedService<StorageForwardService>();
+
 
         return services;
     }

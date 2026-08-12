@@ -250,8 +250,9 @@ else
         if (SelectedDate.HasValue)
         {
             var date = SelectedDate.Value.Date;
-            query = query.Where(s => s.CreatedAt.Date == date || (s.StudyDate.HasValue && s.StudyDate.Value.Date == date));
+            query = query.Where(s => s.CreatedAt.Date == date || (s.StudyDate.HasValue && s.StudyDate.Value.Date == date) || s.LastUpdatedAt.Date == date);
         }
+
 
         if (!string.IsNullOrEmpty(SelectedModality))
         {

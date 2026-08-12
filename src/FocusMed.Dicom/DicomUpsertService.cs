@@ -13,18 +13,25 @@ public class DicomUpsertService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<DicomUpsertService> _logger;
     private readonly IStorageForwardQueue _forwardQueue;
+    private readonly IStudyNotificationService _notificationService;
     private readonly string _archivePath;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
 
-    public DicomUpsertService(IServiceScopeFactory scopeFactory, ILogger<DicomUpsertService> logger, IStorageForwardQueue forwardQueue)
+    public DicomUpsertService(
+        IServiceScopeFactory scopeFactory,
+        ILogger<DicomUpsertService> logger,
+        IStorageForwardQueue forwardQueue,
+        IStudyNotificationService notificationService)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
         _forwardQueue = forwardQueue;
+        _notificationService = notificationService;
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
         _archivePath = Path.Combine(dataDir, "archive");
         Directory.CreateDirectory(_archivePath);
     }
+
 
     public async Task StoreFileOnlyAsync(DicomFile dicomFile)
     {
@@ -95,13 +102,20 @@ public class DicomUpsertService
                 if (!string.IsNullOrWhiteSpace(patientSex)) patient.Sex = patientSex;
             }
 
-            var study = db.Studies.FirstOrDefault(s => s.StudyInstanceUid == studyUid);
+            var study = db.Studies.FirstOrDefault(s => s.StudyInstanceUid == studyUid && s.Status == StudyStatus.Receiving && s.LastUpdatedAt >= DateTime.UtcNow.AddSeconds(-15));
+
             if (study == null)
             {
+                var activeUid = studyUid;
+                if (db.Studies.Any(s => s.StudyInstanceUid == activeUid))
+                {
+                    activeUid = $"{studyUid}.{Guid.NewGuid():N}";
+                }
+
                 study = new Study
                 {
                     Patient = patient,
-                    StudyInstanceUid = studyUid,
+                    StudyInstanceUid = activeUid,
                     StudyDate = studyDate,
                     Description = string.IsNullOrWhiteSpace(studyDescription) ? null : studyDescription,
                     AccessionNumber = string.IsNullOrWhiteSpace(accessionNumber) ? null : accessionNumber,
@@ -130,11 +144,16 @@ public class DicomUpsertService
                 db.Series.Add(series);
             }
 
-            var existingImage = db.DicomImages.FirstOrDefault(d => d.SopInstanceUid == sopUid);
+            var existingImage = db.DicomImages.Include(d => d.Series).FirstOrDefault(d => d.SopInstanceUid == sopUid);
             if (existingImage != null)
             {
-                return;
+                if (existingImage.Series?.StudyId == study.Id)
+                {
+                    return;
+                }
+                sopUid = $"{sopUid}.{Guid.NewGuid():N}";
             }
+
 
             var studyHash = DicomHelpers.GetFnv1aHash(studyUid);
             var safePatientName = DicomHelpers.SanitizeFileName(patientName);
@@ -179,6 +198,8 @@ public class DicomUpsertService
             db.DicomImages.Add(dicomImage);
 
             await db.SaveChangesAsync();
+            _notificationService.NotifyStudyChanged();
+
 
             try
             {
@@ -401,7 +422,9 @@ public class DicomUpsertService
             db.DicomImages.Add(dicomImage);
 
             await db.SaveChangesAsync();
+            _notificationService.NotifyStudyChanged();
             _logger.LogInformation("Print image ingested: {PatientName} | SOP={SopUid}", patientName, sopUid);
+
             return dicomFile;
         }
         catch (Exception ex)

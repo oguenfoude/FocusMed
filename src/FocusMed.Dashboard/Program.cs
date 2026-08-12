@@ -26,9 +26,11 @@ builder.Services.AddFellowOakDicom()
     .AddTranscoderManager<FellowOakDicom.Imaging.NativeCodec.NativeTranscoderManager>();
 
 builder.Services.Configure<PngExtractionOptions>(options => options.Enabled = true);
+builder.Services.AddSingleton<IStudyNotificationService, StudyNotificationService>();
 builder.Services.AddSingleton<PngExtractionService>();
 builder.Services.AddScoped<StudyService>();
 builder.Services.AddScoped<PdfService>();
+
 
 builder.Services.AddHostedService<DeletedCleanupService>();
 

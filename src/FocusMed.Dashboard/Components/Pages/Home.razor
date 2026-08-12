@@ -1,9 +1,12 @@
 @page "/"
 @rendermode InteractiveServer
+@implements IDisposable
 @inject FocusMedDbContext DbContext
 @inject NavigationManager Navigation
 @inject ILogger<Home> Logger
 @inject Services.StudyService StudyService
+@inject FocusMed.Dicom.IStudyNotificationService NotificationService
+
 
 
 
@@ -271,8 +274,23 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        NotificationService.OnStudyChanged += HandleStudyChanged;
         await LoadDataAsync();
     }
+
+    private async void HandleStudyChanged()
+    {
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                await LoadDataAsync();
+                StateHasChanged();
+            });
+        }
+        catch { }
+    }
+
 
 
 
@@ -284,8 +302,9 @@ else
             .Include(s => s.Patient)
             .Include(s => s.Series).ThenInclude(s => s.Images)
             .AsSplitQuery()
-            .OrderByDescending(s => s.CreatedAt)
+            .OrderByDescending(s => s.LastUpdatedAt)
             .ToListAsync();
+
 
         AvailableModalities = Studies
             .SelectMany(s => s.Series)
@@ -313,8 +332,9 @@ else
         if (SelectedDate.HasValue)
         {
             var date = SelectedDate.Value.Date;
-            query = query.Where(s => s.CreatedAt.Date == date || (s.StudyDate.HasValue && s.StudyDate.Value.Date == date));
+            query = query.Where(s => s.CreatedAt.Date == date || (s.StudyDate.HasValue && s.StudyDate.Value.Date == date) || s.LastUpdatedAt.Date == date);
         }
+
 
         if (!string.IsNullOrEmpty(SelectedModality))
         {
@@ -441,6 +461,12 @@ else
         StatusMessage = "";
         StateHasChanged();
     }
+
+    public void Dispose()
+    {
+        NotificationService.OnStudyChanged -= HandleStudyChanged;
+    }
 }
+
 
 
