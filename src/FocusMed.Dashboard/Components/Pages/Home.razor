@@ -1,11 +1,10 @@
 @page "/"
 @rendermode InteractiveServer
-@implements IDisposable
 @inject FocusMedDbContext DbContext
-@inject IServiceScopeFactory ScopeFactory
 @inject NavigationManager Navigation
 @inject ILogger<Home> Logger
 @inject Services.StudyService StudyService
+
 
 
 <PageTitle>Études — FocusMed</PageTitle>
@@ -267,42 +266,11 @@ else
 
     private List<string> AvailableModalities = [];
     private string StatusMessage = "";
-    private bool IsError = false;
-    private System.Threading.Timer? _refreshTimer;
-
-
-
     protected override async Task OnInitializedAsync()
     {
         await LoadDataAsync();
-
-        _refreshTimer = new System.Threading.Timer(async _ =>
-        {
-            try
-            {
-                using var scope = ScopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-                var data = await db.Studies
-                    .Include(s => s.Patient)
-                    .Include(s => s.Series).ThenInclude(s => s.Images)
-                    .AsSplitQuery()
-                    .OrderByDescending(s => s.LastUpdatedAt)
-                    .ToListAsync();
-
-                var mods = data.SelectMany(s => s.Series).Select(s => s.Modality)
-                    .Where(m => !string.IsNullOrEmpty(m)).Distinct().OrderBy(m => m).ToList();
-
-                await InvokeAsync(() =>
-                {
-                    Studies = data;
-                    AvailableModalities = mods;
-                    ApplyFilters();
-                    StateHasChanged();
-                });
-            }
-            catch (Exception ex) { Logger.LogWarning(ex, "Timer refresh failed for Home studies"); }
-        }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
     }
+
 
 
 
@@ -470,10 +438,6 @@ else
         StatusMessage = "";
         StateHasChanged();
     }
-
-    public void Dispose()
-    {
-        _refreshTimer?.Dispose();
-    }
 }
+
 

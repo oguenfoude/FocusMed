@@ -342,9 +342,10 @@ public class DicomUpsertService
             var today = DateTime.UtcNow.Date;
             var study = db.Studies
                 .Include(s => s.Patient)
-                .Where(s => s.PatientId == patient.Id && s.Status != StudyStatus.Deleted)
+                .Where(s => s.PatientId == patient.Id && s.Status == StudyStatus.Receiving)
                 .OrderByDescending(s => s.LastUpdatedAt)
-                .FirstOrDefault(s => !s.StudyDate.HasValue || s.StudyDate.Value.Date == today || s.LastUpdatedAt >= DateTime.UtcNow.AddHours(-24));
+                .FirstOrDefault(s => !s.StudyDate.HasValue || s.StudyDate.Value.Date == today || s.LastUpdatedAt >= DateTime.UtcNow.AddHours(-2));
+
 
 
 
