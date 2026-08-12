@@ -35,14 +35,16 @@ public class PdfService
         IReadOnlyList<string> imagePaths,
         string? resumePdfPath = null,
         string pageSize = "A4",
-        bool isBooklet = false)
+        bool isBooklet = false,
+        int imagesPerPage = 1,
+        int gapPx = 1)
     {
         CleanupOldPdfs();
 
         var validPaths = imagePaths.Where(File.Exists).ToList();
         if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
 
-        var inputKey = $"{patientName}|{studyDate}|{resumePdfPath}|{string.Join(";", validPaths)}";
+        var inputKey = $"{patientName}|{studyDate}|{resumePdfPath}|{imagesPerPage}|{gapPx}|{string.Join(";", validPaths)}";
         var hashBytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(inputKey));
         var hashStr = Convert.ToHexString(hashBytes).ToLowerInvariant();
         var fileName = $"cache_{hashStr}.pdf";
@@ -85,7 +87,7 @@ public class PdfService
             if (validPaths.Count > 0)
             {
                 imagesPdfPath = Path.Combine(Path.GetTempPath(), $"images_{Guid.NewGuid():N}.pdf");
-                GenerateImagesPdf(validPaths, imagesPdfPath);
+                GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx);
                 tempFiles.Add(imagesPdfPath);
             }
 
@@ -160,39 +162,56 @@ public class PdfService
         }
     }
 
-    private void GenerateImagesPdf(IReadOnlyList<string> imagePaths, string outputPath)
+    private void GenerateImagesPdf(IReadOnlyList<string> imagePaths, string outputPath, int imagesPerPage, int gapPx)
     {
         var questPageSize = PageSizes.A4.Portrait();
+        var perPage = Math.Max(1, imagesPerPage);
+        var gap = (float)Math.Max(0, gapPx);
 
         var document = QuestPDF.Fluent.Document.Create(container =>
         {
-            foreach (var imgPath in imagePaths)
+            for (int i = 0; i < imagePaths.Count; i += perPage)
             {
-                try
+                var batch = imagePaths.Skip(i).Take(perPage).ToList();
+                container.Page(page =>
                 {
-                    var imgBytes = File.ReadAllBytes(imgPath);
-                    container.Page(page =>
+                    page.Size(questPageSize);
+                    page.MarginHorizontal(10f);
+                    page.MarginVertical(10f);
+
+                    page.Content().Grid(grid =>
                     {
-                        page.Size(questPageSize);
-                        page.MarginHorizontal(15f);
-                        page.MarginVertical(15f);
-                        page.Content()
-                            .AlignCenter()
-                            .AlignMiddle()
-                            .Image(imgBytes)
-                            .FitArea();
+                        grid.Spacing(gap);
+                        if (perPage == 1 || perPage == 2)
+                        {
+                            grid.Columns(1);
+                        }
+                        else
+                        {
+                            grid.Columns(2);
+                        }
+
+                        foreach (var imgPath in batch)
+                        {
+                            try
+                            {
+                                var imgBytes = File.ReadAllBytes(imgPath);
+                                grid.Item().AlignCenter().AlignMiddle().Image(imgBytes).FitArea();
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed to add image to PDF: {Path}", imgPath);
+                            }
+                        }
                     });
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to add image to PDF: {Path}", imgPath);
-                }
+                });
             }
         });
 
         using var fs = File.Create(outputPath);
         document.GeneratePdf(fs);
     }
+
 
     private void MergePdfs(string outputPath, string coverPdfPath, string? resumePdfPath, string? imagesPdfPath)
     {
