@@ -47,7 +47,7 @@
 }
 else
 {
-    <!-- Top Action Bar with Breadcrumb and Print Button -->
+    <!-- Top Breadcrumb Bar -->
     <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div class="flex items-center gap-2 text-sm text-slate-500">
             <a href="/" class="hover:text-brand-600 font-semibold transition-colors flex items-center gap-1">
@@ -59,12 +59,6 @@ else
             <span class="text-slate-400">·</span>
             <span class="text-slate-500">@(Study.StudyDate?.ToString("dd/MM/yyyy") ?? Study.CreatedAt.ToString("dd/MM/yyyy"))</span>
         </div>
-
-        <button @onclick="OpenPrintDialog" disabled="@IsPrinting"
-                class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white bg-brand-600 hover:bg-brand-700 border border-brand-700 transition-all disabled:opacity-50 shadow-md shadow-brand-500/20 active:scale-[0.98]">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
-            Imprimer l'étude
-        </button>
     </div>
 
     <!-- Big Patient Info Card -->
@@ -119,8 +113,9 @@ else
             </div>
         </div>
 
-        <!-- Separate Resume Section -->
-        <div class="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-3">
+        <!-- Patient Card Bottom Controls Row: Resume + PDF Controls + Print Button -->
+        <div class="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-4">
+            <!-- Left: Resume Status -->
             <div class="flex items-center gap-2">
                 <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">Résumé Médical:</span>
                 @if (!string.IsNullOrEmpty(Study.ResumePdfPath))
@@ -129,6 +124,12 @@ else
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                         Résumé associé (@Path.GetFileName(Study.ResumePdfPath))
                     </span>
+                    <button @onclick="OpenUnlinkConfirm" disabled="@IsUnlinking"
+                            class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors disabled:opacity-50 shadow-sm"
+                            title="Supprimer le résumé associé">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                        Retirer
+                    </button>
                 }
                 else
                 {
@@ -136,15 +137,36 @@ else
                 }
             </div>
 
-            @if (!string.IsNullOrEmpty(Study.ResumePdfPath))
-            {
-                <button @onclick="OpenUnlinkConfirm" disabled="@IsUnlinking"
-                        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors disabled:opacity-50 shadow-sm"
-                        title="Supprimer le résumé associé à cette étude">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                    Retirer le résumé
+            <!-- Right: Layout Controls & Print Button -->
+            <div class="flex items-center gap-3 flex-wrap">
+                <!-- Images per page numeric input -->
+                <div class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5">
+                    <label class="text-xs font-bold text-slate-600">Images / page:</label>
+                    <input type="number" min="1" max="50" @bind="ImagesPerPage" @bind:after="OnGridOptionChanged"
+                           class="w-14 px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                </div>
+
+                <!-- Gap numeric input -->
+                <div class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5">
+                    <label class="text-xs font-bold text-slate-600">Gap (px):</label>
+                    <input type="number" min="0" max="50" @bind="GapPx" @bind:after="OnGridOptionChanged"
+                           class="w-14 px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                </div>
+
+                <!-- Margin numeric input -->
+                <div class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5">
+                    <label class="text-xs font-bold text-slate-600">Marge (px):</label>
+                    <input type="number" min="0" max="50" @bind="MarginPx" @bind:after="OnGridOptionChanged"
+                           class="w-14 px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                </div>
+
+                <!-- Print Study Action Button -->
+                <button @onclick="OpenPrintDialog" disabled="@IsPrinting"
+                        class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-brand-600 to-brand-700 hover:from-brand-700 hover:to-brand-800 border border-brand-700 transition-all disabled:opacity-50 shadow-md shadow-brand-500/20 active:scale-[0.98]">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+                    Imprimer l'étude
                 </button>
-            }
+            </div>
         </div>
     </div>
 
@@ -249,41 +271,9 @@ else
             </div>
         </div>
 
-        <!-- PDF PREVIEW AREA (with Layout Controls Bar) -->
+        <!-- PDF PREVIEW AREA -->
         <div class="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden min-w-0">
-            <!-- Layout Options Toolbar -->
-            <div class="px-4 py-2 border-b border-slate-200 bg-slate-50/80 flex items-center justify-between flex-wrap gap-2 text-xs">
-                <div class="flex items-center gap-4 flex-wrap">
-                    <!-- Images per page numeric input -->
-                    <div class="flex items-center gap-1.5">
-                        <label class="font-bold text-slate-600">Images / page:</label>
-                        <input type="number" min="1" max="50" @bind="ImagesPerPage" @bind:after="OnGridOptionChanged"
-                               class="w-16 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500" />
-                    </div>
 
-                    <!-- Gap / Espacement numeric input -->
-                    <div class="flex items-center gap-1.5">
-                        <label class="font-bold text-slate-600">Gap (px):</label>
-                        <input type="number" min="0" max="50" @bind="GapPx" @bind:after="OnGridOptionChanged"
-                               class="w-16 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500" />
-                    </div>
-
-                    <!-- Margin numeric input -->
-                    <div class="flex items-center gap-1.5">
-                        <label class="font-bold text-slate-600">Marge (px):</label>
-                        <input type="number" min="0" max="50" @bind="MarginPx" @bind:after="OnGridOptionChanged"
-                               class="w-16 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-500" />
-                    </div>
-                </div>
-
-                @if (IsRegeneratingPdf)
-                {
-                    <span class="text-brand-600 font-semibold flex items-center gap-1">
-                        <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                        Mise à jour PDF…
-                    </span>
-                }
-            </div>
 
             @if (SelectedFrameIds.Count == 0)
             {
