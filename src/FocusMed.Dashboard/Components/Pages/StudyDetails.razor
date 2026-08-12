@@ -494,7 +494,7 @@ else
         try
         {
             AvailablePrinters = DiscoveryService.GetAvailablePrinters();
-            var savedSettings = await SettingsStore.GetSettingsAsync();
+            var savedSettings = await SettingsStore.LoadAsync();
             var savedPrinter = savedSettings?.DefaultPrinterName;
 
             if (!string.IsNullOrEmpty(savedPrinter) && AvailablePrinters.Any(p => p.Name == savedPrinter))
@@ -786,7 +786,6 @@ else
             {
                 StatusMessage = $"Impression envoyée à '{SelectedPrinter}'.";
                 IsError = false;
-                ShowPrintDialog = false;
             }
             else
             {
