@@ -105,21 +105,6 @@ public class PngExtractionService
         return results;
     }
 
-    [Obsolete("Public API reserved for external callers; not used internally per AGENTS.md #52.")]
-    public void ReleaseStudyPng(int studyId)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-
-        var study = db.Studies.Find(studyId);
-        if (study == null) return;
-
-        var studyUid = study.StudyInstanceUid;
-        if (string.IsNullOrEmpty(studyUid)) return;
-
-        _studyRefCount.AddOrUpdate(studyUid, 0, (_, old) => Math.Max(0, old - 1));
-    }
-
     public async Task ExtractForImageAsync(DicomImage dicomImage, CancellationToken ct = default)
     {
         if (!string.IsNullOrEmpty(dicomImage.PngPath))

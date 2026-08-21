@@ -235,9 +235,6 @@ public class PdfService
         document.GeneratePdf(fs);
     }
 
-
-
-
     private void MergePdfs(string outputPath, string coverPdfPath, string? resumePdfPath, string? imagesPdfPath)
     {
         using var outputDocument = new PdfDocument();

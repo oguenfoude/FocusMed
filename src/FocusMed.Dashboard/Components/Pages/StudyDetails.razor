@@ -456,12 +456,8 @@ else
     private string SelectedPrintMode { get; set; } = "BookletA3";
     private bool IsPrinting;
     private string? SelectedPrinter;
-    private string? SelectedProfileName;
-    private string? SelectedPaperSize;
     private int Copies = 1;
     private IReadOnlyList<FocusMed.Printing.Discovery.InstalledPrinter> AvailablePrinters = [];
-    private List<FocusMed.Printing.Profiles.PrintProfile> AvailableProfiles = new();
-    private List<FocusMed.Printing.Discovery.PaperSizeInfo> AvailablePaperSizes = new();
 
     private string StatusMessage = "";
     private bool IsError = false;
@@ -689,48 +685,6 @@ else
     {
         StatusMessage = "";
         IsError = false;
-    }
-
-
-
-    private async Task LoadProfilesForPrinter()
-    {
-        if (string.IsNullOrEmpty(SelectedPrinter))
-        {
-            AvailableProfiles = new();
-            AvailablePaperSizes = new();
-            return;
-        }
-        try
-        {
-            var snapshot = await CapabilityService.GetSnapshotAsync(SelectedPrinter);
-            AvailableProfiles = ProfileBuilder.BuildProfiles(snapshot).ToList();
-            AvailablePaperSizes = snapshot.PaperSizes.ToList();
-            if (AvailableProfiles.Count > 0)
-                SelectedProfileName = AvailableProfiles[0].Name;
-            // Default to the profile's paper size
-            if (AvailablePaperSizes.Count > 0)
-            {
-                var defaultPaper = AvailableProfiles.FirstOrDefault()?.PaperSizeName;
-                SelectedPaperSize = defaultPaper ?? AvailablePaperSizes.FirstOrDefault()?.Name;
-            }
-            await InvokeAsync(StateHasChanged);
-        }
-        catch
-        {
-            AvailableProfiles = new();
-            AvailablePaperSizes = new();
-        }
-    }
-
-    private void OnProfileChanged()
-    {
-        var selectedProfile = AvailableProfiles.FirstOrDefault(p => p.Name == SelectedProfileName);
-        if (selectedProfile != null && AvailablePaperSizes.Count > 0)
-        {
-            SelectedPaperSize = AvailablePaperSizes.FirstOrDefault(ps => ps.Name == selectedProfile.PaperSizeName)?.Name
-                ?? AvailablePaperSizes.FirstOrDefault()?.Name;
-        }
     }
 
     private async Task OnPrinterChanged()

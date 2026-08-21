@@ -379,10 +379,6 @@ public class DicomUpsertService
                 .OrderByDescending(s => s.LastUpdatedAt)
                 .FirstOrDefault(s => s.LastUpdatedAt >= DateTime.UtcNow.AddMinutes(-2));
 
-
-
-
-
             if (study == null)
             {
                 study = new Study { Patient = patient, StudyInstanceUid = studyUid, StudyDate = DateTime.UtcNow, Status = StudyStatus.Receiving };
