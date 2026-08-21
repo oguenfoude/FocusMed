@@ -98,39 +98,12 @@ internal sealed class PrintExecutionService(
 
         if (request.Profile.IsBooklet)
         {
-            try
-            {
-                var caps = queue.GetPrintCapabilities(ticket);
-                var staplingCaps = caps.StaplingCapability;
-
-                if (staplingCaps.Contains(Stapling.SaddleStitch))
-                {
-                    ticket.Stapling = Stapling.SaddleStitch;
-                    logger.LogInformation("Stapling set to SaddleStitch");
-                }
-                else if (staplingCaps.Contains(Stapling.StapleDualLeft))
-                {
-                    ticket.Stapling = Stapling.StapleDualLeft;
-                    logger.LogInformation("Stapling set to StapleDualLeft (2 staples on binding edge)");
-                }
-                else if (staplingCaps.Contains(Stapling.StapleDualTop))
-                {
-                    ticket.Stapling = Stapling.StapleDualTop;
-                    logger.LogInformation("Stapling set to StapleDualTop (2 staples on binding edge)");
-                }
-                else
-                {
-                    ticket.Stapling = Stapling.None;
-                    logger.LogInformation("Driver does not support Booklet/Dual stapling; Duplex short-edge fold active");
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Could not query or set stapling on print ticket");
-            }
+            logger.LogInformation("Booklet mode: using driver defaults for stapling/finishing (configured via driver UI)");
         }
-
-        // ── Step 4: build XPS document ──────────────────────────────────────────
+        else
+        {
+            ticket.Stapling = Stapling.None;
+        }
         byte[] pdfBytes = File.ReadAllBytes(pdfPath);
         var fixedDoc = new FixedDocument();
 
