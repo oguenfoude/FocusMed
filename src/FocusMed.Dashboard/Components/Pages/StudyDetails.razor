@@ -589,8 +589,11 @@ else
             var studyDescription = Study?.Description ?? "";
             var resumePdfPath = Study?.ResumePdfPath;
 
+            bool isBooklet = SelectedPrintMode == "BookletA3" || SelectedPrintMode == "BookletA4";
+            string pdfPageSize = SelectedPrintMode == "BookletA4" || SelectedPrintMode == "StandardA4" ? "A4" : "A3";
+
             var newUrl = await Task.Run(() =>
-                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, "A3", isBooklet: true, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx), ct);
+                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, pdfPageSize, isBooklet, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx), ct);
 
 
 

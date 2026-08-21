@@ -16,7 +16,7 @@ QuestPDF.Settings.License = LicenseType.Community;
 
 var connectionString = builder.Configuration.GetValue<string>("ConnectionString")
     ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
-    ?? "Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin";
+    ?? "Data Source=focusmed.db";
 
 builder.Services.AddFocusMedData(connectionString);
 

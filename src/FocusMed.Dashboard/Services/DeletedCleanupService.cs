@@ -51,12 +51,24 @@ public class DeletedCleanupService : BackgroundService
                                     var dir = Path.GetDirectoryName(img.FilePath);
                                     if (dir != null)
                                     {
-                                        var studyDir = Directory.GetParent(dir)?.FullName;
-                                        if (studyDir != null) archiveDirs.Add(studyDir);
+                                        var seriesDir = Directory.GetParent(dir)?.FullName;
+                                        if (seriesDir != null)
+                                        {
+                                            var studyDir = Directory.GetParent(seriesDir)?.FullName;
+                                            if (studyDir != null) archiveDirs.Add(studyDir);
+                                        }
                                     }
                                 }
-                                db.DicomFrames.RemoveRange(img.Frames);
                             }
+
+                            foreach (var dir in archiveDirs)
+                            {
+                                try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+                                catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete archive dir {Dir}", dir); }
+                            }
+
+                            foreach (var img in images)
+                                db.DicomFrames.RemoveRange(img.Frames);
                             db.DicomImages.RemoveRange(images);
 
                             var series = await db.Series.Where(s => s.StudyId == study.Id).ToListAsync(stoppingToken);
@@ -78,12 +90,6 @@ public class DeletedCleanupService : BackgroundService
                                         await db.SaveChangesAsync(stoppingToken);
                                     }
                                 }
-                            }
-
-                            foreach (var dir in archiveDirs)
-                            {
-                                try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
-                                catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete archive dir {Dir}", dir); }
                             }
                         }
                         catch (Exception ex)

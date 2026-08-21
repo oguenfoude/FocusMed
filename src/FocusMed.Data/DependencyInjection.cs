@@ -9,7 +9,7 @@ public static class DependencyInjection
     {
         services.AddDbContextFactory<FocusMedDbContext>((_, options) =>
         {
-            options.UseNpgsql(connectionString);
+            options.UseSqlite(connectionString);
         });
 
         return services;

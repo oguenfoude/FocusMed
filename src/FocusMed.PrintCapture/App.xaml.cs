@@ -51,7 +51,7 @@ public partial class App : System.Windows.Application
 
             var connectionString = configuration["ConnectionString"]
                 ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
-                ?? "Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin";
+                ?? "Data Source=focusmed.db";
 
             var printerName = configuration["PrinterName"] ?? "FocusMed";
             var driverName = configuration["OutputDriverName"] ?? "Microsoft Print To PDF";

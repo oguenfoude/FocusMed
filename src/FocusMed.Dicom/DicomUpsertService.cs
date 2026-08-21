@@ -16,6 +16,7 @@ public class DicomUpsertService
     private readonly IStudyNotificationService _notificationService;
     private readonly string _archivePath;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
+    private static readonly ConcurrentDictionary<string, int> _studyLockCounts = new();
 
     public DicomUpsertService(
         IServiceScopeFactory scopeFactory,
@@ -65,6 +66,7 @@ public class DicomUpsertService
         }
 
         var studyLock = _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
+        _studyLockCounts.AddOrUpdate(studyUid, 1, (_, c) => c + 1);
         await studyLock.WaitAsync();
         string filePath = "";
         try
@@ -219,88 +221,98 @@ public class DicomUpsertService
         finally
         {
             studyLock.Release();
-            if (_studyLocks.TryGetValue(studyUid, out var existing) && existing.CurrentCount > 0)
+            var remaining = _studyLockCounts.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
+            if (remaining <= 0)
+            {
+                _studyLockCounts.TryRemove(studyUid, out _);
                 _studyLocks.TryRemove(studyUid, out _);
+            }
         }
     }
 
     public async Task BackfillMetadataAsync()
     {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-
-        var images = await db.DicomImages
-            .Include(i => i.Series)
-            .ThenInclude(s => s.Study)
-                .ThenInclude(s => s!.Patient)
-            .Where(i => i.Series.Study != null &&
-                (i.Series.Study.Patient!.BirthDate == null ||
-                 i.Series.Study.InstitutionName == null))
-            .AsSplitQuery()
-            .ToListAsync();
-
-        var processedFileHashes = new HashSet<string>();
+        const int batchSize = 200;
         var backfilled = 0;
+        var lastId = 0;
 
-        foreach (var image in images)
+        while (true)
         {
-            if (string.IsNullOrEmpty(image.FilePath) || !File.Exists(image.FilePath))
-                continue;
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
-            var key = image.FilePath;
-            if (!processedFileHashes.Add(key))
-                continue;
+            var images = await db.DicomImages
+                .Include(i => i.Series)
+                .ThenInclude(s => s.Study)
+                    .ThenInclude(s => s!.Patient)
+                .Where(i => i.Id > lastId && i.Series.Study != null &&
+                    (i.Series.Study.Patient!.BirthDate == null ||
+                     i.Series.Study.InstitutionName == null))
+                .OrderBy(i => i.Id)
+                .Take(batchSize)
+                .AsSplitQuery()
+                .ToListAsync();
 
-            try
+            if (images.Count == 0)
+                break;
+
+            foreach (var image in images)
             {
-                var dicomFile = await DicomFile.OpenAsync(image.FilePath);
-                var ds = dicomFile.Dataset;
+                lastId = image.Id;
 
-                var patient = image.Series?.Study?.Patient;
-                if (patient != null)
+                if (string.IsNullOrEmpty(image.FilePath) || !File.Exists(image.FilePath))
+                    continue;
+
+                try
                 {
-                    var birthDate = ds.GetSingleValueOrDefault(DicomTag.PatientBirthDate, "");
-                    var sex = ds.GetSingleValueOrDefault(DicomTag.PatientSex, "");
-                    if (patient.BirthDate == null && !string.IsNullOrWhiteSpace(birthDate))
-                        patient.BirthDate = birthDate;
-                    if (patient.Sex == null && !string.IsNullOrWhiteSpace(sex))
-                        patient.Sex = sex;
-                }
+                    var dicomFile = await DicomFile.OpenAsync(image.FilePath);
+                    var ds = dicomFile.Dataset;
 
-                var study = image.Series?.Study;
-                if (study != null)
+                    var patient = image.Series?.Study?.Patient;
+                    if (patient != null)
+                    {
+                        var birthDate = ds.GetSingleValueOrDefault(DicomTag.PatientBirthDate, "");
+                        var sex = ds.GetSingleValueOrDefault(DicomTag.PatientSex, "");
+                        if (patient.BirthDate == null && !string.IsNullOrWhiteSpace(birthDate))
+                            patient.BirthDate = birthDate;
+                        if (patient.Sex == null && !string.IsNullOrWhiteSpace(sex))
+                            patient.Sex = sex;
+                    }
+
+                    var study = image.Series?.Study;
+                    if (study != null)
+                    {
+                        var desc = ds.GetSingleValueOrDefault(DicomTag.StudyDescription, "");
+                        var accNum = ds.GetSingleValueOrDefault(DicomTag.AccessionNumber, "");
+                        var inst = ds.GetSingleValueOrDefault(DicomTag.InstitutionName, "");
+                        var mfr = ds.GetSingleValueOrDefault(DicomTag.Manufacturer, "");
+                        var refDoc = ds.GetSingleValueOrDefault(DicomTag.ReferringPhysicianName, "");
+
+                        if (study.Description == null && !string.IsNullOrWhiteSpace(desc))
+                            study.Description = desc;
+                        if (study.AccessionNumber == null && !string.IsNullOrWhiteSpace(accNum))
+                            study.AccessionNumber = accNum;
+                        if (study.InstitutionName == null && !string.IsNullOrWhiteSpace(inst))
+                            study.InstitutionName = inst;
+                        if (study.Manufacturer == null && !string.IsNullOrWhiteSpace(mfr))
+                            study.Manufacturer = mfr;
+                        if (study.ReferringPhysicianName == null && !string.IsNullOrWhiteSpace(refDoc))
+                            study.ReferringPhysicianName = refDoc;
+                    }
+
+                    backfilled++;
+                }
+                catch (Exception ex)
                 {
-                    var desc = ds.GetSingleValueOrDefault(DicomTag.StudyDescription, "");
-                    var accNum = ds.GetSingleValueOrDefault(DicomTag.AccessionNumber, "");
-                    var inst = ds.GetSingleValueOrDefault(DicomTag.InstitutionName, "");
-                    var mfr = ds.GetSingleValueOrDefault(DicomTag.Manufacturer, "");
-                    var refDoc = ds.GetSingleValueOrDefault(DicomTag.ReferringPhysicianName, "");
-
-                    if (study.Description == null && !string.IsNullOrWhiteSpace(desc))
-                        study.Description = desc;
-                    if (study.AccessionNumber == null && !string.IsNullOrWhiteSpace(accNum))
-                        study.AccessionNumber = accNum;
-                    if (study.InstitutionName == null && !string.IsNullOrWhiteSpace(inst))
-                        study.InstitutionName = inst;
-                    if (study.Manufacturer == null && !string.IsNullOrWhiteSpace(mfr))
-                        study.Manufacturer = mfr;
-                    if (study.ReferringPhysicianName == null && !string.IsNullOrWhiteSpace(refDoc))
-                        study.ReferringPhysicianName = refDoc;
+                    _logger.LogWarning(ex, "Backfill failed for {FilePath}", image.FilePath);
                 }
+            }
 
-                backfilled++;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Backfill failed for {FilePath}", image.FilePath);
-            }
+            await db.SaveChangesAsync();
         }
 
         if (backfilled > 0)
-        {
-            await db.SaveChangesAsync();
             _logger.LogInformation("Backfilled metadata from {Count} DICOM files", backfilled);
-        }
     }
 
     public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, string patientId, string patientName)
@@ -347,13 +359,14 @@ public class DicomUpsertService
         var dicomFile = new DicomFile(newDataset);
 
         var studyLock = _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
+        _studyLockCounts.AddOrUpdate(studyUid, 1, (_, c) => c + 1);
         await studyLock.WaitAsync();
         try
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
-            var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId || (!string.IsNullOrEmpty(patientName) && p.PatientName == patientName));
+            var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId);
             if (patient == null)
             {
                 patient = new Patient { PatientId = patientId, PatientName = patientName };
@@ -435,8 +448,12 @@ public class DicomUpsertService
         finally
         {
             studyLock.Release();
-            if (_studyLocks.TryGetValue(studyUid, out var existing) && existing.CurrentCount > 0)
+            var remaining = _studyLockCounts.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
+            if (remaining <= 0)
+            {
+                _studyLockCounts.TryRemove(studyUid, out _);
                 _studyLocks.TryRemove(studyUid, out _);
+            }
         }
     }
 }

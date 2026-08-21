@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO.Compression;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -14,6 +15,7 @@ public class PdfService
     private readonly string _coverTemplatePath;
     private readonly ILogger<PdfService> _logger;
     private readonly FocusMed.Printing.Imposition.IBookletImpositionService _bookletService;
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _pdfLocks = new();
 
     public PdfService(ILogger<PdfService> logger, IWebHostEnvironment env, FocusMed.Printing.Imposition.IBookletImpositionService bookletService)
     {
@@ -56,63 +58,68 @@ public class PdfService
             return $"/pdf-cache/{fileName}";
         }
 
-        var tempFiles = new List<string>();
+        var pdfLock = _pdfLocks.GetOrAdd(hashStr, _ => new SemaphoreSlim(1, 1));
+        pdfLock.Wait();
         try
         {
+            if (File.Exists(finalPath))
+                return $"/pdf-cache/{fileName}";
 
-            // Step 1: Create modified cover.docx with replaced placeholders
-            var coverDocxPath = CreateModifiedCoverDocx(patientName, studyDate, tempFiles);
-            if (coverDocxPath == null) return "";
-
-            // Step 2: Convert cover.docx → cover.pdf using MiniPdf
-            var coverPdfPath = Path.Combine(Path.GetTempPath(), $"cover_{Guid.NewGuid():N}.pdf");
-            MiniPdf.ConvertToPdf(coverDocxPath, coverPdfPath);
-            tempFiles.Add(coverPdfPath);
-
-            // Step 3: Prepare resume PDF path (copy from resumes folder if exists)
-            string? resumeFullPath = null;
-            if (!string.IsNullOrEmpty(resumePdfPath))
+            var tempFiles = new List<string>();
+            try
             {
-                var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
-                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
-                resumeFullPath = Path.Combine(dataDir, resumePdfPath);
-                if (!File.Exists(resumeFullPath))
+                var coverDocxPath = CreateModifiedCoverDocx(patientName, studyDate, tempFiles);
+                if (coverDocxPath == null) return "";
+
+                var coverPdfPath = Path.Combine(Path.GetTempPath(), $"cover_{Guid.NewGuid():N}.pdf");
+                MiniPdf.ConvertToPdf(coverDocxPath, coverPdfPath);
+                tempFiles.Add(coverPdfPath);
+
+                string? resumeFullPath = null;
+                if (!string.IsNullOrEmpty(resumePdfPath))
                 {
-                    _logger.LogWarning("Resume PDF not found at {Path}", resumeFullPath);
-                    resumeFullPath = null;
+                    var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+                    resumeFullPath = Path.Combine(dataDir, resumePdfPath);
+                    if (!File.Exists(resumeFullPath))
+                    {
+                        _logger.LogWarning("Resume PDF not found at {Path}", resumeFullPath);
+                        resumeFullPath = null;
+                    }
+                }
+
+                string? imagesPdfPath = null;
+                if (validPaths.Count > 0)
+                {
+                    imagesPdfPath = Path.Combine(Path.GetTempPath(), $"images_{Guid.NewGuid():N}.pdf");
+                    GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx);
+                    tempFiles.Add(imagesPdfPath);
+                }
+
+                var tempMergedA4 = Path.Combine(Path.GetTempPath(), $"merged_a4_{Guid.NewGuid():N}.pdf");
+                tempFiles.Add(tempMergedA4);
+                MergePdfs(tempMergedA4, coverPdfPath, resumeFullPath, imagesPdfPath);
+
+                File.Copy(tempMergedA4, finalPath, overwrite: true);
+
+                return $"/pdf-cache/{fileName}";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to generate PDF");
+                return "";
+            }
+            finally
+            {
+                foreach (var f in tempFiles)
+                {
+                    try { if (File.Exists(f)) File.Delete(f); } catch { }
                 }
             }
-
-            // Step 4: Generate image pages with QuestPDF → images.pdf (always A4 Portrait)
-            string? imagesPdfPath = null;
-            if (validPaths.Count > 0)
-            {
-                imagesPdfPath = Path.Combine(Path.GetTempPath(), $"images_{Guid.NewGuid():N}.pdf");
-                GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx);
-                tempFiles.Add(imagesPdfPath);
-            }
-
-            // Step 5: Merge all A4 pages
-            var tempMergedA4 = Path.Combine(Path.GetTempPath(), $"merged_a4_{Guid.NewGuid():N}.pdf");
-            tempFiles.Add(tempMergedA4);
-            MergePdfs(tempMergedA4, coverPdfPath, resumeFullPath, imagesPdfPath);
-
-            // Step 6: Save clean Master A4 Portrait PDF file directly
-            File.Copy(tempMergedA4, finalPath, overwrite: true);
-
-            return $"/pdf-cache/{fileName}";
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to generate PDF");
-            return "";
         }
         finally
         {
-            foreach (var f in tempFiles)
-            {
-                try { if (File.Exists(f)) File.Delete(f); } catch { }
-            }
+            pdfLock.Release();
         }
     }
 
@@ -194,17 +201,25 @@ public class PdfService
                     page.MarginHorizontal(margin);
                     page.MarginVertical(margin);
 
-                    page.Content().Grid(grid =>
+                    page.Content().Table(table =>
                     {
-                        grid.Spacing(gap);
-                        grid.Columns(cols);
+                        table.ColumnsDefinition(columns =>
+                        {
+                            for (int c = 0; c < cols; c++)
+                                columns.RelativeColumn();
+                        });
 
                         foreach (var imgPath in batch)
                         {
                             try
                             {
                                 var imgBytes = File.ReadAllBytes(imgPath);
-                                grid.Item().AlignCenter().AlignMiddle().Image(imgBytes).FitArea();
+                                table.Cell()
+                                    .Padding(gap / 2f)
+                                    .AlignCenter()
+                                    .AlignMiddle()
+                                    .Image(imgBytes)
+                                    .FitArea();
                             }
                             catch (Exception ex)
                             {

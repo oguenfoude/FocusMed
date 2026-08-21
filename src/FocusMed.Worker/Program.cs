@@ -31,7 +31,7 @@ try
         {
             var connectionString = hostContext.Configuration.GetValue<string>("ConnectionString")
                 ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
-                ?? "Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin";
+                ?? "Data Source=focusmed.db";
 
             // Set env var for downstream services
             Environment.SetEnvironmentVariable("FOCUSMED_DB_CONNECTION", connectionString);

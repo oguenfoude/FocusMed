@@ -4,6 +4,7 @@ internal static class DicomHelpers
 {
     public static string SanitizeFileName(string name)
     {
+        name ??= string.Empty;
         foreach (var c in Path.GetInvalidFileNameChars())
             name = name.Replace(c, '_');
         name = name.Replace('\\', '_').Replace('/', '_');

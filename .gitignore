@@ -43,3 +43,6 @@ appsettings.Production.json
 tools/
 temp_images/
 test-env/
+stdout.txt
+stderr.txt
+.playwright-mcp/

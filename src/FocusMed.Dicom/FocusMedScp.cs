@@ -68,6 +68,18 @@ public class FocusMedScp : DicomService,
     {
         _associationStartTime = DateTime.UtcNow;
 
+        if (!string.IsNullOrWhiteSpace(_networkingOptions.Value.AETitle)
+            && association.CalledAE != _networkingOptions.Value.AETitle)
+        {
+            _logger.LogWarning("REJECTED: CalledAE '{CalledAE}' does not match configured AETitle '{AETitle}'",
+                association.CalledAE, _networkingOptions.Value.AETitle);
+            await SendAssociationRejectAsync(
+                DicomRejectResult.Permanent,
+                DicomRejectSource.ServiceUser,
+                DicomRejectReason.NoReasonGiven);
+            return;
+        }
+
         if (_networkingOptions.Value.EnforceAeWhitelist)
         {
             var callingAe = association.CallingAE;
@@ -360,7 +372,7 @@ public class FocusMedScp : DicomService,
                     { DicomTag.PatientID, study.Patient?.PatientId ?? string.Empty },
                     { DicomTag.StudyInstanceUID, study.StudyInstanceUid },
                     { DicomTag.StudyDate, study.StudyDate?.ToString("yyyyMMdd") ?? string.Empty },
-                    { DicomTag.AccessionNumber, string.Empty }
+                    { DicomTag.AccessionNumber, study.AccessionNumber ?? string.Empty }
                 };
                 results.Add(new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset });
             }

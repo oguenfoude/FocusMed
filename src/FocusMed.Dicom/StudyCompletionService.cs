@@ -57,25 +57,38 @@ public class StudyCompletionService : BackgroundService
 
         foreach (var study in readyStudies)
         {
-            var imageCount = study.Series.SelectMany(s => s.Images).Count();
-
-            // Re-check: verify no new images arrived since query (C-STORE race)
-            var freshImageCount = await db.DicomImages
-                .CountAsync(i => i.Series.StudyId == study.Id, stoppingToken);
-            if (freshImageCount != imageCount)
+            try
             {
-                study.LastUpdatedAt = DateTime.UtcNow;
-                continue;
-            }
+                var imageCount = study.Series.SelectMany(s => s.Images).Count();
 
-            study.Status = StudyStatus.Complete;
-            _logger.LogInformation("Study complete: {PatientName} | {StudyDate} | {StudyUid} ({ImageCount} images)",
-                study.Patient?.PatientName ?? "Unknown",
-                study.StudyDate?.ToString("yyyy-MM-dd") ?? "N/A",
-                study.StudyInstanceUid,
-                imageCount);
+                var freshImageCount = await db.DicomImages
+                    .CountAsync(i => i.Series.StudyId == study.Id, stoppingToken);
+                if (freshImageCount != imageCount)
+                {
+                    study.LastUpdatedAt = DateTime.UtcNow;
+                    continue;
+                }
+
+                study.Status = StudyStatus.Complete;
+                _logger.LogInformation("Study complete: {PatientName} | {StudyDate} | {StudyUid} ({ImageCount} images)",
+                    study.Patient?.PatientName ?? "Unknown",
+                    study.StudyDate?.ToString("yyyy-MM-dd") ?? "N/A",
+                    study.StudyInstanceUid,
+                    imageCount);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to complete study {StudyId}", study.Id);
+            }
         }
 
-        await db.SaveChangesAsync(stoppingToken);
+        try
+        {
+            await db.SaveChangesAsync(stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to save study completion changes");
+        }
     }
 }

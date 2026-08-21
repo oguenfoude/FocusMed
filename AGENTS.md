@@ -12,7 +12,7 @@ Compact reference for AI sessions. Every fact here is verified against the curre
 
 | Project | TFM | Role |
 |---------|-----|------|
-| `FocusMed.Data` | `net10.0` | EF Core (`FocusMedDbContext`), 11 DbSets, 4 enums, 20 migrations. No business logic. |
+| `FocusMed.Data` | `net10.0` | EF Core (`FocusMedDbContext`), 11 DbSets, 4 enums, 1 migration. No business logic. |
 | `FocusMed.Dicom` | `net10.0` | `FocusMedScp` (single SCP, all DICOM roles), `DicomUpsertService`, hosted services, `PrintScuService`, `PrintExecutionService`, `StorageForwardService`. |
 | `FocusMed.Worker` | `net10.0` | `Program.cs`, Serilog, DI wiring, `DicomListenerService`. Headless DICOM listener. |
 | `FocusMed.Dashboard` | `net10.0` | Blazor Server UI (`InteractiveServer`). Razor components, `PngExtractionService`, `PdfService`, `StudyService`. HTTP `:5000`. |
@@ -28,7 +28,7 @@ dotnet run --project src/FocusMed.Worker
 ```
 
 - Terminal **must be Administrator** — binds TCP port `11112`.
-- PostgreSQL on `localhost:5432`, database `focusmed`. `Database.Migrate()` runs on startup.
+- SQLite database `focusmed.db` in working directory. `Database.Migrate()` runs on startup.
 - New EF migration (from `src/FocusMed.Data`): `dotnet ef migrations add <Name> --project src/FocusMed.Data --startup-project src/FocusMed.Worker`.
 
 ### Dashboard
@@ -65,7 +65,7 @@ Folders use `<Modality>` from DICOM tag (CT, MR, etc.) or `SC` for print images.
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `FOCUSMED_DATA` | Override data directory | `%LOCALAPPDATA%\FocusMed` |
-| `FOCUSMED_DB_CONNECTION` | Override PostgreSQL connection string | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin` |
+| `FOCUSMED_DB_CONNECTION` | Override SQLite connection string | `Data Source=focusmed.db` |
 
 ## Explicitly Out of Scope
 
@@ -111,7 +111,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 16. **Concurrent C-STORE race condition.** Multiple C-STORE requests for the same study use `ConcurrentDictionary<string, SemaphoreSlim>` per study UID in `DicomUpsertService` to serialize inserts. Duplicate studies are allowed — each C-STORE creates new Study/Series/DicomImage records.
 
-17. **PostgreSQL DateTime UTC.** Npgsql requires `DateTimeKind.Utc`. `GetDicomDate()` returns `DateTime.SpecifyKind(date, DateTimeKind.Utc)`. Never use `DateTime.Now` or unspecified-kind DateTimes in entities.
+17. **SQLite DateTime UTC.** SQLite stores dates as TEXT (ISO8601). `GetDicomDate()` returns `DateTime.SpecifyKind(date, DateTimeKind.Utc)`. Never use `DateTime.Now` or unspecified-kind DateTimes in entities.
 
 18. **Association rejects when zero presentation contexts are accepted** (`FocusMedScp.cs:133-145`). After iterating all PCs, if `accepted == 0` the SCP sends `SendAssociationRejectAsync` with `DicomRejectResult.Permanent` / `DicomRejectReason.NoReasonGiven` and returns immediately — it never calls `SendAssociationAcceptAsync`. This prevents "successful" associations with no usable SOP classes.
 
@@ -159,7 +159,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 40. **PngExtractionService `_studyLocks`/`_studyRefCount` cleanup** (`PngExtractionService.cs:211`). When refcount reaches 0, both the semaphore and refcount entry are removed from their static dictionaries. Previously `_studyLocks.TryRemove` was called immediately after `Release()`, allowing another thread to acquire a semaphore that was about to be deleted. Now removal is conditional on `remaining <= 0`. Refcount is only managed by `GetOrExtractFramesAsync` (increment) and `ReleaseStudyPng` (decrement) — `ExtractForImageAsync` does NOT touch refcount.
 
-41. **DicomUpsertService `_studyLocks` cleanup** (`DicomUpsertService.cs:168`). When the semaphore's `CurrentCount > 0` (no waiters), the entry is removed from the static dictionary. Prevents unbounded memory growth from one `SemaphoreSlim` per unique StudyInstanceUID.
+41. **DicomUpsertService `_studyLocks` ref-counted cleanup** (`DicomUpsertService.cs:18-19`). Uses `ConcurrentDictionary<string, int> _studyLockCounts` alongside `_studyLocks`. Each `WaitAsync` increments the count, each `Release` decrements. When count reaches 0, both dictionaries remove the entry. Prevents race condition where `TryRemove` deletes a semaphore another thread is about to acquire.
 
 42. **StorageForwardQueue `PendingCount` only increments on successful enqueue** (`StorageForwardQueue.cs:26`). `TryWrite` return value is checked before `Interlocked.Inrement`. Previously inflated the counter even when the channel was completed/full.
 
@@ -189,11 +189,11 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 55. **Data layer has 4 enums.** `StorageCommitmentStatus` (Pending/Completed/Failed), `PrintStatus` (Pending/Printing/Completed/Failed), `StudyStatus` (Receiving/Complete/Failed/Archived/Deleted), `AssociationOutcome` (Success/Rejected/Failed/PartiallyAccepted). `PrinterType` (GrayLevel/Multicolor) is in `FocusMed.Dicom.Options`, not the Data layer.
 
-56. **`BackfillMetadataAsync` runs on startup** (`Program.cs:98`). On first boot or after adding the metadata migration, `DicomUpsertService.BackfillMetadataAsync()` iterates all DICOM images and backfills missing metadata (BirthDate, Sex, Description, AccessionNumber, InstitutionName, Manufacturer, ReferringPhysicianName) from the `.dcm` files into the database. This is a one-time operation per image.
+56. **`BackfillMetadataAsync` runs on startup** (`Program.cs:98`). On first boot or after adding the metadata migration, `DicomUpsertService.BackfillMetadataAsync()` iterates all DICOM images in batches of 200 and backfills missing metadata (BirthDate, Sex, Description, AccessionNumber, InstitutionName, Manufacturer, ReferringPhysicianName) from the `.dcm` files into the database. This is a one-time operation per image.
 
 57. **`StudyStabilizationSeconds` config key** (`appsettings.json:34`, default 60). Controls how long since `LastUpdatedAt` before a study is considered stable and marked Complete. `StudyCompletionService` polls every 5 seconds and marks studies as Complete when `LastUpdatedAt <= UtcNow - stabilizationSeconds` and no new images arrive.
 
-58. **`FocusMedDbContextFactory`** (`FocusMedDbContextFactory.cs`) is the `IDesignTimeDbContextFactory` for EF migrations. Uses a hardcoded connection string (the default `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin`). Does NOT read `FOCUSMED_DB_CONNECTION` env var. Not registered in DI — only used by `dotnet ef` tooling.
+58. **`FocusMedDbContextFactory`** (`FocusMedDbContextFactory.cs`) is the `IDesignTimeDbContextFactory` for EF migrations. Reads `FOCUSMED_DB_CONNECTION` env var with fallback to `Data Source=focusmed.db`. Not registered in DI — only used by `dotnet ef` tooling.
 
 59. **Dashboard `/pdf-cache` serves with `ServeUnknownFileTypes = true`** (`Program.cs:61-67`). This is intentional — PDFs are served by filename only (no extension in URL path). The `DefaultContentType` is `application/pdf`. Do not change `ServeUnknownFileTypes` to `false` or PDFs won't load in the iframe.
 
@@ -234,9 +234,9 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 - `src/FocusMed.Dicom/DicomHelpers.cs` — Static helpers: SanitizeFileName, GetFnv1aHash, GetDicomDate.
 - `src/FocusMed.Data/FocusMedDbContext.cs` — 11 DbSets, fluent FK config, enum conversion, 20 indexes.
 - `src/FocusMed.Data/FocusMedDbContextFactory.cs` — `IDesignTimeDbContextFactory` for EF migrations.
-- `src/FocusMed.Data/DependencyInjection.cs` — `AddFocusMedData` extension method, registers `FocusMedDbContext` with Npgsql.
+- `src/FocusMed.Data/DependencyInjection.cs` — `AddFocusMedData` extension method, registers `FocusMedDbContext` with Sqlite.
 - `src/FocusMed.Data/Entities/StorageCommitmentStatus.cs` — `Pending=0`, `Completed=1`, `Failed=2`.
-- `src/FocusMed.Data/Migrations/` — 20 EF migrations (latest: `AddStudyResumePath`).
+- `src/FocusMed.Data/Migrations/` — 1 EF migration (latest: `InitialSqlite`).
 - `src/FocusMed.Dashboard/Program.cs` — Blazor Server entry, registers `PngExtractionService`, serves `/images` from data dir.
 - `src/FocusMed.Dashboard/Components/Pages/Home.razor` — studies list, search, date filter, pagination, delete modal.
 - `src/FocusMed.Dashboard/Components/Pages/StudyDetails.razor` — patient info, study metadata, PNG image grid viewer.
