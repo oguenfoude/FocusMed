@@ -27,13 +27,13 @@ public class PrintJobMonitorService : IDisposable
     public void Start()
     {
         Directory.CreateDirectory(_watchFolder);
-        Directory.CreateDirectory(_resumesFolder);
-
-        _pollTimer = new System.Threading.Timer(_ => _ = PollAsync(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(200));
 
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
         var resumesDir = Path.Combine(dataDir, _resumesFolder);
+        Directory.CreateDirectory(resumesDir);
+
+        _pollTimer = new System.Threading.Timer(_ => _ = PollAsync(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(200));
 
         _logger.LogInformation("Polling: {Folder}\\incoming.pdf (every 200ms, stabilize 300ms)", _watchFolder);
         _logger.LogInformation("Resumes: {Folder}", resumesDir);

@@ -4,6 +4,7 @@ using FocusMed.Data;
 using FocusMed.Dicom;
 using FocusMed.Dicom.Options;
 using FocusMed.Printing;
+using FocusMed.Printing.Jobs;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Infrastructure;
@@ -16,7 +17,7 @@ QuestPDF.Settings.License = LicenseType.Community;
 
 var connectionString = builder.Configuration.GetValue<string>("ConnectionString")
     ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
-    ?? "Data Source=focusmed.db";
+    ?? $@"Data Source={Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed", "focusmed.db")}";
 
 builder.Services.AddFocusMedData(connectionString);
 
@@ -26,6 +27,7 @@ builder.Services.AddFellowOakDicom()
     .AddTranscoderManager<FellowOakDicom.Imaging.NativeCodec.NativeTranscoderManager>();
 
 builder.Services.Configure<PngExtractionOptions>(options => options.Enabled = true);
+builder.Services.Configure<RawPrinterConfig>(builder.Configuration.GetSection(RawPrinterConfig.SectionName));
 builder.Services.AddSingleton<IStudyNotificationService, StudyNotificationService>();
 builder.Services.AddSingleton<PngExtractionService>();
 builder.Services.AddScoped<StudyService>();

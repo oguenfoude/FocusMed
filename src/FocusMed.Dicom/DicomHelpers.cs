@@ -2,13 +2,31 @@ namespace FocusMed.Dicom;
 
 internal static class DicomHelpers
 {
+    private static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
+
     public static string SanitizeFileName(string name)
     {
-        name ??= string.Empty;
-        foreach (var c in Path.GetInvalidFileNameChars())
-            name = name.Replace(c, '_');
-        name = name.Replace('\\', '_').Replace('/', '_');
-        return string.IsNullOrWhiteSpace(name) ? "" : name.Trim().Replace(' ', '_');
+        if (string.IsNullOrEmpty(name)) return "";
+
+        var hasInvalid = false;
+        foreach (var c in name)
+        {
+            if (c == '\\' || c == '/' || c == ' ' || Array.IndexOf(InvalidFileNameChars, c) >= 0)
+            {
+                hasInvalid = true;
+                break;
+            }
+        }
+        if (!hasInvalid) return name;
+
+        return string.Create(name.Length, name, (span, state) =>
+        {
+            for (int i = 0; i < state.Length; i++)
+            {
+                var c = state[i];
+                span[i] = (c == '\\' || c == '/' || c == ' ' || Array.IndexOf(InvalidFileNameChars, c) >= 0) ? '_' : c;
+            }
+        });
     }
 
     public static string GetFnv1aHash(string input)

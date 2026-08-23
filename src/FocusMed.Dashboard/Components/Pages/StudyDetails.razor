@@ -12,6 +12,7 @@
 @inject FocusMed.Printing.Profiles.IPrintProfileBuilder ProfileBuilder
 @inject FocusMed.Printing.Jobs.IPrintExecutionService ExecutionService
 @inject FocusMed.Printing.Profiles.IPrinterSettingsStore SettingsStore
+@inject Microsoft.Extensions.Options.IOptions<FocusMed.Printing.Jobs.RawPrinterConfig> RawPrinterOptions
 @inject ILogger<StudyDetails> Logger
 
 <PageTitle>Détails de l'étude — FocusMed</PageTitle>
@@ -137,59 +138,16 @@ else
                 }
             </div>
 
-            <!-- Right: Print Options, Layout Controls & Direct Print Button -->
-            <div class="flex items-center gap-2.5 flex-wrap">
-                <!-- Print Mode Select -->
-                <div class="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5">
-                    <label class="text-xs font-bold text-slate-600">Mode:</label>
-                    <select @bind="SelectedPrintMode"
-                            class="px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500">
-                        <option value="BookletA3">Livret A3 (Booklet A3)</option>
-                        <option value="BookletA4">Livret A4 (Booklet A4)</option>
-                        <option value="StandardA4">Standard A4</option>
-                    </select>
-                </div>
+            <!-- Right: Print (dropdown + button, like AlPrint) -->
+            <div class="flex items-center gap-2 flex-wrap">
+                <select @bind="SelectedPrintMode"
+                        class="px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500">
+                    <option value="BookletA3">KONICA BOOK</option>
+                    <option value="FlatA3">KONICA A3</option>
+                    <option value="FlatA4">KONICA A4</option>
+                </select>
 
-                <!-- Printer Select -->
-                @if (AvailablePrinters.Count > 0)
-                {
-                    <div class="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5">
-                        <label class="text-xs font-bold text-slate-600">Imprimante:</label>
-                        <select @bind="SelectedPrinter" @bind:after="OnPrinterChanged"
-                                class="px-2 py-0.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 max-w-[150px] truncate">
-                            @foreach (var printer in AvailablePrinters)
-                            {
-                                <option value="@printer.Name">@printer.Name</option>
-                            }
-                        </select>
-                    </div>
-                }
-
-
-
-                <!-- Images per page input -->
-                <div class="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5">
-                    <label class="text-xs font-bold text-slate-600">Images/p:</label>
-                    <input type="number" min="1" max="50" @bind="ImagesPerPage" @bind:after="OnGridOptionChanged"
-                           class="w-12 px-1.5 py-0.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
-                </div>
-
-                <!-- Gap input -->
-                <div class="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5">
-                    <label class="text-xs font-bold text-slate-600">Gap:</label>
-                    <input type="number" min="0" max="50" @bind="GapPx" @bind:after="OnGridOptionChanged"
-                           class="w-12 px-1.5 py-0.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
-                </div>
-
-                <!-- Padding input -->
-                <div class="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5">
-                    <label class="text-xs font-bold text-slate-600">Padding:</label>
-                    <input type="number" min="0" max="50" @bind="MarginPx" @bind:after="OnGridOptionChanged"
-                           class="w-12 px-1.5 py-0.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-bold text-center shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
-                </div>
-
-                <!-- Direct Print Action Button -->
-                <button @onclick="PrintStudy" disabled="@(IsPrinting || IsRegeneratingPdf || string.IsNullOrEmpty(SelectedPrinter) || string.IsNullOrEmpty(PdfPreviewUrl))"
+                <button @onclick="PrintStudy" disabled="@(IsPrinting || IsRegeneratingPdf || string.IsNullOrEmpty(PdfPreviewUrl))"
                         class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-brand-600 to-brand-700 hover:from-brand-700 hover:to-brand-800 border border-brand-700 transition-all disabled:opacity-50 shadow-md shadow-brand-500/20 active:scale-[0.98]">
                     @if (IsPrinting)
                     {
@@ -199,7 +157,7 @@ else
                     else
                     {
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
-                        <span>Imprimer l'étude</span>
+                        <span>Imprimer</span>
                     }
                 </button>
             </div>
@@ -484,7 +442,16 @@ else
     {
         try
         {
-            AvailablePrinters = DiscoveryService.GetAvailablePrinters();
+            var printers = new List<FocusMed.Printing.Discovery.InstalledPrinter>(DiscoveryService.GetAvailablePrinters());
+
+            // Add raw TCP printers (Konica bizhub, etc.) from config
+            foreach (var raw in RawPrinterOptions.Value.Printers)
+            {
+                if (!printers.Any(p => p.Name.Equals(raw.Name, StringComparison.OrdinalIgnoreCase)))
+                    printers.Add(new FocusMed.Printing.Discovery.InstalledPrinter(raw.Name));
+            }
+
+            AvailablePrinters = printers;
             var savedSettings = await SettingsStore.LoadAsync();
             var savedPrinter = savedSettings?.DefaultPrinterName;
 
@@ -548,6 +515,7 @@ else
     private async Task RegeneratePdfPreviewAsync()
     {
         _regenCts?.Cancel();
+        _regenCts?.Dispose();
         _regenCts = new CancellationTokenSource();
         var ct = _regenCts.Token;
 
@@ -586,7 +554,7 @@ else
             var resumePdfPath = Study?.ResumePdfPath;
 
             bool isBooklet = SelectedPrintMode == "BookletA3" || SelectedPrintMode == "BookletA4";
-            string pdfPageSize = SelectedPrintMode == "BookletA4" || SelectedPrintMode == "StandardA4" ? "A4" : "A3";
+            string pdfPageSize = "A4";
 
             var newUrl = await Task.Run(() =>
                 PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, pdfPageSize, isBooklet, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx), ct);
@@ -703,29 +671,33 @@ else
 
     private async Task PrintStudy()
     {
-        if (IsPrinting || string.IsNullOrEmpty(SelectedPrinter) || Study == null) return;
+        if (IsPrinting || Study == null) return;
+
+        string presetName = SelectedPrintMode switch
+        {
+            "BookletA3" => "KONICA BOOK",
+            "FlatA3" => "KONICA A3",
+            "FlatA4" => "KONICA A4",
+            _ => "KONICA BOOK"
+        };
+
         IsPrinting = true;
         await InvokeAsync(StateHasChanged);
 
         try
         {
-            bool isBooklet = SelectedPrintMode == "BookletA3" || SelectedPrintMode == "BookletA4";
-            bool isBookletA3 = SelectedPrintMode == "BookletA3";
-            string paperSize = SelectedPrintMode == "BookletA4" || SelectedPrintMode == "StandardA4" ? "A4" : "A3";
+            bool isBooklet = SelectedPrintMode == "BookletA3";
+            string paperSize = SelectedPrintMode == "FlatA4" ? "A4" : "A3";
 
             var profile = new FocusMed.Printing.Profiles.PrintProfile
             {
-                Name = SelectedPrintMode,
-                Description = SelectedPrintMode,
+                Name = presetName,
+                Description = presetName,
                 IsBooklet = isBooklet,
                 PaperSizeName = paperSize,
                 RequiresDuplex = isBooklet,
-                // A3 Booklet: fold on SHORT edge (297mm) = TwoSidedShortEdge → correct landscape booklet binding
-                // A4 Booklet: fold on SHORT edge (210mm) = TwoSidedShortEdge → correct portrait booklet binding
                 UseDuplexShortEdge = isBooklet
             };
-
-
 
             if (string.IsNullOrEmpty(PdfPreviewUrl))
             {
@@ -734,9 +706,38 @@ else
                 return;
             }
 
-            var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
-                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
-            var pdfPath = Path.Combine(dataDir, PdfPreviewUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+            var imagePaths = Frames
+                .Where(f => f.FileExists && SelectedFrameIds.Contains(f.SopInstanceUid) && !string.IsNullOrEmpty(f.PngPath))
+                .Select(f => f.PngPath!)
+                .ToList();
+
+            var patientName = Study?.Patient?.PatientName ?? "";
+            var studyDate = Study?.StudyDate?.ToString("dd/MM/yyyy") ?? "N/A";
+            var studyDescription = Study?.Description ?? "";
+            var resumePdfPath = Study?.ResumePdfPath;
+
+            string pdfPath;
+            string? tempPdfPath = null;
+
+            if (isBooklet)
+            {
+                tempPdfPath = await Task.Run(() =>
+                    PdfService.GenerateBookletPrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx));
+                pdfPath = tempPdfPath;
+            }
+            else if (SelectedPrintMode == "FlatA3")
+            {
+                tempPdfPath = await Task.Run(() =>
+                    PdfService.GenerateFlatPrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx));
+                pdfPath = tempPdfPath;
+            }
+            else
+            {
+                var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+                pdfPath = Path.Combine(dataDir, PdfPreviewUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+            }
+
             if (!File.Exists(pdfPath))
             {
                 StatusMessage = "Fichier PDF introuvable. Régénérez l'aperçu.";
@@ -748,14 +749,14 @@ else
             {
                 PdfPath = pdfPath,
                 Profile = profile,
-                PrinterName = SelectedPrinter,
+                PrinterName = presetName,
                 Copies = Copies,
                 ForceGrayscale = profile.ForceGrayscale
             });
 
             if (result.Success)
             {
-                StatusMessage = $"Impression envoyée à '{SelectedPrinter}'.";
+                StatusMessage = $"Impression envoyée à '{presetName}'.";
                 IsError = false;
             }
             else
@@ -781,6 +782,10 @@ else
     {
         _regenCts?.Cancel();
         _regenCts?.Dispose();
+        if (!string.IsNullOrEmpty(Study?.StudyInstanceUid))
+        {
+            try { PngExtractionService.ReleaseStudyPng(Study.StudyInstanceUid); } catch { }
+        }
         if (!string.IsNullOrEmpty(PdfPreviewUrl))
         {
             try { PdfService.DeletePdf(PdfPreviewUrl); } catch { }

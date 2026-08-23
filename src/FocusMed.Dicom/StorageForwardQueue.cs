@@ -38,5 +38,5 @@ public sealed class StorageForwardQueue : IStorageForwardQueue
 
     public void Complete() => _channel.Writer.TryComplete();
 
-    public int PendingCount => Volatile.Read(ref _pendingCount);
+    public int PendingCount => Math.Max(0, Volatile.Read(ref _pendingCount));
 }

@@ -56,7 +56,20 @@ internal sealed class TestPageService(
             e.HasMorePages = false;
         };
 
-        await Task.Run(() => doc.Print(), ct);
+        await Task.Run(() =>
+        {
+            Exception? threadEx = null;
+            var thread = new Thread(() =>
+            {
+                try { doc.Print(); }
+                catch (Exception ex) { threadEx = ex; }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+            if (threadEx != null)
+                throw new InvalidOperationException("Test page print failed", threadEx);
+        }, ct);
 
         PendingJobs[jobId] = new PendingTestJob(printerName, settingToTest, DateTime.UtcNow);
 

@@ -31,7 +31,7 @@ try
         {
             var connectionString = hostContext.Configuration.GetValue<string>("ConnectionString")
                 ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
-                ?? "Data Source=focusmed.db";
+                ?? $@"Data Source={Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed", "focusmed.db")}";
 
             // Set env var for downstream services
             Environment.SetEnvironmentVariable("FOCUSMED_DB_CONNECTION", connectionString);

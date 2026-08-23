@@ -52,15 +52,16 @@ public class DatabaseService
         }
 
         var oldResume = study.ResumePdfPath;
-        study.ResumePdfPath = resumePdfRelativePath;
-        study.LastUpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync();
 
         if (!string.IsNullOrEmpty(oldResume) && oldResume != resumePdfRelativePath)
         {
             _logger.LogInformation("Replacing previous resume: {Old}", oldResume);
             await DeleteResumeFileAsync(oldResume);
         }
+
+        study.ResumePdfPath = resumePdfRelativePath;
+        study.LastUpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
 
         _logger.LogInformation("Resume assigned successfully to Study {StudyId}", studyId);
         return true;

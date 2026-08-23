@@ -68,7 +68,11 @@ public class PrinterSetupService
             if (process == null) return false;
 
             var output = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit();
+            if (!process.WaitForExit(10_000))
+            {
+                try { process.Kill(); } catch { }
+                return false;
+            }
             return !string.IsNullOrEmpty(output);
         }
         catch
@@ -92,7 +96,11 @@ public class PrinterSetupService
             if (process == null) return "";
 
             var output = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit();
+            if (!process.WaitForExit(10_000))
+            {
+                try { process.Kill(); } catch { }
+                return "";
+            }
             return output;
         }
         catch

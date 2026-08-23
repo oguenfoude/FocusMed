@@ -94,15 +94,25 @@ public partial class ResumePickerWindow : Window
         }
 
         var relativePath = $"resumes/{destFileName}";
-        var success = await _databaseService.AssignResumeAsync(selected.Id, relativePath);
 
-        if (success)
+        try
         {
-            StatusText.Text = $"Associe a {selected.PatientName}.";
-            Close();
+            var success = await _databaseService.AssignResumeAsync(selected.Id, relativePath);
+
+            if (success)
+            {
+                StatusText.Text = $"Associe a {selected.PatientName}.";
+                Close();
+            }
+            else
+            {
+                try { File.Delete(destPath); } catch { }
+                StatusText.Text = "Erreur lors de l'association.";
+            }
         }
-        else
+        catch
         {
+            try { File.Delete(destPath); } catch { }
             StatusText.Text = "Erreur lors de l'association.";
         }
     }

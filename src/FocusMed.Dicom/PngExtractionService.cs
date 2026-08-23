@@ -61,48 +61,73 @@ public class PngExtractionService
 
         _studyRefCount.AddOrUpdate(studyUid, 1, (_, old) => old + 1);
 
-        var results = new List<FrameResult>();
-
-        foreach (var image in images)
+        try
         {
-            var currentImage = image;
-            if (string.IsNullOrEmpty(currentImage.PngPath))
+            var results = new List<FrameResult>();
+
+            foreach (var image in images)
             {
-                await ExtractForImageAsync(currentImage, ct);
-                var updated = await db.DicomImages
-                    .Include(i => i.Frames)
-                    .FirstOrDefaultAsync(i => i.Id == currentImage.Id, ct);
-                if (updated != null)
-                    currentImage = updated;
-            }
-            else if (!File.Exists(currentImage.PngPath))
-            {
-                currentImage.PngPath = null;
-                foreach (var frame in currentImage.Frames)
-                    frame.PngPath = null;
-                await db.SaveChangesAsync(ct);
-                await ExtractForImageAsync(currentImage, ct);
-                var updated = await db.DicomImages
-                    .Include(i => i.Frames)
-                    .FirstOrDefaultAsync(i => i.Id == currentImage.Id, ct);
-                if (updated != null)
-                    currentImage = updated;
+                var currentImage = image;
+                if (string.IsNullOrEmpty(currentImage.PngPath))
+                {
+                    await ExtractForImageAsync(currentImage, ct);
+                    var updated = await db.DicomImages
+                        .Include(i => i.Frames)
+                        .FirstOrDefaultAsync(i => i.Id == currentImage.Id, ct);
+                    if (updated != null)
+                        currentImage = updated;
+                }
+                else if (!File.Exists(currentImage.PngPath))
+                {
+                    currentImage.PngPath = null;
+                    foreach (var frame in currentImage.Frames)
+                        frame.PngPath = null;
+                    await db.SaveChangesAsync(ct);
+                    await ExtractForImageAsync(currentImage, ct);
+                    var updated = await db.DicomImages
+                        .Include(i => i.Frames)
+                        .FirstOrDefaultAsync(i => i.Id == currentImage.Id, ct);
+                    if (updated != null)
+                        currentImage = updated;
+                }
+
+                var frames = currentImage.Frames
+                    .OrderBy(f => f.FrameIndex)
+                    .Select(f => new FrameResult(
+                        currentImage.SopInstanceUid,
+                        f.FrameIndex,
+                        f.PngPath,
+                        f.PngPath != null && File.Exists(f.PngPath),
+                        currentImage.Series?.Modality))
+                    .ToList();
+
+                results.AddRange(frames);
             }
 
-            var frames = currentImage.Frames
-                .OrderBy(f => f.FrameIndex)
-                .Select(f => new FrameResult(
-                    currentImage.SopInstanceUid,
-                    f.FrameIndex,
-                    f.PngPath,
-                    f.PngPath != null && File.Exists(f.PngPath),
-                    currentImage.Series?.Modality))
-                .ToList();
-
-            results.AddRange(frames);
+            DecrementRefCount(studyUid);
+            return results;
         }
+        catch
+        {
+            DecrementRefCount(studyUid);
+            throw;
+        }
+    }
 
-        return results;
+    public void ReleaseStudyPng(string studyUid)
+    {
+        if (string.IsNullOrEmpty(studyUid)) return;
+        DecrementRefCount(studyUid);
+    }
+
+    private static void DecrementRefCount(string studyUid)
+    {
+        var remaining = _studyRefCount.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
+        if (remaining <= 0)
+        {
+            _studyRefCount.TryRemove(studyUid, out _);
+            _studyLocks.TryRemove(studyUid, out _);
+        }
     }
 
     public async Task ExtractForImageAsync(DicomImage dicomImage, CancellationToken ct = default)

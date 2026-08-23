@@ -159,8 +159,8 @@ public class FocusMedScp : DicomService,
             return;
         }
 
-        _logger.LogInformation("Association: {CallingAe} -> {CalledAe} | {Accepted} accepted, {Rejected} rejected",
-            association.CallingAE, association.CalledAE, accepted, rejected);
+        _logger.LogInformation("Association: {CallingAe} -> {CalledAe} from {RemoteIp} | {Accepted} accepted, {Rejected} rejected",
+            association.CallingAE, association.CalledAE, association.RemoteHost, accepted, rejected);
 
         var outcome = rejected > 0 ? AssociationOutcome.PartiallyAccepted : AssociationOutcome.Success;
         await WriteAuditEntryAsync(association, remoteIpForAudit, outcome);

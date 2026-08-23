@@ -289,7 +289,10 @@ else
                 StateHasChanged();
             });
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error handling study change notification");
+        }
     }
 
 
@@ -460,8 +463,12 @@ else
         IsError = isError;
         StateHasChanged();
         await Task.Delay(3000);
-        StatusMessage = "";
-        StateHasChanged();
+        try
+        {
+            StatusMessage = "";
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
     }
 
     private void ClearToast()

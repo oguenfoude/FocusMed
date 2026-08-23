@@ -17,6 +17,7 @@ public class DicomUpsertService
     private readonly string _archivePath;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
     private static readonly ConcurrentDictionary<string, int> _studyLockCounts = new();
+    private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     public DicomUpsertService(
         IServiceScopeFactory scopeFactory,
@@ -180,7 +181,7 @@ public class DicomUpsertService
                     Source = "C-STORE",
                     ReceivedAt = DateTime.UtcNow
                 };
-                File.WriteAllText(infoPath, System.Text.Json.JsonSerializer.Serialize(info, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(infoPath, System.Text.Json.JsonSerializer.Serialize(info, JsonOptions));
             }
 
             var seriesDir = Path.Combine(studyDir, seriesUid);
@@ -220,8 +221,8 @@ public class DicomUpsertService
         }
         finally
         {
-            studyLock.Release();
             var remaining = _studyLockCounts.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
+            studyLock.Release();
             if (remaining <= 0)
             {
                 _studyLockCounts.TryRemove(studyUid, out _);
@@ -412,7 +413,7 @@ public class DicomUpsertService
                 Source = "PRINT",
                 ReceivedAt = DateTime.UtcNow
             };
-            File.WriteAllText(infoPath, System.Text.Json.JsonSerializer.Serialize(info, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(infoPath, System.Text.Json.JsonSerializer.Serialize(info, JsonOptions));
 
             var seriesDir = Path.Combine(studyDir, seriesUid);
             Directory.CreateDirectory(seriesDir);
@@ -443,8 +444,8 @@ public class DicomUpsertService
         }
         finally
         {
-            studyLock.Release();
             var remaining = _studyLockCounts.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
+            studyLock.Release();
             if (remaining <= 0)
             {
                 _studyLockCounts.TryRemove(studyUid, out _);

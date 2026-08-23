@@ -6,6 +6,7 @@
 @inject FocusMed.Printing.Verification.ITestPageService TestPageService
 @inject FocusMed.Printing.Discovery.ICapabilityConfirmationStore ConfirmationStore
 @inject FocusMed.Printing.Profiles.IPrinterSettingsStore SettingsStore
+@inject Microsoft.Extensions.Options.IOptions<FocusMed.Printing.Jobs.RawPrinterConfig> RawPrinterOptions
 @inject ILogger<Settings> Logger
 
 <PageTitle>Paramètres — FocusMed</PageTitle>
@@ -416,7 +417,16 @@
 
     private async Task LoadAll()
     {
-        InstalledPrinters = DiscoveryService.GetAvailablePrinters();
+        var printers = new List<FocusMed.Printing.Discovery.InstalledPrinter>(DiscoveryService.GetAvailablePrinters());
+
+        // Add raw TCP printers (Konica bizhub, etc.) from config
+        foreach (var raw in RawPrinterOptions.Value.Printers)
+        {
+            if (!printers.Any(p => p.Name.Equals(raw.Name, StringComparison.OrdinalIgnoreCase)))
+                printers.Add(new FocusMed.Printing.Discovery.InstalledPrinter(raw.Name));
+        }
+
+        InstalledPrinters = printers;
         Snapshots.Clear();
         PrinterProfiles.Clear();
         Confirmations.Clear();
@@ -425,6 +435,32 @@
         {
             try
             {
+                // Skip raw TCP printers for capability discovery (they're not Windows printers)
+                if (RawPrinterOptions.Value.Printers.Any(p => p.Name.Equals(printer.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var rawPreset = RawPrinterOptions.Value.Printers.First(p => p.Name.Equals(printer.Name, StringComparison.OrdinalIgnoreCase));
+                    Snapshots[printer.Name] = new FocusMed.Printing.Discovery.PrinterCapabilitySnapshot
+                    {
+                        PrinterName = printer.Name,
+                        DriverName = "RAW TCP",
+                        SupportsDuplex = false,
+                        SupportsColor = !rawPreset.ForceGrayscale,
+                        PaperSizes = [new FocusMed.Printing.Discovery.PaperSizeInfo { Name = rawPreset.PaperSize }]
+                    };
+                    PrinterProfiles[printer.Name] =
+                    [
+                        new FocusMed.Printing.Profiles.PrintProfile
+                        {
+                            Name = rawPreset.IsBooklet ? $"Booklet {rawPreset.PaperSize}" : $"Simple {rawPreset.PaperSize}",
+                            Description = rawPreset.IsBooklet ? $"Livret {rawPreset.PaperSize} (TCP RAW)" : $"Recto simple {rawPreset.PaperSize} (TCP RAW)",
+                            IsBooklet = rawPreset.IsBooklet,
+                            PaperSizeName = rawPreset.PaperSize,
+                            ForceGrayscale = rawPreset.ForceGrayscale
+                        }
+                    ];
+                    continue;
+                }
+
                 var snap = await CapabilityService.GetSnapshotAsync(printer.Name);
                 Snapshots[printer.Name] = snap;
                 PrinterProfiles[printer.Name] = ProfileBuilder.BuildProfiles(snap);
@@ -483,7 +519,7 @@
         SettingsSaved = true;
         ShowToast("Paramètres enregistrés", false);
         StateHasChanged();
-        _ = Task.Delay(3000).ContinueWith(_ => { SettingsStatus = null; InvokeAsync(StateHasChanged); });
+        _ = DelayThenResetStatus();
     }
 
     private void ToggleExpand(string name)
@@ -661,6 +697,28 @@
         ToastMessage = msg;
         ToastIsError = error;
         StateHasChanged();
-        _ = Task.Delay(4000).ContinueWith(_ => { ToastMessage = null; InvokeAsync(StateHasChanged); });
+        _ = DelayThenResetToast();
+    }
+
+    private async Task DelayThenResetStatus()
+    {
+        try
+        {
+            await Task.Delay(3000);
+            SettingsStatus = null;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
+    }
+
+    private async Task DelayThenResetToast()
+    {
+        try
+        {
+            await Task.Delay(4000);
+            ToastMessage = null;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
     }
 }

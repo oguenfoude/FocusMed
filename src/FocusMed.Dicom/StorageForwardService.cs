@@ -72,11 +72,9 @@ public sealed class StorageForwardService : BackgroundService
             return;
         }
 
-        foreach (var target in targets)
-        {
-            var file = await DicomFile.OpenAsync(request.FilePath);
-            await ForwardToTargetAsync(file, target, ct);
-        }
+        var file = await DicomFile.OpenAsync(request.FilePath);
+        var tasks = targets.Select(target => ForwardToTargetAsync(file, target, ct));
+        await Task.WhenAll(tasks);
     }
 
     private async Task ForwardToTargetAsync(DicomFile file, StorageForwardTarget target, CancellationToken ct)

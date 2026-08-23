@@ -49,42 +49,56 @@ public class StorageCommitmentScuService : BackgroundService
 
     private async Task ProcessPendingJobsAsync(CancellationToken stoppingToken)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-
-        var pendingJobs = await db.StorageCommitmentJobs
-            .Where(j => j.Status == StorageCommitmentStatus.Pending)
-            .ToListAsync(stoppingToken);
+        List<FocusMed.Data.Entities.StorageCommitmentJob> pendingJobs;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+            pendingJobs = await db.StorageCommitmentJobs
+                .Where(j => j.Status == StorageCommitmentStatus.Pending)
+                .ToListAsync(stoppingToken);
+        }
 
         foreach (var job in pendingJobs)
         {
-            var uids = job.RequestedSopInstanceUids.Split(',', StringSplitOptions.RemoveEmptyEntries);
-            var sopClassMap = await db.DicomImages
-                .Where(i => uids.Contains(i.SopInstanceUid))
-                .ToDictionaryAsync(i => i.SopInstanceUid, i => i.SopClassUid, stoppingToken);
-
-            var archivedImagesCount = sopClassMap.Count;
-
-            if (archivedImagesCount == uids.Length)
+            try
             {
-                var sent = await SendNEventReportAsync(job, sopClassMap);
-                if (sent)
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+
+                var uids = job.RequestedSopInstanceUids.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                var sopClassMap = await db.DicomImages
+                    .Where(i => uids.Contains(i.SopInstanceUid))
+                    .ToDictionaryAsync(i => i.SopInstanceUid, i => i.SopClassUid, stoppingToken);
+
+                var archivedImagesCount = sopClassMap.Count;
+
+                if (archivedImagesCount == uids.Length)
                 {
-                    job.Status = StorageCommitmentStatus.Completed;
+                    var sent = await SendNEventReportAsync(job, sopClassMap);
+                    if (sent)
+                    {
+                        job.Status = StorageCommitmentStatus.Completed;
+                        job.CompletedAt = DateTime.UtcNow;
+                        db.StorageCommitmentJobs.Update(job);
+                        await db.SaveChangesAsync(stoppingToken);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("N-EVENT-REPORT not sent (no mapping for AET {Aet}), leaving job Pending", job.CallingAet);
+                    }
+                }
+                else if (job.CreatedAt < DateTime.UtcNow.AddHours(-1))
+                {
+                    await SendNEventReportFailedAsync(job, sopClassMap);
+                    job.Status = StorageCommitmentStatus.Failed;
                     job.CompletedAt = DateTime.UtcNow;
+                    db.StorageCommitmentJobs.Update(job);
                     await db.SaveChangesAsync(stoppingToken);
                 }
-                else
-                {
-                    _logger.LogWarning("N-EVENT-REPORT not sent (no mapping for AET {Aet}), leaving job Pending", job.CallingAet);
-                }
             }
-            else if (job.CreatedAt < DateTime.UtcNow.AddHours(-1))
+            catch (Exception ex)
             {
-                await SendNEventReportFailedAsync(job, sopClassMap);
-                job.Status = StorageCommitmentStatus.Failed;
-                job.CompletedAt = DateTime.UtcNow;
-                await db.SaveChangesAsync(stoppingToken);
+                _logger.LogError(ex, "Failed to process StorageCommitmentJob {JobId}", job.Id);
             }
         }
     }

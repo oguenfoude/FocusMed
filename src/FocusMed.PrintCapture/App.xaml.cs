@@ -51,7 +51,7 @@ public partial class App : System.Windows.Application
 
             var connectionString = configuration["ConnectionString"]
                 ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
-                ?? "Data Source=focusmed.db";
+                ?? $@"Data Source={Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed", "focusmed.db")}";
 
             var printerName = configuration["PrinterName"] ?? "FocusMed";
             var driverName = configuration["OutputDriverName"] ?? "Microsoft Print To PDF";

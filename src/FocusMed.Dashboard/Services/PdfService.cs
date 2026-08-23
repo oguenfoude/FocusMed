@@ -1,9 +1,7 @@
 using System.Collections.Concurrent;
-using System.IO.Compression;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
-using MiniSoftware;
 using PdfSharpCore.Pdf;
 using PdfSharpCore.Pdf.IO;
 
@@ -12,22 +10,22 @@ namespace FocusMed.Dashboard.Services;
 public class PdfService
 {
     private readonly string _pdfCacheDir;
-    private readonly string _coverTemplatePath;
+    private readonly string _coverLogoPath;
+    private readonly string _coverDocxPath;
     private readonly ILogger<PdfService> _logger;
-    private readonly FocusMed.Printing.Imposition.IBookletImpositionService _bookletService;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _pdfLocks = new();
 
-    public PdfService(ILogger<PdfService> logger, IWebHostEnvironment env, FocusMed.Printing.Imposition.IBookletImpositionService bookletService)
+    public PdfService(ILogger<PdfService> logger, IWebHostEnvironment env)
     {
         _logger = logger;
-        _bookletService = bookletService;
 
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
         _pdfCacheDir = Path.Combine(dataDir, "pdf-cache");
         Directory.CreateDirectory(_pdfCacheDir);
 
-        _coverTemplatePath = Path.Combine(env.WebRootPath, "cover.docx");
+        _coverDocxPath = Path.Combine(dataDir, "cover.docx");
+        _coverLogoPath = Path.Combine(dataDir, "cover-logo.jpg");
     }
 
     public string GeneratePrintPdf(
@@ -42,12 +40,12 @@ public class PdfService
         int gapPx = 1,
         int marginPx = 10)
     {
-        CleanupOldPdfs();
+        CleanupOldPdfsAsync().GetAwaiter().GetResult();
 
         var validPaths = imagePaths.Where(File.Exists).ToList();
         if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
 
-        var inputKey = $"{patientName}|{studyDate}|{resumePdfPath}|{imagesPerPage}|{gapPx}|{marginPx}|{string.Join(";", validPaths)}";
+        var inputKey = $"{patientName}|{studyDate}|{resumePdfPath}|{imagesPerPage}|{gapPx}|{marginPx}|{pageSize}|{isBooklet}|{string.Join(";", validPaths)}";
         var hashBytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(inputKey));
         var hashStr = Convert.ToHexString(hashBytes).ToLowerInvariant();
         var fileName = $"cache_{hashStr}.pdf";
@@ -68,11 +66,8 @@ public class PdfService
             var tempFiles = new List<string>();
             try
             {
-                var coverDocxPath = CreateModifiedCoverDocx(patientName, studyDate, tempFiles);
-                if (coverDocxPath == null) return "";
-
                 var coverPdfPath = Path.Combine(Path.GetTempPath(), $"cover_{Guid.NewGuid():N}.pdf");
-                MiniPdf.ConvertToPdf(coverDocxPath, coverPdfPath);
+                GenerateCoverPdf(patientName, studyDate, coverPdfPath, pageSize);
                 tempFiles.Add(coverPdfPath);
 
                 string? resumeFullPath = null;
@@ -92,15 +87,15 @@ public class PdfService
                 if (validPaths.Count > 0)
                 {
                     imagesPdfPath = Path.Combine(Path.GetTempPath(), $"images_{Guid.NewGuid():N}.pdf");
-                    GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx);
+                    GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx, pageSize);
                     tempFiles.Add(imagesPdfPath);
                 }
 
-                var tempMergedA4 = Path.Combine(Path.GetTempPath(), $"merged_a4_{Guid.NewGuid():N}.pdf");
-                tempFiles.Add(tempMergedA4);
-                MergePdfs(tempMergedA4, coverPdfPath, resumeFullPath, imagesPdfPath);
+                var tempMerged = Path.Combine(Path.GetTempPath(), $"merged_{Guid.NewGuid():N}.pdf");
+                tempFiles.Add(tempMerged);
+                MergePdfs(tempMerged, coverPdfPath, resumeFullPath, imagesPdfPath, pageSize);
 
-                File.Copy(tempMergedA4, finalPath, overwrite: true);
+                File.Copy(tempMerged, finalPath, overwrite: true);
 
                 return $"/pdf-cache/{fileName}";
             }
@@ -120,59 +115,262 @@ public class PdfService
         finally
         {
             pdfLock.Release();
+            _pdfLocks.TryRemove(hashStr, out _);
         }
     }
 
-    private string? CreateModifiedCoverDocx(string patientName, string studyDate, List<string> tempFiles)
+    public string GenerateBookletPrintPdf(
+        string patientName,
+        string studyDate,
+        string studyDescription,
+        IReadOnlyList<string> imagePaths,
+        string? resumePdfPath = null,
+        int imagesPerPage = 1,
+        int gapPx = 1,
+        int marginPx = 10)
     {
-        if (!File.Exists(_coverTemplatePath))
+        var validPaths = imagePaths.Where(File.Exists).ToList();
+        if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
+
+        var tempFiles = new List<string>();
+        try
         {
-            _logger.LogWarning("Cover template not found at {Path}", _coverTemplatePath);
-            return null;
+            var coverPdfPath = Path.Combine(Path.GetTempPath(), $"bcover_{Guid.NewGuid():N}.pdf");
+            GenerateCoverPdf(patientName, studyDate, coverPdfPath, "A4");
+            tempFiles.Add(coverPdfPath);
+
+            string? resumeFullPath = null;
+            if (!string.IsNullOrEmpty(resumePdfPath))
+            {
+                var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+                resumeFullPath = Path.Combine(dataDir, resumePdfPath);
+                if (!File.Exists(resumeFullPath)) resumeFullPath = null;
+            }
+
+            string? imagesPdfPath = null;
+            if (validPaths.Count > 0)
+            {
+                imagesPdfPath = Path.Combine(Path.GetTempPath(), $"bimages_{Guid.NewGuid():N}.pdf");
+                GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx, "A4");
+                tempFiles.Add(imagesPdfPath);
+            }
+
+            var tempMerged = Path.Combine(Path.GetTempPath(), $"bmerged_{Guid.NewGuid():N}.pdf");
+            tempFiles.Add(tempMerged);
+            MergePdfs(tempMerged, coverPdfPath, resumeFullPath, imagesPdfPath, "A4");
+
+            var dataDirOut = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+            var bookletDir = Path.Combine(dataDirOut, "pdf-cache");
+            var fileName = $"booklet_{Guid.NewGuid():N}.pdf";
+            var finalPath = Path.Combine(bookletDir, fileName);
+            File.Copy(tempMerged, finalPath, overwrite: true);
+            return finalPath;
+        }
+        finally
+        {
+            foreach (var f in tempFiles)
+            {
+                try { if (File.Exists(f)) File.Delete(f); } catch { }
+            }
+        }
+    }
+
+    public string GenerateFlatPrintPdf(
+        string patientName,
+        string studyDate,
+        string studyDescription,
+        IReadOnlyList<string> imagePaths,
+        string? resumePdfPath = null,
+        int imagesPerPage = 1,
+        int gapPx = 1,
+        int marginPx = 10)
+    {
+        var validPaths = imagePaths.Where(File.Exists).ToList();
+        if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
+
+        var tempFiles = new List<string>();
+        try
+        {
+            var coverPdfPath = Path.Combine(Path.GetTempPath(), $"fcover_{Guid.NewGuid():N}.pdf");
+            GenerateCoverPdf(patientName, studyDate, coverPdfPath, "A3");
+            tempFiles.Add(coverPdfPath);
+
+            string? resumeFullPath = null;
+            if (!string.IsNullOrEmpty(resumePdfPath))
+            {
+                var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+                resumeFullPath = Path.Combine(dataDir, resumePdfPath);
+                if (!File.Exists(resumeFullPath)) resumeFullPath = null;
+            }
+
+            string? imagesPdfPath = null;
+            if (validPaths.Count > 0)
+            {
+                imagesPdfPath = Path.Combine(Path.GetTempPath(), $"fimages_{Guid.NewGuid():N}.pdf");
+                GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx, "A3");
+                tempFiles.Add(imagesPdfPath);
+            }
+
+            var tempMerged = Path.Combine(Path.GetTempPath(), $"fmerged_{Guid.NewGuid():N}.pdf");
+            tempFiles.Add(tempMerged);
+            MergePdfs(tempMerged, coverPdfPath, resumeFullPath, imagesPdfPath, "A3");
+
+            var dataDirOut = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+            var flatDir = Path.Combine(dataDirOut, "pdf-cache");
+            var fileName = $"flat_{Guid.NewGuid():N}.pdf";
+            var finalPath = Path.Combine(flatDir, fileName);
+            File.Copy(tempMerged, finalPath, overwrite: true);
+            return finalPath;
+        }
+        finally
+        {
+            foreach (var f in tempFiles)
+            {
+                try { if (File.Exists(f)) File.Delete(f); } catch { }
+            }
+        }
+    }
+
+    private void GenerateCoverPdf(string patientName, string studyDate, string outputPath, string pageSize = "A4")
+    {
+        var patientDisplay = patientName.Replace("^", " ");
+
+        if (!File.Exists(_coverDocxPath))
+        {
+            _logger.LogWarning("cover.docx not found at {Path}, using QuestPDF fallback", _coverDocxPath);
+            GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
+            return;
         }
 
-        var tempDocx = Path.Combine(Path.GetTempPath(), $"cover_mod_{Guid.NewGuid():N}.docx");
-        tempFiles.Add(tempDocx);
+        if (pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase))
+        {
+            GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
+            return;
+        }
 
         try
         {
-            File.Copy(_coverTemplatePath, tempDocx, true);
-
-            // Modify the docx (which is a zip) by replacing placeholders in document.xml
-            using (var archive = ZipFile.Open(tempDocx, ZipArchiveMode.Update))
+            var tempDocx = Path.Combine(Path.GetTempPath(), $"cover_{Guid.NewGuid():N}.docx");
+            try
             {
-                var docEntry = archive.GetEntry("word/document.xml");
-                if (docEntry != null)
+                File.Copy(_coverDocxPath, tempDocx, true);
+                ConvertDocxToPdfViaWord(tempDocx, outputPath, patientDisplay, studyDate);
+
+                if (!File.Exists(outputPath) || new FileInfo(outputPath).Length < 1000)
                 {
-                    using var stream = docEntry.Open();
-                    using var reader = new StreamReader(stream);
-                    var xml = reader.ReadToEnd();
-
-                    xml = xml.Replace("{{PatientName}}", patientName);
-                    xml = xml.Replace("{{StudyDate}}", studyDate);
-
-                    // Rewrite the entry
-                    stream.Position = 0;
-                    stream.SetLength(0);
-                    using var writer = new StreamWriter(stream);
-                    writer.Write(xml);
+                    _logger.LogWarning("Word COM produced empty PDF, using QuestPDF fallback");
+                    GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
                 }
             }
-
-            return tempDocx;
+            finally
+            {
+                try { if (File.Exists(tempDocx)) File.Delete(tempDocx); } catch { }
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to modify cover template");
-            try { if (File.Exists(tempDocx)) File.Delete(tempDocx); } catch { }
-            tempFiles.Remove(tempDocx);
-            return null;
+            _logger.LogWarning(ex, "Word COM failed, using QuestPDF fallback");
+            GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
         }
     }
 
-    private void GenerateImagesPdf(IReadOnlyList<string> imagePaths, string outputPath, int imagesPerPage, int gapPx, int marginPx)
+    private void ConvertDocxToPdfViaWord(string docxPath, string outputPath, string patientName, string studyDate)
     {
-        var questPageSize = PageSizes.A4.Portrait();
+        var wordType = Type.GetTypeFromProgID("Word.Application")
+            ?? throw new InvalidOperationException("Word.Application COM not available");
+
+        dynamic? word = null;
+        try
+        {
+            word = Activator.CreateInstance(wordType);
+            if (word is null) throw new InvalidOperationException("Failed to create Word instance");
+            word.Visible = false;
+            word.DisplayAlerts = 0;
+
+            var doc = word.Documents.Open(docxPath, ReadOnly: true, AddToRecentFiles: false);
+            try
+            {
+                var find = doc.Content.Find;
+                find.ClearFormatting();
+                find.Text = "{{PatientName}}";
+                find.Replacement.Text = patientName;
+                find.Execute(Replace: 2);
+
+                find.ClearFormatting();
+                find.Text = "{{StudyDate}}";
+                find.Replacement.Text = studyDate;
+                find.Execute(Replace: 2);
+
+                doc.SaveAs2(outputPath, FileFormat: 17);
+            }
+            finally
+            {
+                doc.Close(SaveChanges: 0);
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(doc);
+            }
+        }
+        finally
+        {
+            if (word is not null)
+            {
+                word.Quit();
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(word);
+            }
+        }
+    }
+
+    private void GenerateCoverPdfFallback(string patientName, string studyDate, string outputPath, string pageSize = "A4")
+    {
+        var logoBytes = File.Exists(_coverLogoPath) ? File.ReadAllBytes(_coverLogoPath) : null;
+        var isA3 = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase);
+        var pageWidth = isA3 ? PageSizes.A3.Width : PageSizes.A4.Width;
+        var pageHeight = isA3 ? PageSizes.A3.Height : PageSizes.A4.Height;
+
+        QuestPDF.Fluent.Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(pageWidth, pageHeight);
+                page.Margin(0);
+
+                page.Content().Layers(layers =>
+                {
+                    if (logoBytes is not null)
+                    {
+                        layers.Layer().Image(logoBytes).FitUnproportionally();
+                    }
+
+                    layers.PrimaryLayer().AlignMiddle().Column(col =>
+                    {
+                        col.Item().PaddingBottom(20).Row(row =>
+                        {
+                            row.RelativeItem().AlignRight().PaddingRight(10)
+                                .Text("Patient :").FontSize(16).Bold().FontColor("#333333");
+                            row.RelativeItem().PaddingLeft(10)
+                                .Text(patientName).FontSize(22).Bold().FontColor("#1a5276");
+                        });
+
+                        col.Item().Row(row =>
+                        {
+                            row.RelativeItem().AlignRight().PaddingRight(10)
+                                .Text("Examen :").FontSize(16).Bold().FontColor("#333333");
+                            row.RelativeItem().PaddingLeft(10)
+                                .Text(studyDate).FontSize(22).Bold().FontColor("#1a5276");
+                        });
+                    });
+                });
+            });
+        }).GeneratePdf(outputPath);
+    }
+
+    private void GenerateImagesPdf(IReadOnlyList<string> imagePaths, string outputPath, int imagesPerPage, int gapPx, int marginPx, string pageSize = "A4")
+    {
+        var isA3 = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase);
+        var questPageSize = isA3 ? PageSizes.A3.Portrait() : PageSizes.A4.Portrait();
         var perPage = Math.Max(1, imagesPerPage);
         var gap = (float)Math.Max(0, gapPx);
         var margin = (float)Math.Max(0, marginPx);
@@ -235,18 +433,16 @@ public class PdfService
         document.GeneratePdf(fs);
     }
 
-    private void MergePdfs(string outputPath, string coverPdfPath, string? resumePdfPath, string? imagesPdfPath)
+    private void MergePdfs(string outputPath, string coverPdfPath, string? resumePdfPath, string? imagesPdfPath, string pageSize = "A4")
     {
         using var outputDocument = new PdfDocument();
 
-        // Cover PDF (always present)
         using (var doc = PdfReader.Open(coverPdfPath, PdfDocumentOpenMode.Import))
         {
             foreach (var page in doc.Pages)
                 outputDocument.AddPage(page);
         }
 
-        // Resume PDF (optional — user's Word document)
         if (!string.IsNullOrEmpty(resumePdfPath) && File.Exists(resumePdfPath))
         {
             try
@@ -261,7 +457,6 @@ public class PdfService
             }
         }
 
-        // Images PDF (optional — may be empty if only resume requested)
         if (!string.IsNullOrEmpty(imagesPdfPath) && File.Exists(imagesPdfPath))
         {
             using (var doc = PdfReader.Open(imagesPdfPath, PdfDocumentOpenMode.Import))
@@ -271,25 +466,25 @@ public class PdfService
             }
         }
 
-        // Pad with blank pages so total page count is a multiple of 4 (e.g. 4 pages for 1 A3 sheet),
-        // ensuring Page 4 (the outer back cover) remains completely EMPTY/BLANK.
         int currentPages = outputDocument.Pages.Count;
         int remainder = currentPages % 4;
         if (remainder != 0)
         {
             int needed = 4 - remainder;
+            double padW = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 297 : 210;
+            double padH = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 420 : 297;
             for (int i = 0; i < needed; i++)
             {
                 var blankPage = outputDocument.AddPage();
-                blankPage.Width = PdfSharpCore.Drawing.XUnit.FromMillimeter(210);
-                blankPage.Height = PdfSharpCore.Drawing.XUnit.FromMillimeter(297);
+                blankPage.Width = PdfSharpCore.Drawing.XUnit.FromMillimeter(padW);
+                blankPage.Height = PdfSharpCore.Drawing.XUnit.FromMillimeter(padH);
             }
         }
 
         outputDocument.Save(outputPath);
     }
 
-    public void DeletePdf(string pdfUrl)
+    public async Task DeletePdfAsync(string pdfUrl)
     {
         if (string.IsNullOrEmpty(pdfUrl)) return;
         var relativePath = pdfUrl.TrimStart('/');
@@ -301,13 +496,18 @@ public class PdfService
                 if (File.Exists(filePath)) File.Delete(filePath);
                 return;
             }
-            catch (IOException) { Thread.Sleep(200); }
-            catch (UnauthorizedAccessException) { Thread.Sleep(200); }
+            catch (IOException) { await Task.Delay(200); }
+            catch (UnauthorizedAccessException) { await Task.Delay(200); }
             catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete PDF {Path}", pdfUrl); return; }
         }
     }
 
-    private void CleanupOldPdfs(int maxAgeMinutes = 60)
+    public void DeletePdf(string pdfUrl)
+    {
+        DeletePdfAsync(pdfUrl).GetAwaiter().GetResult();
+    }
+
+    private async Task CleanupOldPdfsAsync(int maxAgeMinutes = 60)
     {
         var cutoff = DateTime.UtcNow.AddMinutes(-maxAgeMinutes);
         foreach (var file in Directory.GetFiles(_pdfCacheDir, "*.pdf"))
@@ -323,11 +523,11 @@ public class PdfService
                 }
                 catch (IOException)
                 {
-                    Thread.Sleep(200);
+                    await Task.Delay(200);
                 }
                 catch (UnauthorizedAccessException)
                 {
-                    Thread.Sleep(200);
+                    await Task.Delay(200);
                 }
                 catch (Exception ex)
                 {

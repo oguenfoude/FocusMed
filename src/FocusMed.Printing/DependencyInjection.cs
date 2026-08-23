@@ -26,6 +26,7 @@ public static class DependencyInjection
 
         services.AddSingleton<IPrintJobValidator, PrintJobValidator>();
         services.AddSingleton<IPrintExecutionService, PrintExecutionService>();
+        services.AddSingleton<IRawPrintService, RawPrintService>();
 
         return services;
     }
