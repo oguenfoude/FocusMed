@@ -1,6 +1,6 @@
 @page "/archives"
 @rendermode InteractiveServer
-@inject FocusMedDbContext DbContext
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<FocusMedDbContext> DbFactory
 @inject NavigationManager Navigation
 @inject ILogger<Archives> Logger
 @inject Services.StudyService StudyService
@@ -216,7 +216,9 @@ else
 
     private async Task LoadDataAsync()
     {
-        ArchivedStudies = await DbContext.Studies
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        ArchivedStudies = await db.Studies
             .Include(s => s.Patient)
             .Include(s => s.Series)
             .AsSplitQuery()

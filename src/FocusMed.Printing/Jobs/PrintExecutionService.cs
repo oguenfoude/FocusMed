@@ -150,39 +150,14 @@ internal sealed class PrintExecutionService(
         logger.LogInformation("Page: {W}x{H}mm booklet={Booklet}", mmW, mmH, request.Profile.IsBooklet);
 
         byte[] pdfBytes = File.ReadAllBytes(pdfPath);
-        var fixedDoc = new FixedDocument();
 
-        double renderW = wpfW;
-        double renderH = wpfH;
+        // Streaming render: the XPS writer pulls pages one at a time through the paginator,
+        // so only a single 300-DPI bitmap (~70MB per A3 page) is alive at any moment.
+        // The old approach materialized every page first — multi-GB transient memory on big booklets.
+        var paginator = new PdfPagePaginator(
+            pdfBytes, pageCount, new System.Windows.Size(wpfW, wpfH), request.ForceGrayscale);
 
-        for (int i = 0; i < pageCount; i++)
-        {
-            using var ms = new MemoryStream(pdfBytes, writable: false);
-            using var skBitmap = Conversion.ToImage(ms, page: i, options: new RenderOptions
-            {
-                Dpi = 300, Grayscale = request.ForceGrayscale, BackgroundColor = SKColors.White
-            });
-            using var pngStream = new MemoryStream();
-            skBitmap.Encode(pngStream, SKEncodedImageFormat.Png, 100);
-            pngStream.Position = 0;
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.StreamSource = pngStream;
-            bmp.EndInit();
-            bmp.Freeze();
-            var page = new FixedPage { Width = renderW, Height = renderH };
-            page.Children.Add(new System.Windows.Controls.Image
-            {
-                Source = bmp, Width = renderW, Height = renderH,
-                Stretch = System.Windows.Media.Stretch.Fill
-            });
-            var pc = new PageContent();
-            ((System.Windows.Markup.IAddChild)pc).AddChild(page);
-            fixedDoc.Pages.Add(pc);
-        }
-
-        PrintQueue.CreateXpsDocumentWriter(queue).Write(fixedDoc, ticket);
+        PrintQueue.CreateXpsDocumentWriter(queue).Write(paginator, ticket);
 
         string resolvedPaperSize = useA3 ? "A3" : "A4";
 
@@ -196,6 +171,62 @@ internal sealed class PrintExecutionService(
             ImposedPdfPath = request.Profile.IsBooklet ? pdfPath : null,
             DetectedBookletPaper = request.Profile.IsBooklet ? resolvedPaperSize : null
         };
+    }
+
+    private sealed class PdfPagePaginator : System.Windows.Documents.DocumentPaginator
+    {
+        private readonly byte[] _pdfBytes;
+        private readonly int _pageCount;
+        private readonly System.Windows.Size _pageSize;
+        private readonly bool _grayscale;
+
+        public PdfPagePaginator(byte[] pdfBytes, int pageCount, System.Windows.Size pageSize, bool grayscale)
+        {
+            _pdfBytes = pdfBytes;
+            _pageCount = pageCount;
+            _pageSize = pageSize;
+            _grayscale = grayscale;
+        }
+
+        public override System.Windows.Documents.DocumentPage GetPage(int pageNumber)
+        {
+            using var ms = new MemoryStream(_pdfBytes, writable: false);
+            using var skBitmap = Conversion.ToImage(ms, page: pageNumber, options: new RenderOptions
+            {
+                Dpi = 300, Grayscale = _grayscale, BackgroundColor = SKColors.White
+            });
+
+            using var pngStream = new MemoryStream();
+            skBitmap.Encode(pngStream, SKEncodedImageFormat.Png, 100);
+            pngStream.Position = 0;
+
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.StreamSource = pngStream;
+            bmp.EndInit();
+            bmp.Freeze();
+
+            var page = new FixedPage { Width = _pageSize.Width, Height = _pageSize.Height };
+            page.Children.Add(new System.Windows.Controls.Image
+            {
+                Source = bmp, Width = _pageSize.Width, Height = _pageSize.Height,
+                Stretch = System.Windows.Media.Stretch.Fill
+            });
+            page.Measure(_pageSize);
+            page.Arrange(new System.Windows.Rect(new System.Windows.Point(), _pageSize));
+            page.UpdateLayout();
+
+            return new System.Windows.Documents.DocumentPage(
+                page, _pageSize,
+                new System.Windows.Rect(new System.Windows.Point(), _pageSize),
+                new System.Windows.Rect(new System.Windows.Point(), _pageSize));
+        }
+
+        public override bool IsPageCountValid => true;
+        public override int PageCount => _pageCount;
+        public override System.Windows.Size PageSize { get => _pageSize; set { } }
+        public override System.Windows.Documents.IDocumentPaginatorSource? Source => null;
     }
 
     private const string PsfNs = "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework";

@@ -54,6 +54,9 @@ try
             });
 
             services.AddHostedService<DicomListenerService>();
+            // Runs after the listener binds — first boot no longer refuses DICOM connections
+            // while the metadata sweep reads every archive .dcm file.
+            services.AddHostedService<MetadataBackfillService>();
         })
         .Build();
 
@@ -93,9 +96,6 @@ try
         var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
         Microsoft.EntityFrameworkCore.RelationalDatabaseFacadeExtensions.Migrate(db.Database);
         Log.Information("Database migrations applied successfully.");
-
-        var upsertService = scope.ServiceProvider.GetRequiredService<DicomUpsertService>();
-        await upsertService.BackfillMetadataAsync();
     }
 
     await host.RunAsync();

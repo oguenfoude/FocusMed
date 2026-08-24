@@ -1,7 +1,7 @@
 @page "/deleted"
 @rendermode InteractiveServer
 @implements IDisposable
-@inject FocusMedDbContext DbContext
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<FocusMedDbContext> DbFactory
 @inject IServiceScopeFactory ScopeFactory
 @inject ILogger<DeletedStudies> Logger
 @inject Services.StudyService StudyService
@@ -211,7 +211,8 @@ else
 
     private async Task LoadDataAsync()
     {
-        DeletedStudyList = await DbContext.Studies
+        await using var db = await DbFactory.CreateDbContextAsync();
+        DeletedStudyList = await db.Studies
             .Include(s => s.Patient)
             .Include(s => s.Series)
             .AsSplitQuery()

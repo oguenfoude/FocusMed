@@ -1,0 +1,9 @@
+{
+    "devDependencies":  {
+                            "@tailwindcss/cli":  "^4.3.3",
+                            "tailwindcss":  "^4.3.3"
+                        },
+    "scripts":  {
+                    "build:css":  "tailwindcss -i ./tailwind.input.css -o ./wwwroot/app.css --content \"./Components/**/*.razor\""
+                }
+}

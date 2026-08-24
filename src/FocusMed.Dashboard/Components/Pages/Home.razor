@@ -1,7 +1,7 @@
 @page "/"
 @rendermode InteractiveServer
 @implements IDisposable
-@inject FocusMedDbContext DbContext
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<FocusMedDbContext> DbFactory
 @inject NavigationManager Navigation
 @inject ILogger<Home> Logger
 @inject Services.StudyService StudyService
@@ -17,7 +17,7 @@
     <div>
         <h2 class="text-lg font-bold text-slate-900">Études</h2>
         <p class="text-xs text-slate-500 mt-0.5">
-            <span class="text-slate-700 font-bold">@(FilteredStudies?.Count() ?? 0)</span> étude@((FilteredStudies?.Count() ?? 0) != 1 ? "s" : "")
+            <span class="text-slate-700 font-bold">@TotalCount</span> étude@((TotalCount) != 1 ? "s" : "")
         </p>
     </div>
     <div class="flex items-center gap-2">
@@ -111,7 +111,7 @@
         </div>
     </div>
 }
-else if (!(FilteredStudies?.Any() ?? false))
+else if (Studies is not null && Studies.Count == 0)
 {
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-12 text-center">
         <div class="mx-auto w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-4">
@@ -140,7 +140,7 @@ else
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
-                    @foreach (var study in PagedStudies)
+                    @foreach (var study in Studies!)
                     {
                         var modalities = study.Series.Select(s => s.Modality).Distinct().ToList();
                         var modalityDisplay = modalities.Any() ? string.Join(", ", modalities) : "N/A";
@@ -248,12 +248,11 @@ else
 
 <!-- Toast notification -->
 <ToastNotification Message="@StatusMessage" IsError="@IsError" OnDismiss="ClearToast" />
-
 @code {
+    // Current page only — filtering, ordering and paging all run in SQLite.
     private List<Study>? Studies;
     private Dictionary<int, int> _imageCounts = new();
-    private IEnumerable<Study>? FilteredStudies;
-    private IEnumerable<Study> PagedStudies => FilteredStudies?.Skip((CurrentPage - 1) * PageSize).Take(PageSize) ?? [];
+    private int TotalCount;
 
     private string SearchTerm { get; set; } = "";
     private DateTime? SelectedDate { get; set; }
@@ -262,7 +261,7 @@ else
 
     private int CurrentPage = 1;
     private const int PageSize = 15;
-    private int TotalPages => Math.Max(1, (int)Math.Ceiling((FilteredStudies?.Count() ?? 0) / (double)PageSize));
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
 
     private Study? StudyToDelete;
     private bool IsProcessing;
@@ -295,101 +294,105 @@ else
         }
     }
 
-
-
-
-
-
-    private async Task LoadDataAsync()
+    private IQueryable<Study> BuildFilteredQuery(FocusMedDbContext db)
     {
-        Studies = await DbContext.Studies
-            .Include(s => s.Patient)
-            .Include(s => s.Series)
-            .OrderByDescending(s => s.LastUpdatedAt)
-            .ToListAsync();
-
-        // Fetch image counts in one batch query, keyed by StudyId
-        var studyIds = Studies.Select(s => s.Id).ToList();
-        _imageCounts = await DbContext.DicomImages
-            .Where(d => DbContext.Series.Where(sr => studyIds.Contains(sr.StudyId)).Select(sr => sr.Id).Contains(d.SeriesId))
-            .GroupBy(d => d.Series.StudyId)
-            .Select(g => new { StudyId = g.Key, Count = g.Count() })
-            .ToDictionaryAsync(x => x.StudyId, x => x.Count);
-
-        AvailableModalities = Studies
-            .SelectMany(s => s.Series)
-            .Select(s => s.Modality)
-            .Where(m => !string.IsNullOrEmpty(m))
-            .Distinct()
-            .OrderBy(m => m)
-            .ToList();
-
-        ApplyFilters();
-    }
-
-
-    private void ApplyFilters()
-    {
-        if (Studies == null) { FilteredStudies = []; return; }
-
-        var query = Studies.Where(s => s.Status != StudyStatus.Archived && s.Status != StudyStatus.Deleted).AsEnumerable();
+        var query = db.Studies
+            .Where(s => s.Status != StudyStatus.Archived && s.Status != StudyStatus.Deleted);
 
         if (!string.IsNullOrWhiteSpace(SearchTerm))
         {
+            var term = SearchTerm.Trim();
             query = query.Where(s =>
-                (s.Patient?.PatientName ?? "").Replace("^", " ").Contains(SearchTerm, StringComparison.OrdinalIgnoreCase));
+                EF.Functions.Like((s.Patient!.PatientName ?? "").Replace("^", " "), $"%{term}%"));
         }
 
         if (SelectedDate.HasValue)
         {
             var date = SelectedDate.Value.Date;
-            query = query.Where(s => s.CreatedAt.Date == date || (s.StudyDate.HasValue && s.StudyDate.Value.Date == date) || s.LastUpdatedAt.Date == date);
+            query = query.Where(s =>
+                s.CreatedAt.Date == date ||
+                (s.StudyDate.HasValue && s.StudyDate.Value.Date == date) ||
+                s.LastUpdatedAt.Date == date);
         }
-
 
         if (!string.IsNullOrEmpty(SelectedModality))
-        {
             query = query.Where(s => s.Series.Any(se => se.Modality == SelectedModality));
-        }
 
-        if (!string.IsNullOrEmpty(SelectedStatus))
-        {
-            if (Enum.TryParse<StudyStatus>(SelectedStatus, out var status))
-                query = query.Where(s => s.Status == status);
-        }
+        if (!string.IsNullOrEmpty(SelectedStatus)
+            && Enum.TryParse<StudyStatus>(SelectedStatus, out var status))
+            query = query.Where(s => s.Status == status);
 
-        FilteredStudies = query.ToList();
+        return query;
+    }
+
+    private async Task LoadDataAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var filtered = BuildFilteredQuery(db);
+        TotalCount = await filtered.CountAsync();
+
+        Studies = await filtered
+            .Include(s => s.Patient)
+            .Include(s => s.Series)
+            .OrderByDescending(s => s.LastUpdatedAt)
+            .Skip((CurrentPage - 1) * PageSize)
+            .Take(PageSize)
+            .ToListAsync();
+
+        // Image counts scoped to the visible page instead of the whole archive.
+        var pageIds = Studies.Select(s => s.Id).ToList();
+        _imageCounts = await db.DicomImages
+            .Where(d => db.Series.Where(sr => pageIds.Contains(sr.StudyId)).Select(sr => sr.Id).Contains(d.SeriesId))
+            .GroupBy(d => d.Series.StudyId)
+            .Select(g => new { StudyId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.StudyId, x => x.Count);
+
+        AvailableModalities = await db.Series
+            .Where(se => se.Study != null && se.Study.Status != StudyStatus.Archived && se.Study.Status != StudyStatus.Deleted)
+            .Where(se => se.Modality != null && se.Modality != "")
+            .Select(se => se.Modality!)
+            .Distinct()
+            .OrderBy(m => m)
+            .ToListAsync();
 
         if (CurrentPage > TotalPages) CurrentPage = TotalPages;
     }
 
-    private void OnFilterChanged()
+    private async Task OnFilterChanged()
     {
         CurrentPage = 1;
-        ApplyFilters();
+        await LoadDataAsync();
     }
 
-    private void ClearDateFilter()
+    private async Task ClearDateFilter()
     {
         SelectedDate = null;
         CurrentPage = 1;
-        ApplyFilters();
+        await LoadDataAsync();
     }
 
-    private void ClearAllFilters()
+    private async Task ClearAllFilters()
     {
         SearchTerm = "";
         SelectedDate = null;
         SelectedModality = "";
         SelectedStatus = "";
         CurrentPage = 1;
-        ApplyFilters();
+        await LoadDataAsync();
     }
 
     private void OpenStudy(int id) => Navigation.NavigateTo($"/study/{id}");
 
-    private void PreviousPage() { if (CurrentPage > 1) CurrentPage--; }
-    private void NextPage() { if (CurrentPage < TotalPages) CurrentPage++; }
+    private async Task PreviousPage()
+    {
+        if (CurrentPage > 1) { CurrentPage--; await LoadDataAsync(); }
+    }
+
+    private async Task NextPage()
+    {
+        if (CurrentPage < TotalPages) { CurrentPage++; await LoadDataAsync(); }
+    }
 
     private async Task MarkComplete(Study study)
     {
@@ -398,9 +401,7 @@ else
         try
         {
             await StudyService.MarkCompleteAsync(study.Id);
-            study.Status = StudyStatus.Complete;
-            study.LastUpdatedAt = DateTime.UtcNow;
-            ApplyFilters();
+            await LoadDataAsync();
             await ShowToast("Étude marquée comme terminée");
         }
         catch (Exception ex)
@@ -418,8 +419,7 @@ else
         try
         {
             await StudyService.ArchiveStudyAsync(study.Id);
-            Studies?.Remove(study);
-            ApplyFilters();
+            await LoadDataAsync();
             await ShowToast("Étude archivée");
         }
         catch (Exception ex)
@@ -441,9 +441,8 @@ else
         try
         {
             await StudyService.SoftDeleteStudyAsync(StudyToDelete.Id);
-            Studies?.Remove(StudyToDelete);
             StudyToDelete = null;
-            ApplyFilters();
+            await LoadDataAsync();
             await ShowToast("Étude déplacée vers la corbeille");
         }
         catch (Exception ex)
@@ -482,6 +481,5 @@ else
         NotificationService.OnStudyChanged -= HandleStudyChanged;
     }
 }
-
 
 

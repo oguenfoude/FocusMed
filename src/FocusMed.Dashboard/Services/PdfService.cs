@@ -10,11 +10,15 @@ namespace FocusMed.Dashboard.Services;
 public class PdfService
 {
     private readonly string _pdfCacheDir;
+    private readonly string _coverCacheDir;
     private readonly string _coverLogoPath;
     private readonly string _coverDocxPath;
     private readonly ILogger<PdfService> _logger;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _pdfLocks = new();
     private static readonly ConcurrentDictionary<string, int> _pdfLockCounts = new();
+
+    private static DateTime _lastCleanupUtc = DateTime.MinValue;
+    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(5);
 
     public PdfService(ILogger<PdfService> logger, IWebHostEnvironment env)
     {
@@ -24,6 +28,8 @@ public class PdfService
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
         _pdfCacheDir = Path.Combine(dataDir, "pdf-cache");
         Directory.CreateDirectory(_pdfCacheDir);
+        _coverCacheDir = Path.Combine(_pdfCacheDir, "covers");
+        Directory.CreateDirectory(_coverCacheDir);
 
         _coverDocxPath = Path.Combine(dataDir, "cover.docx");
         _coverLogoPath = Path.Combine(dataDir, "cover-logo.jpg");
@@ -268,6 +274,34 @@ public class PdfService
     {
         var patientDisplay = patientName.Replace("^", " ");
 
+        // Cover depends only on (patient, date, size). Frame-selection changes would otherwise
+        // rebuild it on every toggle — and A4 covers cost a full WINWORD.EXE spawn (~1-3s).
+        var coverKeyBytes = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"{patientDisplay}|{studyDate}|{pageSize}"));
+        var coverCachePath = Path.Combine(
+            _coverCacheDir, $"cover_{Convert.ToHexString(coverKeyBytes)[..32].ToLowerInvariant()}.pdf");
+
+        if (File.Exists(coverCachePath))
+        {
+            File.Copy(coverCachePath, outputPath, overwrite: true);
+            return;
+        }
+
+        GenerateCoverPdfUncached(patientDisplay, studyDate, outputPath, pageSize);
+
+        try
+        {
+            if (File.Exists(outputPath))
+                File.Copy(outputPath, coverCachePath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Cover cache write failed (non-fatal): {Path}", coverCachePath);
+        }
+    }
+
+    private void GenerateCoverPdfUncached(string patientDisplay, string studyDate, string outputPath, string pageSize)
+    {
         if (!File.Exists(_coverDocxPath))
         {
             _logger.LogWarning("cover.docx not found at {Path}, using QuestPDF fallback", _coverDocxPath);
@@ -538,8 +572,32 @@ public class PdfService
 
     private async Task CleanupOldPdfsAsync(int maxAgeMinutes = 60)
     {
-        var cutoff = DateTime.UtcNow.AddMinutes(-maxAgeMinutes);
-        foreach (var file in Directory.GetFiles(_pdfCacheDir, "*.pdf"))
+        // Throttle: this runs on every preview generation; scanning the cache dir each time
+        // is wasted IO when called several times a second during frame toggling.
+        var now = DateTime.UtcNow;
+        if (now - _lastCleanupUtc < CleanupInterval) return;
+        _lastCleanupUtc = now;
+
+        // Covers are reused across sessions — 24h TTL, separate from the 60-min merged-PDF TTL.
+        DeleteExpired(_coverCacheDir, "*.pdf", TimeSpan.FromHours(24));
+        await CleanDirectoryAsync(_pdfCacheDir, "*.pdf", TimeSpan.FromMinutes(maxAgeMinutes));
+    }
+
+    private static void DeleteExpired(string dir, string pattern, TimeSpan maxAge)
+    {
+        if (!Directory.Exists(dir)) return;
+        var cutoff = DateTime.UtcNow - maxAge;
+        foreach (var file in Directory.GetFiles(dir, pattern))
+        {
+            try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); }
+            catch { }
+        }
+    }
+
+    private async Task CleanDirectoryAsync(string dir, string pattern, TimeSpan maxAge)
+    {
+        var cutoff = DateTime.UtcNow - maxAge;
+        foreach (var file in Directory.GetFiles(dir, pattern))
         {
             if (File.GetLastWriteTimeUtc(file) >= cutoff) continue;
 
