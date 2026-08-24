@@ -1,6 +1,7 @@
 @if (IsVisible)
 {
-    <div class="fixed inset-0 z-50 flex items-center justify-center" tabindex="0" @onkeydown="HandleKeydown" @ref="ModalRef">
+    <div class="fixed inset-0 z-50 flex items-center justify-center" tabindex="0" role="dialog" aria-modal="true"
+         aria-label="@Title" @onkeydown="HandleKeydown" @ref="ModalRef">
         <div class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" @onclick="OnCancel"></div>
         <div class="relative w-full max-w-sm mx-auto z-50">
             <div class="bg-white rounded-xl shadow-2xl overflow-hidden">
@@ -17,7 +18,8 @@
                     <button @onclick="OnCancel" class="flex-1 px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors border-r border-slate-100">
                         @CancelText
                     </button>
-                    <button @onclick="OnConfirm" class="flex-1 px-4 py-3 text-sm font-semibold @ConfirmClass transition-colors">
+                    <button @onclick="HandleConfirmClick" disabled="@_confirmClicked"
+                            class="flex-1 px-4 py-3 text-sm font-semibold @ConfirmClass transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                         @ConfirmText
                     </button>
                 </div>
@@ -40,13 +42,32 @@
     [Parameter] public EventCallback OnCancel { get; set; }
 
     private ElementReference ModalRef;
+    private bool _wasVisible;
+    private bool _confirmClicked;
 
+    // Focus on the hidden->visible transition (not firstRender — the modal renders
+    // hidden initially, so firstRender && IsVisible is never both true and Escape
+    // could never fire because nothing inside held keyboard focus).
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && IsVisible)
+        if (IsVisible && !_wasVisible)
         {
+            _wasVisible = true;
+            _confirmClicked = false;
             try { await ModalRef.FocusAsync(); } catch { }
         }
+        else if (!IsVisible && _wasVisible)
+        {
+            _wasVisible = false;
+            _confirmClicked = false;
+        }
+    }
+
+    private async Task HandleConfirmClick()
+    {
+        if (_confirmClicked) return;
+        _confirmClicked = true;
+        await OnConfirm.InvokeAsync();
     }
 
     private void HandleKeydown(KeyboardEventArgs e)

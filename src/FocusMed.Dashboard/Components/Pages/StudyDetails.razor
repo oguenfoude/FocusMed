@@ -7,12 +7,7 @@
 @inject PngExtractionService PngExtractionService
 @inject StudyService StudyService
 @inject PdfService PdfService
-@inject FocusMed.Printing.Discovery.IPrinterDiscoveryService DiscoveryService
-@inject FocusMed.Printing.Discovery.IPrinterCapabilityService CapabilityService
-@inject FocusMed.Printing.Profiles.IPrintProfileBuilder ProfileBuilder
 @inject FocusMed.Printing.Jobs.IPrintExecutionService ExecutionService
-@inject FocusMed.Printing.Profiles.IPrinterSettingsStore SettingsStore
-@inject Microsoft.Extensions.Options.IOptions<FocusMed.Printing.Jobs.RawPrinterConfig> RawPrinterOptions
 @inject ILogger<StudyDetails> Logger
 
 <PageTitle>Détails de l'étude — FocusMed</PageTitle>
@@ -140,11 +135,12 @@ else
 
             <!-- Right: Print (dropdown + button, like AlPrint) -->
             <div class="flex items-center gap-2 flex-wrap">
-                <select @bind="SelectedPrintMode"
-                        class="px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500">
-                    <option value="BookletA3">KONICA BOOK</option>
-                    <option value="FlatA3">KONICA A3</option>
-                    <option value="FlatA4">KONICA A4</option>
+                <select @bind="SelectedPrintMode" @bind:after="OnPrintModeChanged"
+                        class="px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500"
+                        title="Livret : A4 plié en A3, agrafé au centre. Plat : feuilles simples.">
+                    <option value="BookletA3">Livret A3 — plié + agrafé</option>
+                    <option value="FlatA3">Plat A3</option>
+                    <option value="FlatA4">Plat A4</option>
                 </select>
 
                 <button @onclick="PrintStudy" disabled="@(IsPrinting || IsRegeneratingPdf || string.IsNullOrEmpty(PdfPreviewUrl))"
@@ -413,9 +409,7 @@ else
 
     private string SelectedPrintMode { get; set; } = "BookletA3";
     private bool IsPrinting;
-    private string? SelectedPrinter;
     private int Copies = 1;
-    private IReadOnlyList<FocusMed.Printing.Discovery.InstalledPrinter> AvailablePrinters = [];
 
     private string StatusMessage = "";
     private bool IsError = false;
@@ -424,7 +418,6 @@ else
     protected override async Task OnInitializedAsync()
     {
         IsLoading = true;
-        await InitializePrintersAsync();
         await LoadStudyAsync();
 
         if (Study != null)
@@ -435,34 +428,6 @@ else
         else
         {
             IsExtracting = false;
-        }
-    }
-
-    private async Task InitializePrintersAsync()
-    {
-        try
-        {
-            var printers = new List<FocusMed.Printing.Discovery.InstalledPrinter>(DiscoveryService.GetAvailablePrinters());
-
-            // Add raw TCP printers (Konica bizhub, etc.) from config
-            foreach (var raw in RawPrinterOptions.Value.Printers)
-            {
-                if (!printers.Any(p => p.Name.Equals(raw.Name, StringComparison.OrdinalIgnoreCase)))
-                    printers.Add(new FocusMed.Printing.Discovery.InstalledPrinter(raw.Name));
-            }
-
-            AvailablePrinters = printers;
-            var savedSettings = await SettingsStore.LoadAsync();
-            var savedPrinter = savedSettings?.DefaultPrinterName;
-
-            if (!string.IsNullOrEmpty(savedPrinter) && AvailablePrinters.Any(p => p.Name == savedPrinter))
-                SelectedPrinter = savedPrinter;
-            else if (AvailablePrinters.Count > 0)
-                SelectedPrinter = AvailablePrinters[0].Name;
-        }
-        catch
-        {
-            AvailablePrinters = [];
         }
     }
 
@@ -585,8 +550,18 @@ else
         {
             Logger.LogError(ex, "PDF preview generation failed for Study {StudyId}", Study?.Id);
             IsRegeneratingPdf = false;
+            StatusMessage = "Échec de la génération du PDF. Modifiez la sélection d'images pour réessayer.";
+            IsError = true;
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    private void OnPrintModeChanged()
+    {
+        // Preview layout depends on the mode (booklet padding) — regenerate so the
+        // iframe matches what will actually print.
+        if (SelectedFrameIds.Count > 0)
+            _ = RegeneratePdfPreviewAsync();
     }
 
     private void ToggleFrameSelection(string sopUid)
@@ -653,20 +628,6 @@ else
     {
         StatusMessage = "";
         IsError = false;
-    }
-
-    private async Task OnPrinterChanged()
-    {
-        if (string.IsNullOrEmpty(SelectedPrinter)) return;
-        try
-        {
-            var current = await SettingsStore.LoadAsync();
-            await SettingsStore.SaveAsync(current with { DefaultPrinterName = SelectedPrinter });
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Could not persist printer selection");
-        }
     }
 
     private async Task PrintStudy()

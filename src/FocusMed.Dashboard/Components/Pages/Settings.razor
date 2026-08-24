@@ -439,13 +439,22 @@
                 if (RawPrinterOptions.Value.Printers.Any(p => p.Name.Equals(printer.Name, StringComparison.OrdinalIgnoreCase)))
                 {
                     var rawPreset = RawPrinterOptions.Value.Printers.First(p => p.Name.Equals(printer.Name, StringComparison.OrdinalIgnoreCase));
+                    var (wMm, hMm) = rawPreset.PaperSize?.ToUpperInvariant() switch
+                    {
+                        "A3" => (297.0f, 420.0f),
+                        "A4" => (210.0f, 297.0f),
+                        "A5" => (148.0f, 210.0f),
+                        "LETTER" => (215.9f, 279.4f),
+                        "LEGAL" => (215.9f, 355.6f),
+                        _ => (0.0f, 0.0f)
+                    };
                     Snapshots[printer.Name] = new FocusMed.Printing.Discovery.PrinterCapabilitySnapshot
                     {
                         PrinterName = printer.Name,
                         DriverName = "RAW TCP",
                         SupportsDuplex = false,
                         SupportsColor = !rawPreset.ForceGrayscale,
-                        PaperSizes = [new FocusMed.Printing.Discovery.PaperSizeInfo { Name = rawPreset.PaperSize }]
+                        PaperSizes = [new FocusMed.Printing.Discovery.PaperSizeInfo { Name = rawPreset.PaperSize, WidthMm = wMm, HeightMm = hMm }]
                     };
                     PrinterProfiles[printer.Name] =
                     [

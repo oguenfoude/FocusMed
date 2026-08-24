@@ -1,5 +1,8 @@
 @inherits LayoutComponentBase
+@implements IDisposable
 @inject NavigationManager Navigation
+@inject IConfiguration Config
+@inject ILogger<MainLayout> Logger
 
 <div class="flex flex-col min-h-screen bg-slate-50">
     <!-- Top Navbar -->
@@ -42,6 +45,15 @@
                 </svg>
                 Supprimées
             </NavLink>
+            <NavLink href="/settings"
+                     ActiveClass="bg-brand-50 text-brand-700 border border-brand-100 hover:bg-brand-100"
+                     class="flex items-center gap-2 px-4 py-2 rounded-lg border border-transparent transition-all duration-200 hover:bg-slate-100 hover:border-slate-200 font-medium text-sm text-slate-600">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Paramètres
+            </NavLink>
         </nav>
 
 
@@ -53,9 +65,12 @@
                     <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
             </button>
-            <div class="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
-                <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                Serveur actif
+            <div @onclick="CheckServerNow" role="status" title="État du récepteur DICOM (Worker) — cliquer pour revérifier"
+                 class="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border cursor-pointer transition-colors @(ServerOnline
+                     ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                     : "text-red-700 bg-red-50 border-red-200")">
+                <div class="w-2 h-2 rounded-full @(ServerOnline ? "bg-emerald-500 animate-pulse" : "bg-red-500")"></div>
+                @(ServerOnline ? "Serveur actif" : "Serveur hors ligne")
             </div>
         </div>
     </header>
@@ -74,8 +89,51 @@
 </div>
 
 @code {
+    private bool ServerOnline;
+    private System.Threading.Timer? _healthTimer;
+    private int _dicomPort = 11112;
+
+    protected override void OnInitialized()
+    {
+        var port = Config.GetValue<int?>("DicomHealth:Port");
+        if (port is > 0 and <= 65535) _dicomPort = port.Value;
+
+        ServerOnline = CheckServer();
+        // Real liveness probe: TCP connect to the Worker's DICOM listener.
+        // The old badge was hardcoded green even when the Worker was down.
+        _healthTimer = new System.Threading.Timer(
+            _ => { var online = CheckServer(); if (online != ServerOnline) _ = InvokeAsync(() => { ServerOnline = online; StateHasChanged(); }); },
+            null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private void CheckServerNow()
+    {
+        ServerOnline = CheckServer();
+        StateHasChanged();
+    }
+
+    private bool CheckServer()
+    {
+        try
+        {
+            using var client = new System.Net.Sockets.TcpClient();
+            var task = client.ConnectAsync(System.Net.IPAddress.Loopback, _dicomPort);
+            return task.Wait(1500) && client.Connected;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "DICOM health probe failed on port {Port}", _dicomPort);
+            return false;
+        }
+    }
+
     private void RefreshPage()
     {
         Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+    }
+
+    public void Dispose()
+    {
+        _healthTimer?.Dispose();
     }
 }

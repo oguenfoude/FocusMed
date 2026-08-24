@@ -340,12 +340,16 @@ else
     private string FormatPatientName(string? name) =>
         string.IsNullOrWhiteSpace(name) ? "Inconnu" : name.Replace("^", " ");
 
+    private int _toastSeq;
+
     private async Task ShowToast(string message, bool isError = false)
     {
+        var seq = ++_toastSeq;
         StatusMessage = message;
         IsError = isError;
         StateHasChanged();
         await Task.Delay(3000);
+        if (seq != _toastSeq) return; // a newer toast superseded this one
         StatusMessage = "";
         StateHasChanged();
     }

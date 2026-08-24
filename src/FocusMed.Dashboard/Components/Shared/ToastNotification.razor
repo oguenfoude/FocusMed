@@ -1,6 +1,7 @@
 @if (!string.IsNullOrEmpty(Message))
 {
-    <div class="fixed bottom-6 right-6 z-50 @(IsError ? "bg-red-600" : "bg-emerald-600") text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 text-sm font-medium animate-slide-in-right">
+    <div class="fixed bottom-6 right-6 z-50 @(IsError ? "bg-red-600" : "bg-emerald-600") text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 text-sm font-medium animate-slide-in-right"
+         role="@((IsError ? "alert" : "status"))" aria-live="assertive" aria-atomic="true">
         @if (IsError)
         {
             <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

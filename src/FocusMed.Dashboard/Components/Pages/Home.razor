@@ -130,12 +130,20 @@ else
             <table class="w-full text-left text-sm">
                 <thead class="bg-slate-50/50 text-slate-500 font-semibold text-xs uppercase tracking-wider border-b border-slate-200">
                     <tr>
-                        <th class="px-6 py-4">ID</th>
-                        <th class="px-6 py-4">Nom Patient</th>
-                        <th class="px-6 py-4">Date</th>
+                        <th class="px-6 py-4 cursor-pointer hover:text-slate-700 select-none" @onclick='() => ToggleSort("id")'>
+                            <span class="inline-flex items-center gap-1">ID @SortIcon("id")</span>
+                        </th>
+                        <th class="px-6 py-4 cursor-pointer hover:text-slate-700 select-none" @onclick='() => ToggleSort("patient")'>
+                            <span class="inline-flex items-center gap-1">Nom Patient @SortIcon("patient")</span>
+                        </th>
+                        <th class="px-6 py-4 cursor-pointer hover:text-slate-700 select-none" @onclick='() => ToggleSort("date")'>
+                            <span class="inline-flex items-center gap-1">Date @SortIcon("date")</span>
+                        </th>
                         <th class="px-6 py-4">Modalité</th>
                         <th class="px-6 py-4">Images</th>
-                        <th class="px-6 py-4">Statut</th>
+                        <th class="px-6 py-4 cursor-pointer hover:text-slate-700 select-none" @onclick='() => ToggleSort("status")'>
+                            <span class="inline-flex items-center gap-1">Statut @SortIcon("status")</span>
+                        </th>
                         <th class="px-6 py-4 text-right">Actions</th>
                     </tr>
                 </thead>
@@ -332,10 +340,16 @@ else
         var filtered = BuildFilteredQuery(db);
         TotalCount = await filtered.CountAsync();
 
-        Studies = await filtered
+        // Clamp BEFORE materializing so deleting the last row(s) of the final page
+        // re-queries the now-correct page instead of showing stale rows.
+        var totalPages = Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
+        if (CurrentPage > totalPages) CurrentPage = totalPages;
+
+        var pageQuery = ApplySort(filtered);
+
+        Studies = await pageQuery
             .Include(s => s.Patient)
             .Include(s => s.Series)
-            .OrderByDescending(s => s.LastUpdatedAt)
             .Skip((CurrentPage - 1) * PageSize)
             .Take(PageSize)
             .ToListAsync();
@@ -355,8 +369,51 @@ else
             .Distinct()
             .OrderBy(m => m)
             .ToListAsync();
+    }
 
-        if (CurrentPage > TotalPages) CurrentPage = TotalPages;
+    private IQueryable<Study> ApplySort(IQueryable<Study> query)
+    {
+        return SortColumn switch
+        {
+            "id" => SortDescending
+                ? query.OrderByDescending(s => s.Id).ThenByDescending(s => s.LastUpdatedAt)
+                : query.OrderBy(s => s.Id).ThenByDescending(s => s.LastUpdatedAt),
+            "patient" => SortDescending
+                ? query.OrderByDescending(s => s.Patient!.PatientName).ThenByDescending(s => s.LastUpdatedAt)
+                : query.OrderBy(s => s.Patient!.PatientName).ThenByDescending(s => s.LastUpdatedAt),
+            "date" => SortDescending
+                ? query.OrderByDescending(s => s.StudyDate ?? s.CreatedAt).ThenByDescending(s => s.LastUpdatedAt)
+                : query.OrderBy(s => s.StudyDate ?? s.CreatedAt).ThenByDescending(s => s.LastUpdatedAt),
+            "status" => SortDescending
+                ? query.OrderByDescending(s => s.Status).ThenByDescending(s => s.LastUpdatedAt)
+                : query.OrderBy(s => s.Status).ThenByDescending(s => s.LastUpdatedAt),
+            _ => query.OrderByDescending(s => s.LastUpdatedAt)
+        };
+    }
+
+    private string SortColumn { get; set; } = "";
+    private bool SortDescending = true;
+
+    private string SortIcon(string column) => SortColumn switch
+    {
+        var c when c == column && SortDescending => "▲",
+        var c when c == column => "▼",
+        _ => "↕"
+    };
+
+    private async Task ToggleSort(string column)
+    {
+        if (SortColumn == column)
+        {
+            if (SortDescending) { SortDescending = false; }
+            else { SortColumn = ""; SortDescending = true; } // third click: back to default
+        }
+        else
+        {
+            SortColumn = column;
+            SortDescending = true;
+        }
+        await LoadDataAsync();
     }
 
     private async Task OnFilterChanged()
