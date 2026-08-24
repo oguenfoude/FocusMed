@@ -20,6 +20,10 @@ public class PngExtractionService
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
     private static readonly ConcurrentDictionary<string, int> _studyRefCount = new();
 
+    // Gate makes acquire (GetOrAdd + increment) atomic with release-check (decrement + remove),
+    // preventing a retiring thread from deleting entries a concurrent acquirer just created.
+    private static readonly object _refCountGate = new();
+
     public PngExtractionService(
         IServiceScopeFactory scopeFactory,
         ILogger<PngExtractionService> logger,
@@ -59,74 +63,72 @@ public class PngExtractionService
         if (string.IsNullOrEmpty(studyUid))
             return [];
 
-        _studyRefCount.AddOrUpdate(studyUid, 1, (_, old) => old + 1);
-
-        try
+        lock (_refCountGate)
         {
-            var results = new List<FrameResult>();
+            _studyRefCount.AddOrUpdate(studyUid, 1, (_, old) => old + 1);
+            _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
+        }
 
-            foreach (var image in images)
+        // Refcount ownership: incremented here, decremented ONLY by the caller's ReleaseStudyPng
+        // (e.g. StudyDetails.Dispose). No internal decrement — double-decrement underflowed the
+        // counter and retired semaphores while other circuits still awaited them (AGENTS.md #52).
+
+        var results = new List<FrameResult>();
+
+        foreach (var image in images)
+        {
+            var currentImage = image;
+            if (string.IsNullOrEmpty(currentImage.PngPath))
             {
-                var currentImage = image;
-                if (string.IsNullOrEmpty(currentImage.PngPath))
-                {
-                    await ExtractForImageAsync(currentImage, ct);
-                    var updated = await db.DicomImages
-                        .Include(i => i.Frames)
-                        .FirstOrDefaultAsync(i => i.Id == currentImage.Id, ct);
-                    if (updated != null)
-                        currentImage = updated;
-                }
-                else if (!File.Exists(currentImage.PngPath))
-                {
-                    currentImage.PngPath = null;
-                    foreach (var frame in currentImage.Frames)
-                        frame.PngPath = null;
-                    await db.SaveChangesAsync(ct);
-                    await ExtractForImageAsync(currentImage, ct);
-                    var updated = await db.DicomImages
-                        .Include(i => i.Frames)
-                        .FirstOrDefaultAsync(i => i.Id == currentImage.Id, ct);
-                    if (updated != null)
-                        currentImage = updated;
-                }
-
-                var frames = currentImage.Frames
-                    .OrderBy(f => f.FrameIndex)
-                    .Select(f => new FrameResult(
-                        currentImage.SopInstanceUid,
-                        f.FrameIndex,
-                        f.PngPath,
-                        f.PngPath != null && File.Exists(f.PngPath),
-                        currentImage.Series?.Modality))
-                    .ToList();
-
-                results.AddRange(frames);
+                await ExtractForImageAsync(currentImage, ct);
+                var updated = await db.DicomImages
+                    .Include(i => i.Frames)
+                    .FirstOrDefaultAsync(i => i.Id == currentImage.Id, ct);
+                if (updated != null)
+                    currentImage = updated;
+            }
+            else if (!File.Exists(currentImage.PngPath))
+            {
+                currentImage.PngPath = null;
+                foreach (var frame in currentImage.Frames)
+                    frame.PngPath = null;
+                await db.SaveChangesAsync(ct);
+                await ExtractForImageAsync(currentImage, ct);
+                var updated = await db.DicomImages
+                    .Include(i => i.Frames)
+                    .FirstOrDefaultAsync(i => i.Id == currentImage.Id, ct);
+                if (updated != null)
+                    currentImage = updated;
             }
 
-            DecrementRefCount(studyUid);
-            return results;
+            var frames = currentImage.Frames
+                .OrderBy(f => f.FrameIndex)
+                .Select(f => new FrameResult(
+                    currentImage.SopInstanceUid,
+                    f.FrameIndex,
+                    f.PngPath,
+                    f.PngPath != null && File.Exists(f.PngPath),
+                    currentImage.Series?.Modality))
+                .ToList();
+
+            results.AddRange(frames);
         }
-        catch
-        {
-            DecrementRefCount(studyUid);
-            throw;
-        }
+
+        return results;
     }
 
     public void ReleaseStudyPng(string studyUid)
     {
         if (string.IsNullOrEmpty(studyUid)) return;
-        DecrementRefCount(studyUid);
-    }
 
-    private static void DecrementRefCount(string studyUid)
-    {
-        var remaining = _studyRefCount.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
-        if (remaining <= 0)
+        lock (_refCountGate)
         {
-            _studyRefCount.TryRemove(studyUid, out _);
-            _studyLocks.TryRemove(studyUid, out _);
+            var remaining = _studyRefCount.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
+            if (remaining <= 0)
+            {
+                _studyRefCount.TryRemove(studyUid, out _);
+                _studyLocks.TryRemove(studyUid, out _);
+            }
         }
     }
 

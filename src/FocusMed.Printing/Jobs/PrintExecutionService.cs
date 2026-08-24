@@ -249,15 +249,30 @@ internal sealed class PrintExecutionService(
         return new PrintTicket(outMs);
     }
 
+    private const int StaPrintTimeoutSeconds = 180;
+
     private static T RunInStaThread<T>(Func<T> action)
     {
         T result = default!;
         Exception? ex = null;
-        var t = new Thread(() => { try { result = action(); } catch (Exception e) { ex = e; } });
+        var completed = new ManualResetEventSlim(false);
+        var t = new Thread(() =>
+        {
+            try { result = action(); }
+            catch (Exception e) { ex = e; }
+            finally { completed.Set(); }
+        });
         t.SetApartmentState(ApartmentState.STA);
+        t.IsBackground = true;
         t.Start();
-        t.Join();
-        if (ex != null) throw ex;
+
+        if (!t.Join(TimeSpan.FromSeconds(StaPrintTimeoutSeconds)))
+            throw new TimeoutException(
+                $"Print did not complete within {StaPrintTimeoutSeconds}s (spooler hung or printer offline?). " +
+                "Background STA thread left running.");
+
+        completed.Wait();
+        if (ex != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex).Throw();
         return result;
     }
 }

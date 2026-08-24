@@ -17,6 +17,35 @@ public class DicomUpsertService
     private readonly string _archivePath;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
     private static readonly ConcurrentDictionary<string, int> _studyLockCounts = new();
+
+    // Gate makes acquire (GetOrAdd + increment) atomic with release-check (decrement + remove).
+    // Without it, a thread re-acquiring between decrement and TryRemove gets its fresh entries
+    // deleted by the retiring thread, letting two threads run the "serialized" section at once.
+    private static readonly object _lockGate = new();
+
+    private static SemaphoreSlim AcquireStudyLockRef(string studyUid)
+    {
+        lock (_lockGate)
+        {
+            var semaphore = _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
+            _studyLockCounts.AddOrUpdate(studyUid, 1, (_, c) => c + 1);
+            return semaphore;
+        }
+    }
+
+    private static void ReleaseStudyLockRef(string studyUid, SemaphoreSlim semaphore)
+    {
+        lock (_lockGate)
+        {
+            var remaining = _studyLockCounts.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
+            semaphore.Release();
+            if (remaining <= 0)
+            {
+                _studyLockCounts.TryRemove(studyUid, out _);
+                _studyLocks.TryRemove(studyUid, out _);
+            }
+        }
+    }
     private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     public DicomUpsertService(
@@ -66,8 +95,7 @@ public class DicomUpsertService
             dataset.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
         }
 
-        var studyLock = _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
-        _studyLockCounts.AddOrUpdate(studyUid, 1, (_, c) => c + 1);
+        var studyLock = AcquireStudyLockRef(studyUid);
         await studyLock.WaitAsync();
         string filePath = "";
         try
@@ -221,13 +249,7 @@ public class DicomUpsertService
         }
         finally
         {
-            var remaining = _studyLockCounts.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
-            studyLock.Release();
-            if (remaining <= 0)
-            {
-                _studyLockCounts.TryRemove(studyUid, out _);
-                _studyLocks.TryRemove(studyUid, out _);
-            }
+            ReleaseStudyLockRef(studyUid, studyLock);
         }
     }
 
@@ -359,8 +381,7 @@ public class DicomUpsertService
 
         var dicomFile = new DicomFile(newDataset);
 
-        var studyLock = _studyLocks.GetOrAdd(studyUid, _ => new SemaphoreSlim(1, 1));
-        _studyLockCounts.AddOrUpdate(studyUid, 1, (_, c) => c + 1);
+        var studyLock = AcquireStudyLockRef(studyUid);
         await studyLock.WaitAsync();
         try
         {
@@ -444,13 +465,7 @@ public class DicomUpsertService
         }
         finally
         {
-            var remaining = _studyLockCounts.AddOrUpdate(studyUid, 0, (_, c) => c - 1);
-            studyLock.Release();
-            if (remaining <= 0)
-            {
-                _studyLockCounts.TryRemove(studyUid, out _);
-                _studyLocks.TryRemove(studyUid, out _);
-            }
+            ReleaseStudyLockRef(studyUid, studyLock);
         }
     }
 }

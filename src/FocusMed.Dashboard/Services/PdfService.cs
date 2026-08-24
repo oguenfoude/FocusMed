@@ -14,6 +14,7 @@ public class PdfService
     private readonly string _coverDocxPath;
     private readonly ILogger<PdfService> _logger;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _pdfLocks = new();
+    private static readonly ConcurrentDictionary<string, int> _pdfLockCounts = new();
 
     public PdfService(ILogger<PdfService> logger, IWebHostEnvironment env)
     {
@@ -56,7 +57,7 @@ public class PdfService
             return $"/pdf-cache/{fileName}";
         }
 
-        var pdfLock = _pdfLocks.GetOrAdd(hashStr, _ => new SemaphoreSlim(1, 1));
+        var pdfLock = AcquirePdfLockRef(hashStr);
         pdfLock.Wait();
         try
         {
@@ -114,8 +115,36 @@ public class PdfService
         }
         finally
         {
-            pdfLock.Release();
-            _pdfLocks.TryRemove(hashStr, out _);
+            ReleasePdfLockRef(hashStr, pdfLock);
+        }
+    }
+
+    // Gate makes acquire (GetOrAdd + increment) atomic with release-check (decrement + remove).
+    // Without refcounting, a thread blocked on Wait while the current holder removes the entry
+    // would race a newcomer's freshly created semaphore — both inside the critical section.
+    private static readonly object _pdfLockGate = new();
+
+    private static SemaphoreSlim AcquirePdfLockRef(string hash)
+    {
+        lock (_pdfLockGate)
+        {
+            var semaphore = _pdfLocks.GetOrAdd(hash, _ => new SemaphoreSlim(1, 1));
+            _pdfLockCounts.AddOrUpdate(hash, 1, (_, c) => c + 1);
+            return semaphore;
+        }
+    }
+
+    private static void ReleasePdfLockRef(string hash, SemaphoreSlim semaphore)
+    {
+        lock (_pdfLockGate)
+        {
+            var remaining = _pdfLockCounts.AddOrUpdate(hash, 0, (_, c) => c - 1);
+            semaphore.Release();
+            if (remaining <= 0)
+            {
+                _pdfLockCounts.TryRemove(hash, out _);
+                _pdfLocks.TryRemove(hash, out _);
+            }
         }
     }
 
