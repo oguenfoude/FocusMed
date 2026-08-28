@@ -136,16 +136,16 @@ else
 
             <!-- Right: Print (dropdown + copies + button) -->
             <div class="flex items-center gap-2 flex-wrap">
-                <select @bind="SelectedPrintMode" @bind:after="OnPrintModeChanged"
-                        class="px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500"
+                <select @bind="SelectedPrintMode" @bind:after="OnPrintModeChanged" disabled="@IsPrinting"
+                        class="px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Livret : A4 plié en A3, agrafé au centre. Plat : feuilles simples.">
                     <option value="BookletA3">Livret A3 — plié + agrafé</option>
                     <option value="FlatA3">Plat A3</option>
                     <option value="FlatA4">Plat A4</option>
                 </select>
 
-                <input type="number" min="1" max="99" @bind="Copies"
-                       class="w-14 px-2 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 text-center"
+                <input type="number" min="1" max="99" @bind="Copies" disabled="@IsPrinting"
+                       class="w-14 px-2 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 text-center disabled:opacity-50 disabled:cursor-not-allowed"
                        title="Nombre d'exemplaires" />
 
                 <button @onclick="PrintStudy" disabled="@(IsPrinting || IsRegeneratingPdf || string.IsNullOrEmpty(PdfPreviewUrl))"
@@ -189,8 +189,8 @@ else
                 @if (!IsExtracting && AvailableFrames.Count > 0)
                 {
                     <div class="flex items-center gap-1">
-                        <button @onclick="SelectAllFrames" class="flex-1 px-2 py-1 text-[10px] font-semibold text-brand-700 bg-brand-50 rounded hover:bg-brand-100 transition-colors border border-brand-100">Tout</button>
-                        <button @onclick="DeselectAllFrames" class="flex-1 px-2 py-1 text-[10px] font-semibold text-slate-500 bg-slate-100 rounded hover:bg-slate-200 transition-colors">Aucun</button>
+                        <button @onclick="SelectAllFrames" disabled="@IsExtracting" class="flex-1 px-2 py-1 text-[10px] font-semibold text-brand-700 bg-brand-50 rounded hover:bg-brand-100 transition-colors border border-brand-100 disabled:opacity-50">Tout</button>
+                        <button @onclick="DeselectAllFrames" disabled="@IsExtracting" class="flex-1 px-2 py-1 text-[10px] font-semibold text-slate-500 bg-slate-100 rounded hover:bg-slate-200 transition-colors disabled:opacity-50">Aucun</button>
                     </div>
                 }
             </div>
@@ -203,14 +203,10 @@ else
                 }
                 else if (IsExtracting)
                 {
-                    @for (var s = 0; s < 6; s++)
-                    {
-                        <div class="flex items-center gap-2 p-1.5 rounded-lg animate-pulse">
-                            <div class="w-4 h-4 rounded border bg-slate-100"></div>
-                            <div class="w-14 h-10 rounded bg-slate-100"></div>
-                            <div class="flex-1 space-y-1"><div class="h-2 bg-slate-100 rounded w-3/4"></div><div class="h-2 bg-slate-100 rounded w-1/2"></div></div>
-                        </div>
-                    }
+                    <div class="flex flex-col items-center justify-center py-10 gap-2 text-slate-400">
+                        <svg class="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                        <span class="text-[10px] font-medium">Extraction des images…</span>
+                    </div>
                 }
                 else if (AvailableFrames.Count == 0)
                 {

@@ -46,3 +46,10 @@ test-env/
 stdout.txt
 stderr.txt
 .playwright-mcp/
+# Debug artifacts from UI verification
+cover-*.png
+pdf_*.png
+study*.png
+phase*.png
+dashboard-*.txt
+src/FocusMed.Dashboard/package-lock.json

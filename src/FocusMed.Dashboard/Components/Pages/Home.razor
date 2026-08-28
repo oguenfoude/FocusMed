@@ -18,6 +18,10 @@
         <h2 class="text-lg font-bold text-slate-900">Études</h2>
         <p class="text-xs text-slate-500 mt-0.5">
             <span class="text-slate-700 font-bold">@TotalCount</span> étude@((TotalCount) != 1 ? "s" : "")
+            @if (HasActiveFilters && TotalCount > 0)
+            {
+                <span class="text-slate-400">(filtré)</span>
+            }
         </p>
     </div>
     <div class="flex items-center gap-2">
@@ -37,14 +41,16 @@
         </svg>
         <input type="text" @bind="SearchTerm" @bind:event="oninput" @bind:after="OnFilterChanged"
                placeholder="Rechercher un patient…"
-               class="w-full pl-10 pr-4 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all" />
+               disabled="@IsLoading"
+               class="w-full pl-10 pr-4 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed" />
     </div>
 
     <!-- Date -->
     <div class="flex items-center gap-2">
         <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Date</label>
         <input type="date" @bind="SelectedDate" @bind:after="OnFilterChanged"
-               class="px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all" />
+               disabled="@IsLoading"
+               class="px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed" />
         @if (SelectedDate.HasValue)
         {
             <button @onclick="ClearDateFilter" class="px-2 py-2 text-xs font-semibold text-slate-500 hover:text-red-600 bg-slate-100 rounded-lg hover:bg-red-50 transition-colors" title="Effacer la date">
@@ -56,8 +62,8 @@
     <!-- Modality Filter -->
     <div class="flex items-center gap-2">
         <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Modalité</label>
-        <select @bind="SelectedModality" @bind:after="OnFilterChanged"
-                class="px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all">
+        <select @bind="SelectedModality" @bind:after="OnFilterChanged" disabled="@IsLoading"
+                class="px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
             <option value="">Toutes</option>
             @foreach (var mod in AvailableModalities)
             {
@@ -69,8 +75,8 @@
     <!-- Status Filter -->
     <div class="flex items-center gap-2">
         <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Statut</label>
-        <select @bind="SelectedStatus" @bind:after="OnFilterChanged"
-                class="px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all">
+        <select @bind="SelectedStatus" @bind:after="OnFilterChanged" disabled="@IsLoading"
+                class="px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
             <option value="">Tous</option>
             <option value="Receiving">Réception</option>
             <option value="Complete">Terminé</option>
@@ -81,7 +87,7 @@
     <!-- Clear All -->
     @if (HasActiveFilters)
     {
-        <button @onclick="ClearAllFilters" class="px-3 py-2 text-xs font-semibold text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors">
+        <button @onclick="ClearAllFilters" disabled="@IsLoading" class="px-3 py-2 text-xs font-semibold text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             Effacer filtres
         </button>
     }
@@ -273,6 +279,7 @@ else
 
     private Study? StudyToDelete;
     private bool IsProcessing;
+    private bool IsLoading;
     private bool HasActiveFilters => SelectedDate.HasValue || !string.IsNullOrWhiteSpace(SearchTerm) || !string.IsNullOrEmpty(SelectedModality) || !string.IsNullOrEmpty(SelectedStatus);
 
     private List<string> AvailableModalities = [];
@@ -335,10 +342,13 @@ else
 
     private async Task LoadDataAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
+        IsLoading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
 
-        var filtered = BuildFilteredQuery(db);
-        TotalCount = await filtered.CountAsync();
+            var filtered = BuildFilteredQuery(db);
+            TotalCount = await filtered.CountAsync();
 
         // Clamp BEFORE materializing so deleting the last row(s) of the final page
         // re-queries the now-correct page instead of showing stale rows.
@@ -369,6 +379,11 @@ else
             .Distinct()
             .OrderBy(m => m)
             .ToListAsync();
+        }
+        finally
+        {
+            IsLoading = false;
+        }
     }
 
     private IQueryable<Study> ApplySort(IQueryable<Study> query)
