@@ -95,6 +95,8 @@ using (var scope = app.Services.CreateScope())
     db.Database.Migrate();
 }
 
+app.MapGet("/health", () => Results.Ok(new { status = "ok", timestamp = DateTime.UtcNow }));
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 

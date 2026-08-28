@@ -8,6 +8,7 @@
 @inject StudyService StudyService
 @inject PdfService PdfService
 @inject FocusMed.Printing.Jobs.IPrintExecutionService ExecutionService
+@inject FocusMed.Printing.Profiles.IPrinterSettingsStore PrinterSettingsStore
 @inject ILogger<StudyDetails> Logger
 
 <PageTitle>Détails de l'étude — FocusMed</PageTitle>
@@ -133,7 +134,7 @@ else
                 }
             </div>
 
-            <!-- Right: Print (dropdown + button, like AlPrint) -->
+            <!-- Right: Print (dropdown + copies + button) -->
             <div class="flex items-center gap-2 flex-wrap">
                 <select @bind="SelectedPrintMode" @bind:after="OnPrintModeChanged"
                         class="px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500"
@@ -142,6 +143,10 @@ else
                     <option value="FlatA3">Plat A3</option>
                     <option value="FlatA4">Plat A4</option>
                 </select>
+
+                <input type="number" min="1" max="99" @bind="Copies"
+                       class="w-14 px-2 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 text-center"
+                       title="Nombre d'exemplaires" />
 
                 <button @onclick="PrintStudy" disabled="@(IsPrinting || IsRegeneratingPdf || string.IsNullOrEmpty(PdfPreviewUrl))"
                         class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-brand-600 to-brand-700 hover:from-brand-700 hover:to-brand-800 border border-brand-700 transition-all disabled:opacity-50 shadow-md shadow-brand-500/20 active:scale-[0.98]">
@@ -423,6 +428,23 @@ else
         {
             IsExtracting = false;
         }
+
+        try
+        {
+            var settings = await PrinterSettingsStore.LoadAsync();
+            if (!string.IsNullOrEmpty(settings.DefaultPrinterName))
+            {
+                SelectedPrintMode = settings.DefaultPrinterName switch
+                {
+                    "KONICA BOOK" => "BookletA3",
+                    "KONICA A3" => "FlatA3",
+                    "KONICA A4" => "FlatA4",
+                    _ => SelectedPrintMode
+                };
+            }
+            Copies = settings.DefaultCopies > 0 ? settings.DefaultCopies : 1;
+        }
+        catch { }
     }
 
     private async Task LoadStudyAsync()
@@ -725,6 +747,8 @@ else
             {
                 await ShowToast($"Échec de l'impression: {result.ErrorMessage ?? "Erreur inconnue"}", true);
             }
+
+            await RecordPrintAuditAsync(result, presetName, profile);
         }
         catch (Exception ex)
         {
@@ -735,6 +759,33 @@ else
         {
             IsPrinting = false;
             await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task RecordPrintAuditAsync(FocusMed.Printing.Jobs.PrintJobResult result, string presetName, FocusMed.Printing.Profiles.PrintProfile profile)
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.PrintAuditEntries.Add(new FocusMed.Data.Entities.PrintAuditEntry
+            {
+                StudyId = Study?.Id,
+                PatientName = Study?.Patient?.PatientName,
+                ProfileName = presetName,
+                PrintMode = SelectedPrintMode,
+                Copies = Copies,
+                PagesPrinted = result.PagesPrinted,
+                PaperSize = result.PaperSizeUsed,
+                Success = result.Success,
+                ErrorMessage = result.ErrorMessage,
+                PrinterName = presetName,
+                PrintedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to record print audit entry");
         }
     }
 

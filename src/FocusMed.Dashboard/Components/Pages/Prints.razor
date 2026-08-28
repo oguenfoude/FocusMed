@@ -1,0 +1,91 @@
+@page "/prints"
+@rendermode InteractiveServer
+@using FocusMed.Data.Entities
+@inject IDbContextFactory<FocusMedDbContext> DbFactory
+@inject NavigationManager Navigation
+
+<PageTitle>Historique des impressions — FocusMed</PageTitle>
+
+<div class="max-w-6xl mx-auto px-4 py-6">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-extrabold text-slate-900 tracking-tight">Historique des impressions</h1>
+            <p class="text-sm text-slate-500 mt-1">Journal des envois vers l'imprimante.</p>
+        </div>
+        <a href="/" class="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors">
+            ← Retour aux études
+        </a>
+    </div>
+
+    @if (_entries == null)
+    {
+        <div class="flex items-center justify-center py-20">
+            <div class="flex items-center gap-3 text-slate-400">
+                <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                <span class="text-sm font-medium">Chargement…</span>
+            </div>
+        </div>
+    }
+    else if (_entries.Count == 0)
+    {
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-12 text-center">
+            <p class="text-sm text-slate-500">Aucune impression enregistrée.</p>
+        </div>
+    }
+    else
+    {
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <table class="min-w-full text-left text-xs">
+                <thead class="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                        <th class="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">Date</th>
+                        <th class="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">Patient</th>
+                        <th class="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">Mode</th>
+                        <th class="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">Ex.</th>
+                        <th class="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">Pages</th>
+                        <th class="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">Format</th>
+                        <th class="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">État</th>
+                        <th class="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">Imprimante</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    @foreach (var e in _entries)
+                    {
+                        <tr class="hover:bg-slate-50/50">
+                            <td class="px-4 py-3 text-slate-700 whitespace-nowrap">@e.PrintedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td>
+                            <td class="px-4 py-3 text-slate-900 font-semibold">@(string.IsNullOrWhiteSpace(e.PatientName) ? "Inconnu" : e.PatientName)</td>
+                            <td class="px-4 py-3 text-slate-700">@e.PrintMode</td>
+                            <td class="px-4 py-3 text-slate-700 text-center">@e.Copies</td>
+                            <td class="px-4 py-3 text-slate-700 text-center">@e.PagesPrinted</td>
+                            <td class="px-4 py-3 text-slate-700">@e.PaperSize</td>
+                            <td class="px-4 py-3">
+                                @if (e.Success)
+                                {
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">Envoyé</span>
+                                }
+                                else
+                                {
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-50 text-red-700 border border-red-200">Échec</span>
+                                }
+                            </td>
+                            <td class="px-4 py-3 text-slate-500">@e.PrinterName</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<PrintAuditEntry>? _entries;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _entries = await db.PrintAuditEntries
+            .OrderByDescending(e => e.PrintedAt)
+            .Take(200)
+            .ToListAsync();
+    }
+}
