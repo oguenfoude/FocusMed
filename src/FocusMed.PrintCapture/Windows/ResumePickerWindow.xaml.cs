@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using FocusMed.PrintCapture.Services;
@@ -9,13 +8,16 @@ public partial class ResumePickerWindow : Window
 {
     private readonly DatabaseService _databaseService;
     private readonly string _pdfPath = "";
+    private readonly string _resumesFolder;
     private List<StudyItem> _studies = new();
 
-    public ResumePickerWindow(DatabaseService databaseService, string pdfPath)
+    public ResumePickerWindow(DatabaseService databaseService, string pdfPath, string resumesFolder = "resumes")
     {
         _databaseService = databaseService;
         _pdfPath = pdfPath;
+        _resumesFolder = resumesFolder;
         InitializeComponent();
+        Closed += (_, _) => { try { if (!string.IsNullOrEmpty(_pdfPath) && File.Exists(_pdfPath)) File.Delete(_pdfPath); } catch { } };
         _ = LoadStudiesAsync();
     }
 
@@ -77,7 +79,7 @@ public partial class ResumePickerWindow : Window
 
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
-        var resumesDir = Path.Combine(dataDir, "resumes");
+        var resumesDir = Path.Combine(dataDir, _resumesFolder);
         Directory.CreateDirectory(resumesDir);
 
         var destFileName = $"resume_{selected.Id}_{Guid.NewGuid():N}.pdf";

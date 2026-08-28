@@ -145,9 +145,9 @@ public class PrintJobMonitorService : IDisposable
 
         _logger.LogInformation("Print finished: incoming.pdf ({Size:N0} bytes), validating...", fileInfo.Length);
 
-        if (!IsPdfFile(incomingPath))
+        if (!IsCompletePdfFile(incomingPath))
         {
-            _logger.LogWarning("Invalid PDF header, skipping: incoming.pdf");
+            _logger.LogWarning("Invalid or truncated PDF (bad header or missing %%EOF), skipping: incoming.pdf");
             await TryZeroFileAsync(incomingPath);
             return null;
         }
@@ -210,16 +210,26 @@ public class PrintJobMonitorService : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static bool IsPdfFile(string path)
+    private static bool IsCompletePdfFile(string path)
     {
         try
         {
             using var fs = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            if (fs.Length < 4) return false;
+            if (fs.Length < 8) return false;
+
             var header = new byte[4];
-            var bytesRead = fs.Read(header, 0, 4);
-            if (bytesRead < 4) return false;
-            return header[0] == 0x25 && header[1] == 0x50 && header[2] == 0x44 && header[3] == 0x46;
+            if (fs.Read(header, 0, 4) < 4) return false;
+            if (header[0] != 0x25 || header[1] != 0x50 || header[2] != 0x44 || header[3] != 0x46)
+                return false;
+
+            // The spooler writes the %PDF header first; the trailer is written last.
+            // Requiring %%EOF means we only copy files the spooler fully flushed.
+            var tailLen = (int)Math.Min(fs.Length, 1024);
+            var tail = new byte[tailLen];
+            fs.Position = fs.Length - tailLen;
+            if (fs.Read(tail, 0, tailLen) < tailLen) return false;
+            var tailText = System.Text.Encoding.ASCII.GetString(tail);
+            return tailText.Contains("%%EOF", StringComparison.Ordinal);
         }
         catch
         {

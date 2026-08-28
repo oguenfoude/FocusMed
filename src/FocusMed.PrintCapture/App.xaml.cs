@@ -17,6 +17,7 @@ public partial class App : System.Windows.Application
     private PrintJobMonitorService? _monitor;
     private DatabaseService? _databaseService;
     private System.Windows.Forms.NotifyIcon? _trayIcon;
+    private string _resumesFolder = "resumes";
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -57,7 +58,7 @@ public partial class App : System.Windows.Application
             var driverName = configuration["OutputDriverName"] ?? "Microsoft Print To PDF";
             var printJobsFolder = configuration["PrintJobsFolder"]
                 ?? Path.Combine(dataDir, "print-jobs");
-            var resumesFolder = configuration["ResumesFolder"] ?? "resumes";
+            _resumesFolder = configuration["ResumesFolder"] ?? "resumes";
 
             Environment.SetEnvironmentVariable("FOCUSMED_DB_CONNECTION", connectionString);
             Directory.CreateDirectory(printJobsFolder);
@@ -65,7 +66,7 @@ public partial class App : System.Windows.Application
             Log.Information("Database:  {Conn}", connectionString.Replace("Password=admin", "Password=*****"));
             Log.Information("Printer:   {Name} ({Driver})", printerName, driverName);
             Log.Information("Watch:     {Folder}", printJobsFolder);
-            Log.Information("Resumes:   {Folder}", Path.Combine(dataDir, resumesFolder));
+            Log.Information("Resumes:   {Folder}", Path.Combine(dataDir, _resumesFolder));
             Log.Information("Logs:      {Folder}", Path.Combine(dataDir, "logs"));
 
             var services = new ServiceCollection();
@@ -78,7 +79,7 @@ public partial class App : System.Windows.Application
             services.AddSingleton<PrintJobMonitorService>(sp =>
                 new PrintJobMonitorService(
                     sp.GetRequiredService<ILogger<PrintJobMonitorService>>(),
-                    printJobsFolder, resumesFolder));
+                    printJobsFolder, _resumesFolder));
             services.AddSingleton<DatabaseService>();
 
             _serviceProvider = services.BuildServiceProvider();
@@ -178,7 +179,7 @@ public partial class App : System.Windows.Application
 
         Dispatcher.BeginInvoke(() =>
         {
-            var window = new Windows.ResumePickerWindow(_databaseService!, pdfPath);
+            var window = new Windows.ResumePickerWindow(_databaseService!, pdfPath, _resumesFolder);
             window.Show();
             window.Activate();
         });

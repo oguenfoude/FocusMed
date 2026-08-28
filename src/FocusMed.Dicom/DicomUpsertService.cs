@@ -253,7 +253,7 @@ public class DicomUpsertService
         }
     }
 
-    public async Task BackfillMetadataAsync()
+    public async Task BackfillMetadataAsync(CancellationToken cancellationToken = default)
     {
         const int batchSize = 200;
         var backfilled = 0;
@@ -270,11 +270,16 @@ public class DicomUpsertService
                     .ThenInclude(s => s!.Patient)
                 .Where(i => i.Id > lastId && i.Series.Study != null &&
                     (i.Series.Study.Patient!.BirthDate == null ||
-                     i.Series.Study.InstitutionName == null))
+                     i.Series.Study.Patient.Sex == null ||
+                     i.Series.Study.Description == null ||
+                     i.Series.Study.AccessionNumber == null ||
+                     i.Series.Study.InstitutionName == null ||
+                     i.Series.Study.Manufacturer == null ||
+                     i.Series.Study.ReferringPhysicianName == null))
                 .OrderBy(i => i.Id)
                 .Take(batchSize)
                 .AsSplitQuery()
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             if (images.Count == 0)
                 break;
@@ -331,7 +336,8 @@ public class DicomUpsertService
                 }
             }
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         if (backfilled > 0)

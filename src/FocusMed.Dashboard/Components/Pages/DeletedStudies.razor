@@ -154,7 +154,7 @@ else
 <!-- Delete Confirmation Modal -->
 <ConfirmModal IsVisible="StudyToDelete != null"
               Title="Supprimer définitivement ?"
-              Message="@($"L'étude de {FormatPatientName(StudyToDelete?.Patient?.PatientName)} sera définitivement supprimée. Cette action est irréversible.")"
+              Message="@($"L'étude de {DicomHelpers.FormatPatientName(StudyToDelete?.Patient?.PatientName)} sera définitivement supprimée. Cette action est irréversible.")"
               ConfirmText="Supprimer"
               OnConfirm="ExecuteDelete"
               OnCancel="CancelDelete" />
@@ -301,8 +301,7 @@ else
         finally { IsProcessing = false; }
     }
 
-    private string FormatPatientName(string? name) =>
-        string.IsNullOrWhiteSpace(name) ? "Inconnu" : name.Replace("^", " ");
+
 
     private int _toastSeq;
 

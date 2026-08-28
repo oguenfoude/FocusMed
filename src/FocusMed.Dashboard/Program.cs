@@ -60,6 +60,18 @@ var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA") ?? Path.Combin
 var imagesPath = Path.Combine(dataDir, "images");
 Directory.CreateDirectory(imagesPath);
 
+var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+foreach (var asset in new[] { "cover.docx", "cover-logo.jpg" })
+{
+    var src = Path.Combine(wwwroot, asset);
+    var dst = Path.Combine(dataDir, asset);
+    if (!File.Exists(dst) && File.Exists(src))
+    {
+        try { File.Copy(src, dst); }
+        catch (Exception ex) { Console.WriteLine($"Cover asset provision failed ({asset}): {ex.Message}"); }
+    }
+}
+
 app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new PhysicalFileProvider(imagesPath),

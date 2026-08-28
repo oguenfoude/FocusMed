@@ -20,7 +20,7 @@ public sealed class MetadataBackfillService(
             logger.LogInformation("Background metadata backfill starting");
             using var scope = scopeFactory.CreateScope();
             var upsertService = scope.ServiceProvider.GetRequiredService<DicomUpsertService>();
-            await upsertService.BackfillMetadataAsync();
+            await upsertService.BackfillMetadataAsync(stoppingToken);
             logger.LogInformation("Background metadata backfill finished");
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

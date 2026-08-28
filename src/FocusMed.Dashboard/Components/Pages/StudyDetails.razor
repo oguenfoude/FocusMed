@@ -51,7 +51,7 @@ else
                 Études
             </a>
             <span class="text-slate-300">/</span>
-            <span class="text-slate-900 font-bold text-base">@(FormatPatientName(Study.Patient?.PatientName))</span>
+            <span class="text-slate-900 font-bold text-base">@(DicomHelpers.FormatPatientName(Study.Patient?.PatientName))</span>
             <span class="text-slate-400">·</span>
             <span class="text-slate-500">@(Study.StudyDate?.ToString("dd/MM/yyyy") ?? Study.CreatedAt.ToString("dd/MM/yyyy"))</span>
         </div>
@@ -66,7 +66,7 @@ else
                     <svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>
                 </div>
                 <div>
-                    <h1 class="text-2xl font-extrabold text-slate-900 tracking-tight leading-none mb-2">@(FormatPatientName(Study.Patient?.PatientName))</h1>
+                    <h1 class="text-2xl font-extrabold text-slate-900 tracking-tight leading-none mb-2">@(DicomHelpers.FormatPatientName(Study.Patient?.PatientName))</h1>
                     <div class="flex flex-wrap items-center gap-2 text-xs">
                         <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-mono font-bold border border-slate-200">ID: @(string.IsNullOrWhiteSpace(Study.Patient?.PatientId) ? "—" : Study.Patient.PatientId)</span>
                         <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-semibold border border-slate-200">@FormatSex(Study.Patient?.Sex)</span>
@@ -380,15 +380,9 @@ else
     private bool IsExtracting = true;
     private string? ImageError;
 
-    private int ImagesPerPage { get; set; } = 1;
-    private int GapPx { get; set; } = 1;
-    private int MarginPx { get; set; } = 10;
-
-    private void OnGridOptionChanged()
-    {
-        _ = RegeneratePdfPreviewAsync();
-    }
-
+    private const int ImagesPerPage = 1;
+    private const int GapPx = 1;
+    private const int MarginPx = 10;
 
     private string? PdfPreviewUrl;
     private bool IsRegeneratingPdf;
@@ -518,8 +512,8 @@ else
             var studyDescription = Study?.Description ?? "";
             var resumePdfPath = Study?.ResumePdfPath;
 
-            bool isBooklet = SelectedPrintMode == "BookletA3" || SelectedPrintMode == "BookletA4";
-            string pdfPageSize = "A4";
+            bool isBooklet = SelectedPrintMode == "BookletA3";
+            string pdfPageSize = SelectedPrintMode == "FlatA3" ? "A3" : "A4";
 
             var newUrl = await Task.Run(() =>
                 PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, pdfPageSize, isBooklet, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx), ct);
@@ -550,16 +544,14 @@ else
         {
             Logger.LogError(ex, "PDF preview generation failed for Study {StudyId}", Study?.Id);
             IsRegeneratingPdf = false;
-            StatusMessage = "Échec de la génération du PDF. Modifiez la sélection d'images pour réessayer.";
-            IsError = true;
-            await InvokeAsync(StateHasChanged);
+            await ShowToast("Échec de la génération du PDF. Modifiez la sélection d'images pour réessayer.", true);
         }
     }
 
     private void OnPrintModeChanged()
     {
-        // Preview layout depends on the mode (booklet padding) — regenerate so the
-        // iframe matches what will actually print.
+        // Regenerate so the iframe matches the selected print mode (A3 for flat A3,
+        // A4 for booklet/flat A4). The actual A3 booklet imposition happens only at print time.
         if (SelectedFrameIds.Count > 0)
             _ = RegeneratePdfPreviewAsync();
     }
@@ -600,22 +592,19 @@ else
             if (success)
             {
                 Study.ResumePdfPath = null;
-                StatusMessage = "Résumé supprimé avec succès.";
-                IsError = false;
+                await ShowToast("Résumé supprimé avec succès.");
                 if (SelectedFrameIds.Count > 0)
                     _ = RegeneratePdfPreviewAsync();
             }
             else
             {
-                StatusMessage = "Impossible de retirer le résumé.";
-                IsError = true;
+                await ShowToast("Impossible de retirer le résumé.", true);
             }
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Unlink resume failed for Study {StudyId}", Study.Id);
-            StatusMessage = "Erreur lors de la suppression du résumé.";
-            IsError = true;
+            await ShowToast("Erreur lors de la suppression du résumé.", true);
         }
         finally
         {
@@ -628,6 +617,21 @@ else
     {
         StatusMessage = "";
         IsError = false;
+    }
+
+    private int _toastSeq;
+
+    private async Task ShowToast(string message, bool isError = false)
+    {
+        var seq = ++_toastSeq;
+        StatusMessage = message;
+        IsError = isError;
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(3000);
+        if (seq != _toastSeq) return;
+        StatusMessage = "";
+        IsError = false;
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task PrintStudy()
@@ -662,8 +666,7 @@ else
 
             if (string.IsNullOrEmpty(PdfPreviewUrl))
             {
-                StatusMessage = "Veuillez d'abord générer l'aperçu PDF.";
-                IsError = true;
+                await ShowToast("Veuillez d'abord générer l'aperçu PDF.", true);
                 return;
             }
 
@@ -701,8 +704,7 @@ else
 
             if (!File.Exists(pdfPath))
             {
-                StatusMessage = "Fichier PDF introuvable. Régénérez l'aperçu.";
-                IsError = true;
+                await ShowToast("Fichier PDF introuvable. Régénérez l'aperçu.", true);
                 return;
             }
 
@@ -717,20 +719,17 @@ else
 
             if (result.Success)
             {
-                StatusMessage = $"Impression envoyée à '{presetName}'.";
-                IsError = false;
+                await ShowToast($"Impression envoyée à '{presetName}'.");
             }
             else
             {
-                StatusMessage = $"Échec de l'impression: {result.ErrorMessage ?? "Erreur inconnue"}";
-                IsError = true;
+                await ShowToast($"Échec de l'impression: {result.ErrorMessage ?? "Erreur inconnue"}", true);
             }
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Print failed for Study {StudyId}", Study.Id);
-            StatusMessage = $"Erreur: {ex.Message}";
-            IsError = true;
+            await ShowToast($"Erreur: {ex.Message}", true);
         }
         finally
         {
@@ -852,6 +851,5 @@ else
         _ => "N/A"
     };
 
-    private string FormatPatientName(string? name) =>
-        string.IsNullOrWhiteSpace(name) ? "Inconnu" : name.Replace("^", " ");
+
 }

@@ -343,20 +343,8 @@
     </div>
 </div>
 
-@* Toast *@
-@if (!string.IsNullOrEmpty(ToastMessage))
-{
-    <div class="fixed bottom-6 right-6 z-50">
-        <div class="@(ToastIsError ? "bg-red-50 border-red-200 text-red-800" : "bg-emerald-50 border-emerald-200 text-emerald-800") border rounded-xl px-5 py-3 shadow-lg flex items-center gap-3">
-            <span class="text-sm font-medium">@ToastMessage</span>
-            <button @onclick="() => ToastMessage = null" class="ml-2 text-current opacity-50 hover:opacity-100">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
-        </div>
-    </div>
-}
+<ToastNotification Message="@ToastMessage" IsError="@ToastIsError" OnDismiss="ClearSettingsToast" />
 
-@* Test confirmation dialog *@
 @if (ShowTestConfirmDialog)
 {
     <div class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" @onclick="CancelTestConfirm">
@@ -374,7 +362,7 @@
                     Non, échoué
                 </button>
                 <button @onclick="ConfirmTestSuccess"
-                        class="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shadow-sm">
+                        class="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm">
                     Oui, fonctionne
                 </button>
             </div>
@@ -528,7 +516,6 @@
         SettingsSaved = true;
         ShowToast("Paramètres enregistrés", false);
         StateHasChanged();
-        _ = DelayThenResetStatus();
     }
 
     private void ToggleExpand(string name)
@@ -706,28 +693,12 @@
         ToastMessage = msg;
         ToastIsError = error;
         StateHasChanged();
-        _ = DelayThenResetToast();
     }
 
-    private async Task DelayThenResetStatus()
+    private void ClearSettingsToast()
     {
-        try
-        {
-            await Task.Delay(3000);
-            SettingsStatus = null;
-            await InvokeAsync(StateHasChanged);
-        }
-        catch { }
-    }
-
-    private async Task DelayThenResetToast()
-    {
-        try
-        {
-            await Task.Delay(4000);
-            ToastMessage = null;
-            await InvokeAsync(StateHasChanged);
-        }
-        catch { }
+        ToastMessage = null;
+        ToastIsError = false;
+        StateHasChanged();
     }
 }

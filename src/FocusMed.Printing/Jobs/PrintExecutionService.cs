@@ -123,7 +123,14 @@ internal sealed class PrintExecutionService(
         using var queue = printServer.GetPrintQueue(request.PrinterName);
 
         var ticket = queue.UserPrintTicket ?? queue.DefaultPrintTicket;
-        bool useA3 = mmW > 210 || mmH > 297;
+        if (ticket is null)
+        {
+            logger.LogWarning("Printer '{Printer}' returned no usable PrintTicket; falling back to a default ticket.", request.PrinterName);
+            ticket = new PrintTicket();
+        }
+
+        bool useA3 = (Math.Abs(mmW - 297) < 2 && Math.Abs(mmH - 420) < 2)
+                   || (Math.Abs(mmW - 420) < 2 && Math.Abs(mmH - 297) < 2);
         ticket.PageMediaSize = useA3
             ? new PageMediaSize(PageMediaSizeName.ISOA3)
             : new PageMediaSize(PageMediaSizeName.ISOA4);

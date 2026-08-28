@@ -4,18 +4,18 @@ Compact reference for AI sessions. Every fact here is verified against the curre
 
 > Audience split: `AGENTS.md` = you (AI sessions). `README.md` = humans onboarding. These files do not duplicate each other.
 
-> ⚠️ **Dashboard printing is not implemented.** DICOM Print Management (N-CREATE/SET/ACTION/DELETE in `FocusMedScp`) remains — that's a separate system at the DICOM protocol level, not the Dashboard. PDF preview iframe still works for browsing. Physical printing (Windows print spooler) is not yet implemented.
-
 ## Project Shape
 
-**Five** projects. Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom`. `PrintCapture` → `Data`.
+**Seven** projects. Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom` + `Printing`. `PrintCapture` → `Data`. `Printing` has no project dependencies.
 
 | Project | TFM | Role |
 |---------|-----|------|
 | `FocusMed.Data` | `net10.0` | EF Core (`FocusMedDbContext`), 11 DbSets, 4 enums, 1 migration. No business logic. |
-| `FocusMed.Dicom` | `net10.0` | `FocusMedScp` (single SCP, all DICOM roles), `DicomUpsertService`, hosted services, `PrintScuService`, `PrintExecutionService`, `StorageForwardService`. |
+| `FocusMed.Dicom` | `net10.0` | `FocusMedScp` (single SCP, all DICOM roles), `DicomUpsertService`, hosted services, `StorageForwardService`. |
 | `FocusMed.Worker` | `net10.0` | `Program.cs`, Serilog, DI wiring, `DicomListenerService`. Headless DICOM listener. |
-| `FocusMed.Dashboard` | `net10.0` | Blazor Server UI (`InteractiveServer`). Razor components, `PngExtractionService`, `PdfService`, `StudyService`. HTTP `:5000`. |
+| `FocusMed.Dashboard` | `net10.0-windows` | Blazor Server UI (`InteractiveServer`). Razor components, `PngExtractionService`, `PdfService`, `StudyService`. HTTP `:5000`. |
+| `FocusMed.Printing` | `net10.0-windows` | Print engine (`PrintExecutionService`, `BookletImpositionService`, capability discovery, raw/XPS output). UI-independent. |
+| `FocusMed.Printing.TestConsole` | `net10.0-windows` | Console smoke-test harness for the print engine. |
 | `FocusMed.PrintCapture` | `net10.0-windows` | WPF desktop app. Creates "FocusMed" virtual printer on Windows, monitors print output, converts to PDF, shows native popup for study selection. |
 
 Solution: `FocusMed.slnx` (XML, **not** classic `.sln`).
@@ -55,10 +55,14 @@ Data directory resolves in this order:
 ├── images/
 │   └── <PatientName>_<Modality>_<YYYYMMDD>/<SeriesUid>/   # PNG per frame (on-demand)
 ├── pdf-cache/                                # Generated PDFs (60min TTL, auto-cleaned)
+│   └── covers/                               # Cover page cache (24h TTL)
+├── resumes/                                  # PrintCapture resume PDFs
 └── logs/                                   # Serilog rolling + association log
 ```
 
 Folders use `<Modality>` from DICOM tag (CT, MR, etc.) or `SC` for print images. All DICOM files stored in single `archive/` folder. Folder lookup uses `DicomImage.FilePath` from DB + `Directory.GetParent()` — never hash substring matching.
+
+Dashboard startup auto-provisions `cover.docx` and `cover-logo.jpg` from `wwwroot/` into the data dir if missing (`Program.cs`).
 
 ## Environment Variables
 
@@ -91,7 +95,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 6. **All DICOM roles live in `FocusMedScp`.** Do not invent separate SCP classes for C-STORE, C-FIND, C-MOVE, or Print Management.
 
-7. **Target framework: all projects are `net10.0`.** No Windows-specific APIs. fo-dicom uses ImageSharp (cross-platform). Build produces 0 warnings, 0 errors.
+7. **Target frameworks: mixed `net10.0` and `net10.0-windows`.** `FocusMed.Data`, `FocusMed.Dicom`, `FocusMed.Worker` are cross-platform `net10.0`. `FocusMed.Dashboard`, `FocusMed.Printing`, `FocusMed.Printing.TestConsole`, `FocusMed.PrintCapture` are `net10.0-windows` (System.Printing, WPF, XPS). Build produces 0 warnings, 0 errors.
 
 8. **fo-dicom transfer syntax names are non-standard.** Always pull `DicomTransferSyntax` / `DicomUID` static fields, never hand-type UIDs. The map in `FocusMedScp.cs` uses `JPEGProcess1`, `JPEGProcess2_4`, `JPEGProcess14`, `MPEG4AVCH264HighProfileLevel41` — not the human-friendly aliases.
 
@@ -105,7 +109,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 13. **`Program.cs` re-binds `DicomNetworking` config** (`Program.cs:44-50`) into a fresh `DicomNetworkingOptions` so it can set `DicomServiceOptions.MaxPDULength`, instead of injecting `IOptions<DicomNetworkingOptions>` from DI. Works today; will silently diverge if the options class ever adds validation.
 
-14. **Print execution is decoupled.** N-ACTION marks `PrintJob.Status = Completed` immediately upon receipt. Physical printing is triggered by `PrintExecutionService.ExecutePendingPrintJobAsync(id)` — not wired to any endpoint yet (out of scope). `PrintJob` has optional `PatientId`/`StudyId` nullable FKs — linked in N-SET after `IngestPrintImageAsync` creates the study, NOT in N-CREATE. N-CREATE always creates PrintJob with null FKs.
+14. **Print execution is decoupled.** N-ACTION marks `PrintJob.Status = Completed` immediately upon receipt. Physical printing is triggered by `PrintExecutionService.PrintAsync(...)` from the Dashboard. `PrintJob` has optional `PatientId`/`StudyId` nullable FKs — linked in N-SET after `IngestPrintImageAsync` creates the study, NOT in N-CREATE. N-CREATE always creates PrintJob with null FKs. `PrintExecutionService.ExecutePendingPrintJobAsync(id)` does **not** exist.
 
 15. **`StorageCommitmentJob.Status` is an enum** (`StorageCommitmentStatus`), not a string. Values: `Pending=0`, `Completed=1`, `Failed=2`. Stored as `int` via `HasConversion<int>()`.
 
@@ -125,7 +129,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 23. **N-DELETE eagerly loads the full delete cascade** (`FocusMedScp.cs:922-935`). The query uses `.Include(p => p.Patient).Include(p => p.FilmBoxes).ThenInclude(fb => fb.ImageBoxes).AsSplitQuery()` to load all child entities in separate SQL queries, then calls `RemoveRange` for each level. Do not remove the `Include` calls — doing so would cause N+1 queries or orphaned rows depending on cascade configuration.
 
-24. **`PrintScuService` uses `TryGetSingleValue` for all DICOM tag access** (`PrintScuService.cs:166-178`). Never use `GetSingleValue<T>` on tags that might be absent — use `TryGetSingleValue<T>(tag, out var value)` or `GetSingleValueOrDefault(tag, defaultValue)` instead. Missing tags in source DICOM files are common (e.g., `BitsAllocated`, `PhotometricInterpretation`).
+24. **DICOM print SCU was removed** (`PrintScuService.cs`, `IPrintScuService.cs`). The class was dead code — never injected or called. `FocusMedScp` still handles N-CREATE/N-SET/N-ACTION/N-DELETE for DICOM Print Management on the SCP side. Dashboard printing uses the `FocusMed.Printing` engine (Windows driver / raw TCP).
 
 25. **N-SET's missing-SOP-UID guard returns a manual failure response** (`FocusMedScp.cs:707-719`). Before entering the try/catch, `OnNSetRequestAsync` checks for an empty `sopUid` and returns a `DicomNSetResponse` built from a raw `DicomDataset` with `Status = InvalidArgumentValue`. This is distinct from the catch-block failure path (line 750) which uses `ProcessingFailure`. Do not consolidate these into one path — they communicate different DICOM error codes to the SCU.
 
@@ -151,47 +155,47 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 36. **C-STORE now returns `ProcessingFailure` on DB/save errors.** `StoreFileOnlyAsync` (`DicomUpsertService.cs:164`) re-throws exceptions. `OnCStoreRequestAsync` catches them and returns `DicomStatus.ProcessingFailure`. Previously swallowed exceptions silently succeeded — the sender would never retry. Also cleans up orphaned `.dcm` files on failure.
 
-37. **PrintScuService two-phase send** (`PrintScuService.cs`). Phase 1 sends all N-CREATE requests (FilmSession + ImageBoxes) and calls `SendAsync()` to populate SCP-assigned UIDs via `OnResponseReceived` callbacks. Phase 2 opens a new `DicomClient` and sends N-SET + N-ACTION + N-DELETE with the resolved UIDs. The old single-phase approach read closure variables before `SendAsync` fired callbacks, so all SCP UIDs were lost.
+37. **StorageCommitmentScuService only marks Completed if N-EVENT-REPORT was sent.** `SendNEventReportAsync` returns `bool` (`StorageCommitmentScuService.cs:68`). When no AET mapping exists, the job stays `Pending` and a warning is logged. Previously marked `Completed` even when the send silently returned.
 
-38. **StorageCommitmentScuService only marks Completed if N-EVENT-REPORT was sent.** `SendNEventReportAsync` returns `bool` (`StorageCommitmentScuService.cs:68`). When no AET mapping exists, the job stays `Pending` and a warning is logged. Previously marked `Completed` even when the send silently returned.
+38. **`PrintExecutionService` is registered in DI** (`Printing/DependencyInjection.cs:27`). It is `AddSingleton`. Do not remove this registration — Dashboard + print flow resolve it.
 
-39. **PrintScuService + PrintExecutionService are registered in DI** (`DependencyInjection.cs:19-20`). Both are `AddSingleton`. Any code path resolving `IPrintScuService` or `PrintExecutionService` would crash before this fix.
+39. **PngExtractionService `_studyLocks`/`_studyRefCount` cleanup** (`PngExtractionService.cs:211`). When refcount reaches 0, both the semaphore and refcount entry are removed from their static dictionaries. Previously `_studyLocks.TryRemove` was called immediately after `Release()`, allowing another thread to acquire a semaphore that was about to be deleted. Now removal is conditional on `remaining <= 0`. Refcount is only managed by `GetOrExtractFramesAsync` (increment) and `ReleaseStudyPng` (decrement) — `ExtractForImageAsync` does NOT touch refcount.
 
-40. **PngExtractionService `_studyLocks`/`_studyRefCount` cleanup** (`PngExtractionService.cs:211`). When refcount reaches 0, both the semaphore and refcount entry are removed from their static dictionaries. Previously `_studyLocks.TryRemove` was called immediately after `Release()`, allowing another thread to acquire a semaphore that was about to be deleted. Now removal is conditional on `remaining <= 0`. Refcount is only managed by `GetOrExtractFramesAsync` (increment) and `ReleaseStudyPng` (decrement) — `ExtractForImageAsync` does NOT touch refcount.
+40. **DicomUpsertService `_studyLocks` ref-counted cleanup** (`DicomUpsertService.cs:18-19`). Uses `ConcurrentDictionary<string, int> _studyLockCounts` alongside `_studyLocks`. Each `WaitAsync` increments the count, each `Release` decrements. When count reaches 0, both dictionaries remove the entry. Prevents race condition where `TryRemove` deletes a semaphore another thread is about to acquire.
 
-41. **DicomUpsertService `_studyLocks` ref-counted cleanup** (`DicomUpsertService.cs:18-19`). Uses `ConcurrentDictionary<string, int> _studyLockCounts` alongside `_studyLocks`. Each `WaitAsync` increments the count, each `Release` decrements. When count reaches 0, both dictionaries remove the entry. Prevents race condition where `TryRemove` deletes a semaphore another thread is about to acquire.
+41. **StorageForwardQueue `PendingCount` only increments on successful enqueue** (`StorageForwardQueue.cs:26`). `TryWrite` return value is checked before `Interlocked.Inrement`. Previously inflated the counter even when the channel was completed/full.
 
-42. **StorageForwardQueue `PendingCount` only increments on successful enqueue** (`StorageForwardQueue.cs:26`). `TryWrite` return value is checked before `Interlocked.Inrement`. Previously inflated the counter even when the channel was completed/full.
+42. **Data directory resolution uses `FOCUSMED_DATA` env var directly** (`DicomUpsertService.cs:24`, `PngExtractionService.cs:33`). Both services read `Environment.GetEnvironmentVariable("FOCUSMED_DATA")` with fallback to `%LOCALAPPDATA%\FocusMed`. Previously read a non-existent `DataDirectory` config key. `IConfiguration` parameter removed from `DicomUpsertService` constructor.
 
-43. **Data directory resolution uses `FOCUSMED_DATA` env var directly** (`DicomUpsertService.cs:24`, `PngExtractionService.cs:33`). Both services read `Environment.GetEnvironmentVariable("FOCUSMED_DATA")` with fallback to `%LOCALAPPDATA%\FocusMed`. Previously read a non-existent `DataDirectory` config key. `IConfiguration` parameter removed from `DicomUpsertService` constructor.
+43. **StudyCompletionService re-checks image count before marking Complete** (`StudyCompletionService.cs:60`). After querying ready studies, re-counts images per study. If the count changed (C-STORE arrived during the query), the study's `LastUpdatedAt` is bumped and completion is deferred. Prevents marking a study Complete while images are still arriving.
 
-44. **StudyCompletionService re-checks image count before marking Complete** (`StudyCompletionService.cs:60`). After querying ready studies, re-counts images per study. If the count changed (C-STORE arrived during the query), the study's `LastUpdatedAt` is bumped and completion is deferred. Prevents marking a study Complete while images are still arriving.
+44. **N-DELETE returns `ProcessingFailure` when PrintJob not found** (`FocusMedScp.cs:947`). Previously returned `Success` even when the SOP UID matched no PrintJob, misleading the SCU.
 
-45. **N-DELETE returns `ProcessingFailure` when PrintJob not found** (`FocusMedScp.cs:947`). Previously returned `Success` even when the SOP UID matched no PrintJob, misleading the SCU.
+45. **`DicomHelpers.SanitizeFileName` returns `""` not `"UNKNOWN"`** (`DicomHelpers.cs:5`). Also strips `\` and `/` characters to prevent path traversal. Empty input returns empty string per AGENTS.md #26.
 
-46. **`DicomHelpers.SanitizeFileName` returns `""` not `"UNKNOWN"`** (`DicomHelpers.cs:5`). Also strips `\` and `/` characters to prevent path traversal. Empty input returns empty string per AGENTS.md #26.
+46. **`DicomHelpers.GetDicomDate` trims whitespace and uses `CultureInfo.InvariantCulture`** (`DicomHelpers.cs:26`). Locale-dependent parsing was a latent bug. Returns `null` for empty/whitespace-only input.
 
-47. **`DicomHelpers.GetDicomDate` trims whitespace and uses `CultureInfo.InvariantCulture`** (`DicomHelpers.cs:26`). Locale-dependent parsing was a latent bug. Returns `null` for empty/whitespace-only input.
+47. **Duplicate C-STORE after Complete creates new study with shared UID** (`DicomUpsertService.cs:96-108`). When SOP UID exists in a completed/archived study, a new study UID is generated. `_newStudyAfterCompleteCache` ensures all C-STORE images within 5 min for same patient+date share the same new UID (prevents 1-image-per-study fragmentation).
 
-48. **Duplicate C-STORE after Complete creates new study with shared UID** (`DicomUpsertService.cs:96-108`). When SOP UID exists in a completed/archived study, a new study UID is generated. `_newStudyAfterCompleteCache` ensures all C-STORE images within 5 min for same patient+date share the same new UID (prevents 1-image-per-study fragmentation).
+48. **Reverse merge captures PRINT directory BEFORE moving files** (`DicomUpsertService.cs:671-673`). The PRINT study directory path must be captured before the move loop updates `img.FilePath`. Otherwise the cleanup deletes the C-STORE study directory.
 
-49. **Reverse merge captures PRINT directory BEFORE moving files** (`DicomUpsertService.cs:671-673`). The PRINT study directory path must be captured before the move loop updates `img.FilePath`. Otherwise the cleanup deletes the C-STORE study directory.
+49. **N-DELETE handles concurrent delete from merge** (`FocusMedScp.cs:957-965`). Catches `DbUpdateConcurrencyException` when reverse merge already deleted the PrintJob. Returns Success instead of ProcessingFailure.
 
-50. **N-DELETE handles concurrent delete from merge** (`FocusMedScp.cs:957-965`). Catches `DbUpdateConcurrencyException` when reverse merge already deleted the PrintJob. Returns Success instead of ProcessingFailure.
+50. **`DicomHelpers.FormatPatientName` is the shared helper** (`DicomHelpers.cs:53`). Replaces 4 duplicate private methods across Home/Archives/DeletedStudies/StudyDetails. Returns `"Inconnu"` for null/whitespace; replaces `^` with space.
 
-51. **PdfService resolves PDF cache directory from `FOCUSMED_DATA` env var** (`PdfService.cs:15-17`). Cover page uses MiniPdf to convert `cover.docx` (with `{{PatientName}}`/`{{StudyDate}}` placeholders replaced via ZipArchive) to PDF. Image pages use QuestPDF. Final PDF merged via PdfSharpCore. If `FOCUSMED_DATA` is unset, falls back to `%LOCALAPPDATA%\FocusMed`.
+51. **PdfService cover generation uses Word COM, not MiniPdf** (`PdfService.cs:303-387`). A4 covers: copy `cover.docx` to temp, Word COM `doc.SaveAs2(..., FileFormat: 17)` with `{{PatientName}}`/`{{StudyDate}}` replaced via `Find.Execute(Replace: 2)`. A3 covers always use the QuestPDF fallback (A4 docx would not scale). If `cover.docx` is missing from the data dir, the system silently falls back to QuestPDF. Dashboard startup auto-copies `wwwroot/cover.docx` and `wwwroot/cover-logo.jpg` into the data dir when missing. `MiniPdf` package has been removed from all csproj files.
 
 52. **PngExtractionService refcount is only in `GetOrExtractFramesAsync` and `ReleaseStudyPng`.** `ExtractForImageAsync` (`PngExtractionService.cs:144`) acquires a per-study semaphore for thread safety but does NOT touch `_studyRefCount`. Do NOT add refcount management to `ExtractForImageAsync` — it would cause double-decrement since the caller already manages refcount.
 
-53. **`Archives.razor` and `DeletedStudies.razor` must declare `@implements IDisposable`** (`Archives.razor:3`, `DeletedStudies.razor:3`). Both create `Timer` instances in `OnInitializedAsync`. Without `IDisposable`, the timer leaks on navigation (Blazor disposes the component but the timer's CLR reference keeps firing, causing `ObjectDisposedException`).
+53. **`DeletedStudies.razor` must declare `@implements IDisposable`** (`DeletedStudies.razor:3`). It creates a `Timer` instance in `OnInitializedAsync`. Without `IDisposable`, the timer leaks on navigation (Blazor disposes the component but the timer's CLR reference keeps firing, causing `ObjectDisposedException`). `Archives.razor` does **not** have a Timer and does **not** implement `IDisposable`.
 
 54. **`StudyDetails.razor` has no `@inject NavigationManager`** and no `@using FellowOakDicom`. Both were removed as dead code. The page navigates via `<a href>` links, not `Navigation.NavigateTo()`.
 
 55. **Data layer has 4 enums.** `StorageCommitmentStatus` (Pending/Completed/Failed), `PrintStatus` (Pending/Printing/Completed/Failed), `StudyStatus` (Receiving/Complete/Failed/Archived/Deleted), `AssociationOutcome` (Success/Rejected/Failed/PartiallyAccepted). `PrinterType` (GrayLevel/Multicolor) is in `FocusMed.Dicom.Options`, not the Data layer.
 
-56. **`BackfillMetadataAsync` runs on startup** (`Program.cs:98`). On first boot or after adding the metadata migration, `DicomUpsertService.BackfillMetadataAsync()` iterates all DICOM images in batches of 200 and backfills missing metadata (BirthDate, Sex, Description, AccessionNumber, InstitutionName, Manufacturer, ReferringPhysicianName) from the `.dcm` files into the database. This is a one-time operation per image.
+56. **`BackfillMetadataAsync` runs on startup** (`Worker/Program.cs:98` → `MetadataBackfillService`). On first boot or after adding the metadata migration, `DicomUpsertService.BackfillMetadataAsync()` iterates all DICOM images in batches of 200 and backfills missing metadata (BirthDate, Sex, Description, AccessionNumber, InstitutionName, Manufacturer, ReferringPhysicianName) from the `.dcm` files into the database. This is a one-time operation per image. The hosted service passes its cancellation token and covers all 7 metadata fields in the WHERE filter.
 
-57. **`StudyStabilizationSeconds` config key** (`appsettings.json:34`, default 60). Controls how long since `LastUpdatedAt` before a study is considered stable and marked Complete. `StudyCompletionService` polls every 5 seconds and marks studies as Complete when `LastUpdatedAt <= UtcNow - stabilizationSeconds` and no new images arrive.
+57. **`StudyStabilizationSeconds` config key** (`appsettings.json:34`, default 60). Controls how long since `LastUpdatedAt` before a study is considered stable and marked Complete. `StudyCompletionService` polls every 5 seconds and marks studies as Complete when `LastUpdatedAt <= UtcNow - stabilizationSeconds` and no new images arrive. `OperationCanceledException` is filtered from the error log so shutdown is quiet.
 
 58. **`FocusMedDbContextFactory`** (`FocusMedDbContextFactory.cs`) is the `IDesignTimeDbContextFactory` for EF migrations. Reads `FOCUSMED_DB_CONNECTION` env var with fallback to `Data Source=focusmed.db`. Not registered in DI — only used by `dotnet ef` tooling.
 
@@ -209,9 +213,37 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 64. **Unlink Resume button on StudyDetails** (`StudyDetails.razor:89-102`). A red pill button "Retirer" appears next to the violet `Résumé` badge when `Study.ResumePdfPath != null`. Click opens a `ConfirmModal` asking "Le fichier PDF du resume sera supprime definitivement et ne pourra plus etre reassocie a cette etude. Continuer ?". On confirm, `StudyService.UnlinkResumeAsync(Study.Id)` (`StudyService.cs:116-148`) deletes the PDF from `%LOCALAPPDATA%\FocusMed\{study.ResumePdfPath}` AND clears `Study.ResumePdfPath` (file delete is wrapped in try/catch — DB update always succeeds even if the file is already gone). Uses `ToastNotification` for success/error feedback. After unlink, triggers `RegeneratePdfPreviewAsync()` to refresh the iframe without the resume page.
 
-65. **`Archives.razor` and `DeletedStudies.razor` must declare `@implements IDisposable`** (`Archives.razor:3`, `DeletedStudies.razor:3`). Both create `Timer` instances in `OnInitializedAsync`. Without `IDisposable`, the timer leaks on navigation (Blazor disposes the component but the timer's CLR reference keeps firing, causing `ObjectDisposedException`).
+65. **Toast auto-dismiss uses a sequence guard** (`Home.razor:516`, `Archives.razor:343`, `DeletedStudies.razor:307`, `StudyDetails.razor:627`). Every page's `ShowToast` increments `_toastSeq`, waits 3s, and only clears the message if the seq still matches. This prevents a fast second toast from being erased by a delayed first toast's timer.
 
-66. **`StudyDetails.razor` has no `@inject NavigationManager`** and no `@using FellowOakDicom`. Both were removed as dead code. The page navigates via `<a href>` links, not `Navigation.NavigateTo()`.
+66. **Booklet print pipeline** (`PrintExecutionService.cs`, `BookletImpositionService.cs`). The Dashboard generates an A4 PDF (cover + optional resume + 1 image/page), pads it to a multiple of 4 pages, then `PrintExecutionService` runs our own `BookletImpositionService` A4→A3 landscape 2-up. The imposed A3 landscape PDF is sent to the Windows driver with `PageMediaSize=ISOA3`, `Stapling=SaddleStitch`, duplex short-edge, and Konica-specific XML injection setting `CStapleFold=On` and `Folding=On`. We never set `Booklet=On` — that confused the Konica driver on size mismatch.
+
+67. **Home.razor toast has a sequence guard** (`Home.razor:516`). It was the only page missing `_toastSeq`; now matches Archives/DeletedStudies/StudyDetails.
+
+68. **StudyDetails preview page size matches the selected print mode** (`StudyDetails.razor:521-522`). FlatA3 regenerates the preview at A3; Booklet/FlatA4 use A4. The actual A3 booklet imposition only happens at print time.
+
+69. **MergePdfs padding is opt-in** (`PdfService.cs:499`). `padToMultipleOf4` is only true for booklet generation. Preview and flat-A3/A4 prints no longer pad with blank pages.
+
+70. **PrintCapture cleans up the monitor temp PDF** (`ResumePickerWindow.xaml.cs`). The monitor copies `incoming.pdf` → `resumes/{timestamp}_{guid}.pdf`. The picker copies that temp → `resumes/resume_{id}_{guid}.pdf`. The picker now deletes the monitor temp on window close (success, cancel, or user clicking X). Previously every print left an orphan.
+
+71. **PrintJobMonitorService validates PDF completeness** (`PrintJobMonitorService.cs:213`). Checks `%PDF` header **and** `%%EOF` trailer before copying. Prevents truncated PDFs from spooler bursts.
+
+72. **A3 auto-detect uses exact millimeter match** (`PrintExecutionService.cs:126-130`). Compares against A3 (297×420 / 420×297) with 2mm tolerance. Letter/Legal no longer misclassify as A3.
+
+73. **StorageForwardService opens the .dcm per-target** (`StorageForwardService.cs:75-98`). `DicomFile.OpenAsync` happens inside each target's try/catch, so a concurrently-deleted file cannot fault the whole host. The shutdown log honestly states queued forwards are not re-sent.
+
+74. **MetadataBackfillService passes cancellation + covers all 7 metadata fields** (`MetadataBackfillService.cs:23`, `DicomUpsertService.cs:256-339`). WHERE filter includes BirthDate, Sex, Description, AccessionNumber, InstitutionName, Manufacturer, ReferringPhysicianName. Shutdown is prompt.
+
+75. **StudyCompletionService does not log normal shutdown** (`StudyCompletionService.cs:26`). `OperationCanceledException` is filtered from the `catch` so `StopAsync` noise is gone.
+
+76. **`DicomHelpers` is public** (`DicomHelpers.cs:1`). `SanitizeFileName`, `GetFnv1aHash`, `GetDicomDate`, `FormatPatientName` are shared across projects.
+
+77. **Settings page default printer/profile/copies are saved but not consumed by StudyDetails** (`Settings.razor:521-525`, `StudyDetails.razor:637-643`). StudyDetails hardcodes Konica presets and `Copies=1`. Wire defaults in a future pass or remove the dead settings.
+
+78. **`MiniPdf` package removed** from `FocusMed.Dashboard.csproj` and `FocusMed.Printing.TestConsole.csproj`. Cover generation uses Word COM (A4) or QuestPDF fallback (A3).
+
+79. **`PrintScuService` and `IPrintScuService` removed** (`FocusMed.Dicom`). Dead code — never injected or called. Dashboard printing uses `FocusMed.Printing` engine exclusively.
+
+80. **`FocusMed.Printing` project location** (`src/FocusMed.Printing/`). `PrintExecutionService` lives here, **not** in `FocusMed.Dicom`. AGENTS.md previously listed it under Dicom — that was wrong.
 
 ## Quick File Index
 
@@ -225,34 +257,34 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 - `src/FocusMed.Dicom/Options/PngExtractionOptions.cs` — Enabled flag only.
 - `src/FocusMed.Dicom/StudyCompletionService.cs` — 5s polling loop.
 - `src/FocusMed.Dicom/StorageCommitmentScuService.cs` — 10s polling loop, N-EVENT-REPORT with DB-backed SOP Class lookup.
-- `src/FocusMed.Dicom/PrintScuService.cs` — DICOM Print SCU (N-CREATE/SET/ACTION/DELETE).
-- `src/FocusMed.Dicom/IPrintScuService.cs` — Interface for PrintScuService.
-- `src/FocusMed.Dicom/PrintExecutionService.cs` — decoupled print execution (pending→printing→completed/failed).
+- `src/FocusMed.Dicom/StorageForwardService.cs` — hosted C-STORE SCU, per-target file open, no restart recovery.
 - `src/FocusMed.Dicom/StorageForwardQueue.cs` — `Channel<T>`-based forward queue with `Complete()`/`PendingCount` for graceful shutdown.
-- `src/FocusMed.Dicom/StorageForwardService.cs` — hosted C-STORE SCU, drains queue on `StopAsync`.
-- `src/FocusMed.Dicom/Options/DicomNetworkingOptions.cs` — `DicomNetworking` section binding + `FilmPrinters`, `StorageForwardTargets`.
-- `src/FocusMed.Dicom/DicomHelpers.cs` — Static helpers: SanitizeFileName, GetFnv1aHash, GetDicomDate.
+- `src/FocusMed.Dicom/Options/DicomNetworkingOptions.cs` — `DicomNetworking` section binding + `StorageForwardTargets`.
+- `src/FocusMed.Dicom/DicomHelpers.cs` — Static helpers: SanitizeFileName, GetFnv1aHash, GetDicomDate, FormatPatientName.
 - `src/FocusMed.Data/FocusMedDbContext.cs` — 11 DbSets, fluent FK config, enum conversion, 20 indexes.
 - `src/FocusMed.Data/FocusMedDbContextFactory.cs` — `IDesignTimeDbContextFactory` for EF migrations.
-- `src/FocusMed.Data/DependencyInjection.cs` — `AddFocusMedData` extension method, registers `FocusMedDbContext` with Sqlite.
+- `src/FocusMed.Data/DependencyInjection.cs` — `AddFocusMedData` extension method, registers `FocusMedDbContext` with Sqlite + `SqlitePragmaInterceptor` (WAL + busy_timeout + synchronous=NORMAL).
 - `src/FocusMed.Data/Entities/StorageCommitmentStatus.cs` — `Pending=0`, `Completed=1`, `Failed=2`.
 - `src/FocusMed.Data/Migrations/` — 1 EF migration (latest: `InitialSqlite`).
-- `src/FocusMed.Dashboard/Program.cs` — Blazor Server entry, registers `PngExtractionService`, serves `/images` from data dir.
-- `src/FocusMed.Dashboard/Components/Pages/Home.razor` — studies list, search, date filter, pagination, delete modal.
-- `src/FocusMed.Dashboard/Components/Pages/StudyDetails.razor` — patient info, study metadata, PNG image grid viewer.
+- `src/FocusMed.Printing/Jobs/PrintExecutionService.cs` — print execution (Windows driver XPS path + raw TCP fallback), booklet imposition, Konica finishing injection, streaming paginator, A3 exact-detect.
+- `src/FocusMed.Printing/Imposition/BookletImpositionService.cs` — A4→A3 landscape 2-up imposition (4-slot signature math).
+- `src/FocusMed.Printing/Options/RawPrinterConfig.cs` — `RawPrinters` section, presets (Name/Ip/Port/PaperSize/WindowsPrinterName/Copies).
+- `src/FocusMed.Dashboard/Program.cs` — Blazor Server entry, registers services, serves `/images` and `/pdf-cache` from data dir, auto-provisions cover assets from wwwroot, migration.
+- `src/FocusMed.Dashboard/Components/Pages/Home.razor` — studies list, search, date filter, pagination, delete modal, sortable columns.
+- `src/FocusMed.Dashboard/Components/Pages/StudyDetails.razor` — patient info, study metadata, PNG image grid viewer, print dropdown (BookletA3/FlatA3/FlatA4), lightbox.
 - `src/FocusMed.Dashboard/Components/Pages/Archives.razor` — `/archives` route, archived studies with search/filters/pagination.
-- `src/FocusMed.Dashboard/Components/Pages/DeletedStudies.razor` — `/deleted` route, deleted studies with restore/permanent delete.
-- `src/FocusMed.Dashboard/Components/Layout/MainLayout.razor` — nav bar (Études, Archives, Supprimées), server status badge.
-- `src/FocusMed.Dashboard/Components/Shared/ToastNotification.razor` — toast notification component.
-- `src/FocusMed.Dashboard/Components/Shared/ConfirmModal.razor` — confirmation modal with French defaults.
-- `src/FocusMed.Dashboard/Services/PdfService.cs` — PDF **preview** generation (MiniPdf: cover from `wwwroot/cover.docx` template with placeholder replacement + optional resume PDF + QuestPDF portrait one image per page + PdfSharpCore PDF merge). Page size configurable via `pageSize` parameter (default A4, supports A3/Letter/Legal). Only used by the iframe on `StudyDetails.razor`. Registered as Scoped. **Dashboard does NOT print PDFs to physical printers.**
+- `src/FocusMed.Dashboard/Components/Pages/DeletedStudies.razor` — `/deleted` route, deleted studies with restore/permanent delete, 10s auto-refresh timer.
+- `src/FocusMed.Dashboard/Components/Layout/MainLayout.razor` — nav bar (Études, Archives, Supprimées, Paramètres), server status badge (TCP liveness probe).
+- `src/FocusMed.Dashboard/Components/Shared/ToastNotification.razor` — toast notification component (role=alert, aria-live).
+- `src/FocusMed.Dashboard/Components/Shared/ConfirmModal.razor` — confirmation modal with French defaults, focus trap, Escape key, double-click guard.
+- `src/FocusMed.Dashboard/Services/PdfService.cs` — PDF generation: cover (Word COM A4 / QuestPDF A3 fallback), images (QuestPDF), merge (PdfSharpCore), cache (MD5 hash + 60min TTL), cover cache (SHA256 + 24h TTL). `padToMultipleOf4` only for booklet.
 - `src/FocusMed.Dashboard/Services/StudyService.cs` — shared delete/soft-delete/restore/archive/unlink-resume logic. Registered as Scoped.
 - `src/FocusMed.Dashboard/Services/DeletedCleanupService.cs` — BackgroundService, auto-deletes Deleted studies after 30 days.
 - `src/FocusMed.PrintCapture/FocusMed.PrintCapture.csproj` — WPF app (.NET 10-windows), references FocusMed.Data, `UseWindowsForms=true` for tray icon.
 - `src/FocusMed.PrintCapture/icon.ico` — Embedded resource, 16x16 blue "F" tray icon.
 - `src/FocusMed.PrintCapture/App.xaml.cs` — WPF entry point, DI setup, printer creation, file monitoring. **System tray icon** (NotifyIcon): right-click menu (Ouvrir le Dashboard / Quitter), double-click opens `http://localhost:5000`, balloon notifications on startup and print capture. Starts hidden, window appears on print only.
 - `src/FocusMed.PrintCapture/Services/PrinterSetupService.cs` — creates "FocusMed" virtual printer on Windows using Local Port `C:\FocusMed_Prints\incoming.pdf` (no dialog — PDF auto-saved).
-- `src/FocusMed.PrintCapture/Services/PrintJobMonitorService.cs` — Timer poller on `incoming.pdf` (every 500ms), waits 500ms for size stabilization, copies to `resumes/` folder, fires popup. Total detection ~1 second.
-- `src/FocusMed.PrintCapture/Services/DatabaseService.cs` — EF Core queries for unassigned studies + resume assignment.
+- `src/FocusMed.PrintCapture/Services/PrintJobMonitorService.cs` — Timer poller on `incoming.pdf` (every 200ms), waits 300ms for size stabilization, validates `%PDF` + `%%EOF`, copies to `resumes/` folder, fires popup. Total detection: ~500ms.
+- `src/FocusMed.PrintCapture/Services/DatabaseService.cs` — EF Core queries for selectable studies + resume assignment.
 - `src/FocusMed.PrintCapture/Windows/ResumePickerWindow.xaml` — WPF popup for study selection.
-- `src/FocusMed.PrintCapture/Windows/ResumePickerWindow.xaml.cs` — code-behind for picker window.
+- `src/FocusMed.PrintCapture/Windows/ResumePickerWindow.xaml.cs` — code-behind for picker window, deletes monitor temp PDF on close, uses configured `ResumesFolder`.

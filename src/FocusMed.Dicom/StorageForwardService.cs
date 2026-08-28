@@ -45,7 +45,7 @@ public sealed class StorageForwardService : BackgroundService
         if (pending > 0)
         {
             _logger.LogWarning(
-                "StorageForwardService stopping with {PendingCount} items still in queue. Draining...",
+                "StorageForwardService stopping with {PendingCount} item(s) still queued. There is no restart recovery — queued forwards will not be re-sent after shutdown.",
                 pending);
         }
 
@@ -72,15 +72,15 @@ public sealed class StorageForwardService : BackgroundService
             return;
         }
 
-        var file = await DicomFile.OpenAsync(request.FilePath);
-        var tasks = targets.Select(target => ForwardToTargetAsync(file, target, ct));
+        var tasks = targets.Select(target => ForwardToTargetAsync(request.FilePath, target, ct));
         await Task.WhenAll(tasks);
     }
 
-    private async Task ForwardToTargetAsync(DicomFile file, StorageForwardTarget target, CancellationToken ct)
+    private async Task ForwardToTargetAsync(string filePath, StorageForwardTarget target, CancellationToken ct)
     {
         try
         {
+            var file = await DicomFile.OpenAsync(filePath);
             var callingAe = string.IsNullOrWhiteSpace(target.ScuAe) ? _networkingOptions.Value.AETitle : target.ScuAe;
             var client = DicomClientFactory.Create(target.Ip, target.Port, false, callingAe, target.AeTitle);
 

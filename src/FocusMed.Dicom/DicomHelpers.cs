@@ -1,6 +1,6 @@
 namespace FocusMed.Dicom;
 
-internal static class DicomHelpers
+public static class DicomHelpers
 {
     private static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
 
@@ -49,5 +49,11 @@ internal static class DicomHelpers
         if (DateTime.TryParseExact(dateString, "yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date))
             return DateTime.SpecifyKind(date.Date, DateTimeKind.Utc);
         return null;
+    }
+
+    public static string FormatPatientName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "Inconnu";
+        return name.Replace("^", " ");
     }
 }

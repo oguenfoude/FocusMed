@@ -45,7 +45,14 @@ public class PrinterSetupService
         {
             _logger.LogInformation("Installing printer '{PrinterName}' with driver '{DriverName}' on Local Port...", _printerName, _driverName);
             await InstallPrinterAsync(portName);
-            _logger.LogInformation("Printer '{PrinterName}' installed successfully", _printerName);
+            if (!IsPrinterInstalled())
+            {
+                _logger.LogWarning("Printer '{PrinterName}' reported install success but is not present (needs Admin / check event log). Capture will not work until installed.", _printerName);
+            }
+            else
+            {
+                _logger.LogInformation("Printer '{PrinterName}' installed successfully", _printerName);
+            }
         }
         catch (Exception ex)
         {

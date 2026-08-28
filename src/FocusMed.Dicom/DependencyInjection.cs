@@ -17,7 +17,6 @@ public static class DependencyInjection
         services.AddSingleton<IStudyNotificationService, StudyNotificationService>();
         services.AddSingleton<DicomUpsertService>();
         services.AddSingleton<PngExtractionService>();
-        services.AddSingleton<IPrintScuService, PrintScuService>();
         services.AddHostedService<StudyCompletionService>();
         services.AddHostedService<StorageCommitmentScuService>();
         services.AddSingleton<IStorageForwardQueue, StorageForwardQueue>();

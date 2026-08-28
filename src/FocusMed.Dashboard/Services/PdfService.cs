@@ -193,7 +193,7 @@ public class PdfService
 
             var tempMerged = Path.Combine(Path.GetTempPath(), $"bmerged_{Guid.NewGuid():N}.pdf");
             tempFiles.Add(tempMerged);
-            MergePdfs(tempMerged, coverPdfPath, resumeFullPath, imagesPdfPath, "A4");
+            MergePdfs(tempMerged, coverPdfPath, resumeFullPath, imagesPdfPath, "A4", padToMultipleOf4: true);
 
             var dataDirOut = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
@@ -496,7 +496,7 @@ public class PdfService
         document.GeneratePdf(fs);
     }
 
-    private void MergePdfs(string outputPath, string coverPdfPath, string? resumePdfPath, string? imagesPdfPath, string pageSize = "A4")
+    private void MergePdfs(string outputPath, string coverPdfPath, string? resumePdfPath, string? imagesPdfPath, string pageSize = "A4", bool padToMultipleOf4 = false)
     {
         using var outputDocument = new PdfDocument();
 
@@ -529,18 +529,21 @@ public class PdfService
             }
         }
 
-        int currentPages = outputDocument.Pages.Count;
-        int remainder = currentPages % 4;
-        if (remainder != 0)
+        if (padToMultipleOf4)
         {
-            int needed = 4 - remainder;
-            double padW = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 297 : 210;
-            double padH = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 420 : 297;
-            for (int i = 0; i < needed; i++)
+            int currentPages = outputDocument.Pages.Count;
+            int remainder = currentPages % 4;
+            if (remainder != 0)
             {
-                var blankPage = outputDocument.AddPage();
-                blankPage.Width = PdfSharpCore.Drawing.XUnit.FromMillimeter(padW);
-                blankPage.Height = PdfSharpCore.Drawing.XUnit.FromMillimeter(padH);
+                int needed = 4 - remainder;
+                double padW = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 297 : 210;
+                double padH = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 420 : 297;
+                for (int i = 0; i < needed; i++)
+                {
+                    var blankPage = outputDocument.AddPage();
+                    blankPage.Width = PdfSharpCore.Drawing.XUnit.FromMillimeter(padW);
+                    blankPage.Height = PdfSharpCore.Drawing.XUnit.FromMillimeter(padH);
+                }
             }
         }
 

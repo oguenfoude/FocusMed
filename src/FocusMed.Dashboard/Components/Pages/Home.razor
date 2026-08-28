@@ -249,7 +249,7 @@ else
 <!-- Delete Confirmation Modal -->
 <ConfirmModal IsVisible="StudyToDelete != null"
               Title="Supprimer cette étude ?"
-              Message="@($"L'étude de {FormatPatientName(StudyToDelete?.Patient?.PatientName)} sera supprimée définitivement. Cette action est irréversible.")"
+              Message="@($"L'étude de {DicomHelpers.FormatPatientName(StudyToDelete?.Patient?.PatientName)} sera supprimée définitivement. Cette action est irréversible.")"
               ConfirmText="Supprimer"
               OnConfirm="ExecuteSoftDelete"
               OnCancel="CancelDelete" />
@@ -510,21 +510,21 @@ else
         finally { IsProcessing = false; }
     }
 
-    private string FormatPatientName(string? name) =>
-        string.IsNullOrWhiteSpace(name) ? "Inconnu" : name.Replace("^", " ");
+
+
+    private int _toastSeq;
 
     private async Task ShowToast(string message, bool isError = false)
     {
+        var seq = ++_toastSeq;
         StatusMessage = message;
         IsError = isError;
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
         await Task.Delay(3000);
-        try
-        {
-            StatusMessage = "";
-            await InvokeAsync(StateHasChanged);
-        }
-        catch { }
+        if (seq != _toastSeq) return;
+        StatusMessage = "";
+        IsError = false;
+        await InvokeAsync(StateHasChanged);
     }
 
     private void ClearToast()
