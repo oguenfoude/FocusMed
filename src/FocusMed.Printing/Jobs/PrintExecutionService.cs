@@ -49,7 +49,7 @@ internal sealed class PrintExecutionService(
 
         if (useWindowsDriver)
         {
-            string resolvedPrinterName = rawPreset.WindowsPrinterName;
+            string resolvedPrinterName = rawPreset!.WindowsPrinterName!;
             logger.LogInformation("Printing via Windows queue '{Printer}' (preset: {Preset}, booklet: {Booklet})",
                 resolvedPrinterName, rawPreset.Name, request.Profile.IsBooklet);
             try
