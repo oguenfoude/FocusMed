@@ -1,7 +1,5 @@
 using FocusMed.Printing;
 using FocusMed.Printing.Discovery;
-using FocusMed.Printing.Imposition;
-using FocusMed.Printing.Jobs;
 using FocusMed.Printing.Profiles;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,9 +19,6 @@ var provider = services.BuildServiceProvider();
 var discoveryService = provider.GetRequiredService<IPrinterDiscoveryService>();
 var capabilityService = provider.GetRequiredService<IPrinterCapabilityService>();
 var profileBuilder = provider.GetRequiredService<IPrintProfileBuilder>();
-var validator = provider.GetRequiredService<IPrintJobValidator>();
-var bookletService = provider.GetRequiredService<IBookletImpositionService>();
-var executionService = provider.GetRequiredService<IPrintExecutionService>();
 
 Console.WriteLine("================================================================================");
 Console.WriteLine("          FOCUSMED PRINTING SYSTEM DIAGNOSTIC & VERIFICATION UTILITY            ");
@@ -161,19 +156,17 @@ foreach (var printer in installedPrinters.Where(p => p.Name.Contains("KONICA", S
     }
 }
 
-// 4. Imposition & Pipeline Health Check
+// 4. Pipeline Health Check
 Console.WriteLine("\n================================================================================");
 Console.WriteLine("[4/4] PRINTING PIPELINE HEALTH CHECK:");
 Console.WriteLine("================================================================================");
 
-Console.WriteLine("  • Discovery Service      : OPERATIONAL");
-Console.WriteLine("  • Capability Engine      : OPERATIONAL (Modern XPS -> Legacy GDI+ -> Win32 P/Invoke)");
-Console.WriteLine("  • Profile Builder        : OPERATIONAL (A4 Duplex, A4 Booklet, A3 Booklet)");
-Console.WriteLine("  • Booklet Imposition     : OPERATIONAL (PdfSharpCore 2-Up Signature Engine)");
-Console.WriteLine("  • Print Execution Engine : OPERATIONAL (300 DPI SkiaSharp Rasterization -> WPF XPS Spooler)");
+Console.WriteLine("  • Discovery Service : OPERATIONAL");
+Console.WriteLine("  • Capability Engine : OPERATIONAL (Modern XPS -> Legacy GDI+ -> Win32 P/Invoke)");
+Console.WriteLine("  • Profile Builder   : OPERATIONAL (A4 Duplex, A4 Booklet, A3 Booklet)");
 
 Console.WriteLine("\n================================================================================");
-Console.WriteLine("           FOCUSMED PRINTING SYSTEM STATUS: ALL SYSTEMS OPERATIONAL             ");
+Console.WriteLine("       FOCUSMED PRINTING SYSTEM STATUS: DISCOVERY & DIAGNOSTICS OPERATIONAL     ");
 Console.WriteLine("================================================================================");
 
 

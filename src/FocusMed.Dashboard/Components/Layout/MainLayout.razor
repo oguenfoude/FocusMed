@@ -86,7 +86,7 @@
 
     protected override void OnInitialized()
     {
-        var port = Config.GetValue<int?>("DicomHealth:Port");
+        var port = Config.GetValue<int?>("DicomNetworking:DicomPort");
         if (port is > 0 and <= 65535) _dicomPort = port.Value;
 
         ServerOnline = CheckServer();

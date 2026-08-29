@@ -20,7 +20,6 @@ public class FocusMedDbContext : DbContext
     public DbSet<WorklistEntry> WorklistEntries { get; set; } = null!;
     public DbSet<StorageCommitmentJob> StorageCommitmentJobs { get; set; } = null!;
     public DbSet<AssociationAuditEntry> AssociationAuditEntries { get; set; } = null!;
-    public DbSet<PrintAuditEntry> PrintAuditEntries { get; set; } = null!;
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -127,8 +126,5 @@ public class FocusMedDbContext : DbContext
 
         modelBuilder.Entity<DicomImage>()
             .HasIndex(i => i.SeriesId);
-
-        modelBuilder.Entity<PrintAuditEntry>()
-            .HasIndex(e => e.PrintedAt);
     }
 }

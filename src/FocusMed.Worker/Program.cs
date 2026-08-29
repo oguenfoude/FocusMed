@@ -72,18 +72,10 @@ try
     Log.Information("Max PDU: {MaxPdu}", dicomOpts.MaxPduSize);
     Log.Information("AE Whitelist: {Enabled}", dicomOpts.EnforceAeWhitelist ? "Enabled" : "Disabled");
 
-    var enabledPrinters = dicomOpts.FilmPrinters.Where(p => p.Enabled).ToList();
-    Log.Information("Film Printers configured: {Count}", enabledPrinters.Count);
-    foreach (var p in enabledPrinters)
-        Log.Information("  Printer: {Name} ({Type}) -> {Ae} @ {Ip}:{Port}", p.Name, p.PrinterType, p.PrinterAe, p.PrinterIp, p.PrinterPort);
-
     var enabledTargets = dicomOpts.StorageForwardTargets.Where(t => t.Enabled).ToList();
     Log.Information("Storage Forward Targets configured: {Count}", enabledTargets.Count);
     foreach (var t in enabledTargets)
         Log.Information("  Forward Target: {Name} -> {Ae} @ {Ip}:{Port}", t.Name, t.AeTitle, t.Ip, t.Port);
-
-    if (enabledPrinters.Count == 0)
-        Log.Information("No Film Printers configured. Print jobs will be received and stored only (no forwarding to physical printers).");
 
     if (enabledTargets.Count == 0)
         Log.Information("No Storage Forward Targets. Images will be stored locally only.");

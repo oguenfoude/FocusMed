@@ -18,10 +18,8 @@ public static class DependencyInjection
         services.AddSingleton<ICapabilityConfirmationStore, CapabilityConfirmationStore>();
         services.AddSingleton<IPrinterCapabilityService, PrinterCapabilityService>();
         services.AddSingleton<IPrinterDiscoveryService, PrinterDiscoveryService>();
-        services.AddSingleton<ITestPageService, TestPageService>();
 
         services.AddSingleton<IPrintProfileBuilder, PrintProfileBuilder>();
-        services.AddSingleton<IPrinterSettingsStore, PrinterSettingsStore>();
         services.AddSingleton<IBookletImpositionService, BookletImpositionService>();
 
         services.AddSingleton<IPrintJobValidator, PrintJobValidator>();

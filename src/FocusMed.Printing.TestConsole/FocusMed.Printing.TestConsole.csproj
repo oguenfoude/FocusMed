@@ -10,11 +10,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FocusMed.Printing\FocusMed.Printing.csproj" />
-    <ProjectReference Include="..\FocusMed.Dashboard\FocusMed.Dashboard.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>

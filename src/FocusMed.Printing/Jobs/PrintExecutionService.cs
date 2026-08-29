@@ -1,13 +1,9 @@
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Printing;
 using System.Text.Json;
-using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media.Imaging;
 using System.Xml.Linq;
 using FocusMed.Printing.Imposition;
-using FocusMed.Printing.Profiles;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PDFtoImage;

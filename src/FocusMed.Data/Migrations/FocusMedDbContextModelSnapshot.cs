@@ -181,52 +181,6 @@ namespace FocusMed.Data.Migrations
                     b.ToTable("Patients");
                 });
 
-            modelBuilder.Entity("FocusMed.Data.Entities.PrintAuditEntry", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("Copies")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("ErrorMessage")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("PagesPrinted")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("PaperSize")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PatientName")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PrintMode")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("PrintedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PrinterName")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ProfileName")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int?>("StudyId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<bool>("Success")
-                        .HasColumnType("INTEGER");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PrintedAt");
-
-                    b.ToTable("PrintAuditEntries");
-                });
-
             modelBuilder.Entity("FocusMed.Data.Entities.PrintImageBox", b =>
                 {
                     b.Property<int>("Id")

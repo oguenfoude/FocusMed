@@ -150,7 +150,6 @@ All non-default config goes in `src/FocusMed.Worker/appsettings.json`.
 | `SupportedTransferSyntaxes` | 10 entries | `ImplicitVRLittleEndian`, `ExplicitVRLittleEndian`, `JPEGLSLossless`, `JPEG2000Lossless`, `RLELossless`, `JPEGProcess1`, `JPEGProcess2_4`, `JPEGProcess14`, `MPEG2`, `MPEG4AVCH264HighProfileLevel41` |
 | `AllowedCallingAETitles` | `[]` | `{AETitle, IPAddress}` allowlist |
 | `StorageCommitmentScuMapping` | `{}` | Calling AE → `{Ip, Port}` for N-EVENT-REPORT callbacks |
-| `FilmPrinters` | `[]` | DICOM Print SCU targets (see below) |
 | `StorageForwardTargets` | `[]` | C-STORE SCU forward targets (see below) |
 
 ### Other top-level keys
@@ -159,24 +158,6 @@ All non-default config goes in `src/FocusMed.Worker/appsettings.json`.
 |-----|---------|---------|
 | `ConnectionString` | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin` | PostgreSQL |
 | `StudyStabilizationSeconds` | `60` | Inactivity before study → Complete |
-
-### `FilmPrinters[]` (DICOM Print SCU)
-
-Each entry represents a DICOM Printer SCP that can receive print jobs via the Print Management protocol.
-
-| Property | Default | Purpose |
-|----------|---------|---------|
-| `Name` | `""` | Human-readable name (e.g. `"AlprintA3"`) |
-| `ScuAe` | `""` | Our AE title when connecting to this printer |
-| `PrinterIp` | `""` | Printer's IP address |
-| `PrinterPort` | `0` | Printer's DICOM port |
-| `PrinterAe` | `""` | Printer's AE title |
-| `FilmTarget` | `"PROCESSOR"` | `FilmDestination` attribute |
-| `FilmType` | `"PAPER"` | `MediumType` attribute |
-| `PrinterType` | `"GrayLevel"` | `"GrayLevel"` or `"Multicolor"` — selects SOP Class for Image Box |
-| `Enabled` | `true` | Whether this printer is active |
-
-If no `FilmPrinters` entry matches (or all are disabled), the print job is rejected with `ProcessingFailure` and logged as an error.
 
 ### `StorageForwardTargets[]` (C-STORE SCU Auto-Forward)
 

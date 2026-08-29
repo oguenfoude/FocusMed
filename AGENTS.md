@@ -237,13 +237,15 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 76. **`DicomHelpers` is public** (`DicomHelpers.cs:1`). `SanitizeFileName`, `GetFnv1aHash`, `GetDicomDate`, `FormatPatientName` are shared across projects.
 
-77. **Settings page default printer/profile/copies are saved but not consumed by StudyDetails** (`Settings.razor:521-525`, `StudyDetails.razor:637-643`). StudyDetails hardcodes Konica presets and `Copies=1`. Wire defaults in a future pass or remove the dead settings.
+77. **Settings page removed.** `Settings.razor` was deleted (2026-08-29). The `IPrinterSettingsStore`/`PrinterSettingsStore`/`PrintSettings` and its `LoadAsync` wiring in StudyDetails were removed with it — StudyDetails hardcodes Konica presets and `Copies=1`. `printer-settings.json` is no longer written or read. Do not resurrect the settings store.
 
 78. **`MiniPdf` package removed** from `FocusMed.Dashboard.csproj` and `FocusMed.Printing.TestConsole.csproj`. Cover generation uses Word COM (A4) or QuestPDF fallback (A3).
 
 79. **`PrintScuService` and `IPrintScuService` removed** (`FocusMed.Dicom`). Dead code — never injected or called. Dashboard printing uses `FocusMed.Printing` engine exclusively.
 
 80. **`FocusMed.Printing` project location** (`src/FocusMed.Printing/`). `PrintExecutionService` lives here, **not** in `FocusMed.Dicom`. AGENTS.md previously listed it under Dicom — that was wrong.
+
+81. **Post-Settings dead-code sweep** (2026-08-29). Removed with `Settings.razor`/`Prints.razor`: `PrintAuditEntry` entity + DbSet + migration (table dropped from DB + history row deleted), `FilmPrinterConfig`/`PrinterType`/`DicomNetworkingOptions.FilmPrinters` + Worker startup logging + `"FilmPrinters"` config key (DICOM Print SCU was already dead), `ITestPageService`/`TestPageService`, `IPrinterSettingsStore`/`PrinterSettingsStore`/`PrintSettings`, dead `RawPrinterPreset` fields (`IsBooklet`/`ForceGrayscale`/`Copies`). Nav bar now has exactly **3** links: Études / Archives / Supprimées. `Prints.razor`/`Settings.razor` do not exist — do not reference `/prints` or `/settings`.
 
 ## Quick File Index
 
@@ -274,7 +276,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 - `src/FocusMed.Dashboard/Components/Pages/StudyDetails.razor` — patient info, study metadata, PNG image grid viewer, print dropdown (BookletA3/FlatA3/FlatA4), lightbox.
 - `src/FocusMed.Dashboard/Components/Pages/Archives.razor` — `/archives` route, archived studies with search/filters/pagination.
 - `src/FocusMed.Dashboard/Components/Pages/DeletedStudies.razor` — `/deleted` route, deleted studies with restore/permanent delete, 10s auto-refresh timer.
-- `src/FocusMed.Dashboard/Components/Layout/MainLayout.razor` — nav bar (Études, Archives, Supprimées, Paramètres), server status badge (TCP liveness probe).
+- `src/FocusMed.Dashboard/Components/Layout/MainLayout.razor` — nav bar (Études, Archives, Supprimées), server status badge (TCP liveness probe).
 - `src/FocusMed.Dashboard/Components/Shared/ToastNotification.razor` — toast notification component (role=alert, aria-live).
 - `src/FocusMed.Dashboard/Components/Shared/ConfirmModal.razor` — confirmation modal with French defaults, focus trap, Escape key, double-click guard.
 - `src/FocusMed.Dashboard/Services/PdfService.cs` — PDF generation: cover (Word COM A4 / QuestPDF A3 fallback), images (QuestPDF), merge (PdfSharpCore), cache (MD5 hash + 60min TTL), cover cache (SHA256 + 24h TTL). `padToMultipleOf4` only for booklet.

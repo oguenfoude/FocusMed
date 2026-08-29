@@ -1,14 +1,12 @@
 @page "/study/{Id:int}"
 @rendermode InteractiveServer
 @implements IDisposable
-@using FocusMed.Dicom
 @using FocusMed.Dashboard.Services
 @inject IDbContextFactory<FocusMedDbContext> DbFactory
 @inject PngExtractionService PngExtractionService
 @inject StudyService StudyService
 @inject PdfService PdfService
 @inject FocusMed.Printing.Jobs.IPrintExecutionService ExecutionService
-@inject FocusMed.Printing.Profiles.IPrinterSettingsStore PrinterSettingsStore
 @inject ILogger<StudyDetails> Logger
 
 <PageTitle>Détails de l'étude — FocusMed</PageTitle>
@@ -424,23 +422,6 @@ else
         {
             IsExtracting = false;
         }
-
-        try
-        {
-            var settings = await PrinterSettingsStore.LoadAsync();
-            if (!string.IsNullOrEmpty(settings.DefaultPrinterName))
-            {
-                SelectedPrintMode = settings.DefaultPrinterName switch
-                {
-                    "KONICA BOOK" => "BookletA3",
-                    "KONICA A3" => "FlatA3",
-                    "KONICA A4" => "FlatA4",
-                    _ => SelectedPrintMode
-                };
-            }
-            Copies = settings.DefaultCopies > 0 ? settings.DefaultCopies : 1;
-        }
-        catch { }
     }
 
     private async Task LoadStudyAsync()
@@ -743,8 +724,6 @@ else
             {
                 await ShowToast($"Échec de l'impression: {result.ErrorMessage ?? "Erreur inconnue"}", true);
             }
-
-            await RecordPrintAuditAsync(result, presetName, profile);
         }
         catch (Exception ex)
         {
@@ -755,33 +734,6 @@ else
         {
             IsPrinting = false;
             await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private async Task RecordPrintAuditAsync(FocusMed.Printing.Jobs.PrintJobResult result, string presetName, FocusMed.Printing.Profiles.PrintProfile profile)
-    {
-        try
-        {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            db.PrintAuditEntries.Add(new FocusMed.Data.Entities.PrintAuditEntry
-            {
-                StudyId = Study?.Id,
-                PatientName = Study?.Patient?.PatientName,
-                ProfileName = presetName,
-                PrintMode = SelectedPrintMode,
-                Copies = Copies,
-                PagesPrinted = result.PagesPrinted,
-                PaperSize = result.PaperSizeUsed,
-                Success = result.Success,
-                ErrorMessage = result.ErrorMessage,
-                PrinterName = presetName,
-                PrintedAt = DateTime.UtcNow
-            });
-            await db.SaveChangesAsync();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed to record print audit entry");
         }
     }
 

@@ -12,7 +12,6 @@ public class DicomNetworkingOptions
     public List<string> SupportedTransferSyntaxes { get; set; } = [];
     public List<AllowedCallingAe> AllowedCallingAETitles { get; set; } = [];
     public Dictionary<string, AeEndpoint> StorageCommitmentScuMapping { get; set; } = [];
-    public List<FilmPrinterConfig> FilmPrinters { get; set; } = [];
     public List<StorageForwardTarget> StorageForwardTargets { get; set; } = [];
 }
 
