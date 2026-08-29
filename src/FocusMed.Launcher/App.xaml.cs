@@ -178,7 +178,34 @@ public partial class App : System.Windows.Application
         try
         {
             _singleInstanceMutex = new Mutex(initiallyOwned: true, MutexName, out var createdNew);
-            return createdNew;
+            if (!createdNew)
+            {
+                try
+                {
+                    var port = 5000;
+                    try
+                    {
+                        var cfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+                        if (File.Exists(cfgPath))
+                        {
+                            var json = File.ReadAllText(cfgPath);
+                            var cfg = System.Text.Json.JsonSerializer.Deserialize<SiteConfig>(json,
+                                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                            if (cfg?.WebPort > 0) port = cfg.WebPort;
+                        }
+                    }
+                    catch { }
+
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = $"http://localhost:{port}",
+                        UseShellExecute = true
+                    });
+                }
+                catch { }
+                return false;
+            }
+            return true;
         }
         catch (Exception ex)
         {
