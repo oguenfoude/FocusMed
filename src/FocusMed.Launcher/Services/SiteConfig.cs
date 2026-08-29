@@ -1,4 +1,6 @@
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
@@ -43,8 +45,9 @@ public class SiteConfig
         {
             try
             {
+                defaults.DetectAndApplyAutoSettings(logger);
                 WriteDefaults(configPath, defaults);
-                logger.LogInformation("Created default config: {ConfigPath}", configPath);
+                logger.LogInformation("Created auto-detected config: {ConfigPath}", configPath);
             }
             catch (Exception ex)
             {
@@ -68,6 +71,14 @@ public class SiteConfig
             }
 
             ForceJsonBackedProperties(logger, defaults, loaded);
+
+            if (string.IsNullOrWhiteSpace(loaded.RawPrinterIp) || loaded.RawPrinterIp == "192.168.1.160")
+            {
+                logger.LogInformation("Config has default printer IP; attempting auto-detection");
+                loaded.DetectAndApplyAutoSettings(logger);
+                try { WriteDefaults(configPath, loaded); } catch { }
+            }
+
             return loaded;
         }
         catch (Exception ex)
@@ -75,6 +86,89 @@ public class SiteConfig
             logger.LogWarning(ex, "Failed to load config {ConfigPath}; backing up and regenerating defaults", configPath);
             return RecoverCorruptConfig(logger, appDir, configPath, defaults);
         }
+    }
+
+    public void DetectAndApplyAutoSettings(ILogger logger)
+    {
+        try
+        {
+            var ip = DetectLocalIp();
+            if (!string.IsNullOrWhiteSpace(ip))
+            {
+                logger.LogInformation("Auto-detected local IP: {Ip}", ip);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "IP auto-detection failed");
+        }
+
+        try
+        {
+            var (printerName, printerIp) = DetectKonicaPrinter();
+            if (!string.IsNullOrWhiteSpace(printerName))
+            {
+                KonicaWindowsPrinterName = printerName;
+                logger.LogInformation("Auto-detected Konica printer: {Name}", printerName);
+            }
+            if (!string.IsNullOrWhiteSpace(printerIp))
+            {
+                RawPrinterIp = printerIp;
+                logger.LogInformation("Auto-detected printer IP: {Ip}", printerIp);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Printer auto-detection failed");
+        }
+    }
+
+    private static string DetectLocalIp()
+    {
+        try
+        {
+            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socket.Connect("8.8.8.8", 80);
+            if (socket.LocalEndPoint is IPEndPoint ep)
+                return ep.Address.ToString();
+        }
+        catch { }
+
+        try
+        {
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            var ip = host.AddressList
+                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a));
+            if (ip != null) return ip.ToString();
+        }
+        catch { }
+
+        return "";
+    }
+
+    private static (string PrinterName, string PrinterIp) DetectKonicaPrinter()
+    {
+        try
+        {
+            foreach (string name in System.Drawing.Printing.PrinterSettings.InstalledPrinters)
+            {
+                if (name.Contains("KONICA", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("Minolta", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ip = ExtractIpFromPrinterName(name);
+                    return (name, ip);
+                }
+            }
+        }
+        catch { }
+
+        return ("", "");
+    }
+
+    private static string ExtractIpFromPrinterName(string name)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(name, @"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})");
+        return match.Success ? match.Groups[1].Value : "";
     }
 
     private static SiteConfig RecoverCorruptConfig(ILogger logger, string appDir, string configPath, SiteConfig defaults)

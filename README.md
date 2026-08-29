@@ -187,10 +187,47 @@ Existing migrations are auto-applied on app startup. Current set:
 
 ## Deployment
 
-- `deploy/` (gitignored) is the live single-folder deployment: Worker + Dashboard + Launcher + merged `appsettings.json` + `config.json`. Republish it with `dotnet publish -c Release -o deploy` (Worker, Dashboard, Launcher), preserving the merged `appsettings.json`.
-- Run it with `& "D:\FocusMed\deploy\FocusMed.Launcher.exe"` in an **Administrator** shell — the Launcher supervises Worker + Dashboard and runs the resume-print monitor.
-- The `FocusMed.Launcher` is a WPF tray supervisor: starts Worker + Dashboard hidden, always restarts them, creates the "FocusMed" virtual printer (Microsoft Print To PDF on a Local Port), installs an ONLOGON autostart task, and opens a firewall rule for the DICOM port. Its `config.json` holds the site settings (AE title, ports, Konica raw printer IP, etc.).
-- A client installer is built from `installer/FocusMed.iss` with Inno Setup 6 (output: `installer/FocusMedSetup-*.exe`; note the binary is >100 MB so it is gitignored — only the `.iss` script is tracked).
+### Quick Install (recommended)
+
+1. Build the distribution:
+   ```powershell
+   dotnet publish src/FocusMed.Worker -c Release -o dist
+   dotnet publish src/FocusMed.Dashboard -c Release -o dist
+   dotnet publish src/FocusMed.Launcher -c Release -o dist
+   ```
+
+2. Copy the `dist/` folder to the target PC.
+
+3. Right-click `dist/Install.bat` → **Run as administrator**.
+
+That's it. The Launcher auto-detects:
+- Local IP address
+- Installed Konica printer
+- Printer IP from the printer name
+
+Everything else (firewall rule, autostart task, virtual printer, database) is set up automatically.
+
+### What Gets Installed
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Application | `C:\Program Files\FocusMed\` | All binaries + config |
+| Data | `%LOCALAPPDATA%\FocusMed\` | Database, images, PDFs, logs |
+| Autostart | Task Scheduler `FocusMed` | Starts on login |
+| Firewall | TCP 11112 inbound | DICOM listener |
+| Virtual printer | "FocusMed" in print dialog | Capture printed PDFs |
+
+### To Uninstall
+
+Right-click `dist/Uninstall.bat` → **Run as administrator**.
+
+### Manual Development Mode
+
+For development without the Launcher:
+```powershell
+dotnet run --project src/FocusMed.Worker     # DICOM listener TCP :11112
+dotnet run --project src/FocusMed.Dashboard  # Blazor Server UI HTTP :5000
+```
 
 ## Out of Scope (by design)
 
