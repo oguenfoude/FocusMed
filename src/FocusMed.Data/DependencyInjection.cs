@@ -8,7 +8,7 @@ namespace FocusMed.Data;
 
 /// <summary>
 /// Enables WAL journaling, busy timeout, and NORMAL sync on every SQLite connection.
-/// Without WAL, concurrent writers (Worker ingestion, Dashboard, PrintCapture) collide
+/// Without WAL, concurrent writers (Worker ingestion, Dashboard, Launcher) collide
 /// with "database is locked" errors after the 30s command timeout.
 /// </summary>
 public sealed class SqlitePragmaInterceptor : DbConnectionInterceptor

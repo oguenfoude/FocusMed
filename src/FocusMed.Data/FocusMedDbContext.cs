@@ -42,6 +42,9 @@ public class FocusMedDbContext : DbContext
         modelBuilder.Entity<Study>()
             .HasIndex(s => s.LastUpdatedAt);
 
+        modelBuilder.Entity<Study>()
+            .HasIndex(s => s.CallingAeTitle);
+
         modelBuilder.Entity<Patient>()
             .HasIndex(p => p.PatientId);
 
@@ -108,6 +111,9 @@ public class FocusMedDbContext : DbContext
 
         modelBuilder.Entity<PrintJob>()
             .HasIndex(p => p.StudyId);
+
+        modelBuilder.Entity<PrintJob>()
+            .HasIndex(p => new { p.CallingAeTitle, p.CreatedAt });
 
         modelBuilder.Entity<FilmBox>()
             .HasIndex(f => f.PrintJobId);

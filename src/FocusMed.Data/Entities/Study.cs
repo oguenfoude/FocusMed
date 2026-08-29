@@ -11,6 +11,7 @@ public class Study
     public string? InstitutionName { get; set; }
     public string? Manufacturer { get; set; }
     public string? ReferringPhysicianName { get; set; }
+    public string? CallingAeTitle { get; set; }
     public StudyStatus Status { get; set; } = StudyStatus.Receiving;
     public string? ResumePdfPath { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

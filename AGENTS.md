@@ -6,7 +6,7 @@ Compact reference for AI sessions. Every fact here is verified against the curre
 
 ## Project Shape
 
-**Seven** projects. Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom` + `Printing`. `PrintCapture` → `Data`. `Printing` has no project dependencies.
+**Seven** projects. Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom` + `Printing`. `Launcher` → `Data`. `Printing` has no project dependencies.
 
 | Project | TFM | Role |
 |---------|-----|------|
@@ -16,7 +16,7 @@ Compact reference for AI sessions. Every fact here is verified against the curre
 | `FocusMed.Dashboard` | `net10.0-windows` | Blazor Server UI (`InteractiveServer`). Razor components, `PngExtractionService`, `PdfService`, `StudyService`. HTTP `:5000`. |
 | `FocusMed.Printing` | `net10.0-windows` | Print engine (`PrintExecutionService`, `BookletImpositionService`, capability discovery, raw/XPS output). UI-independent. |
 | `FocusMed.Printing.TestConsole` | `net10.0-windows` | Console smoke-test harness for the print engine. |
-| `FocusMed.PrintCapture` | `net10.0-windows` | WPF desktop app. Creates "FocusMed" virtual printer on Windows, monitors print output, converts to PDF, shows native popup for study selection. |
+| `FocusMed.Launcher` | `net10.0-windows` | WPF supervisor app (tray / resume-picker popup / "FocusMed" virtual printer / print monitor) that starts & watches `FocusMed.Worker` + `FocusMed.Dashboard` as hidden children, always restarting them. Absorbed the former `FocusMed.PrintCapture`. |
 
 Solution: `FocusMed.slnx` (XML, **not** classic `.sln`).
 
@@ -56,7 +56,7 @@ Data directory resolves in this order:
 │   └── <PatientName>_<Modality>_<YYYYMMDD>/<SeriesUid>/   # PNG per frame (on-demand)
 ├── pdf-cache/                                # Generated PDFs (60min TTL, auto-cleaned)
 │   └── covers/                               # Cover page cache (24h TTL)
-├── resumes/                                  # PrintCapture resume PDFs
+├── resumes/                                  # Launcher resume PDFs
 └── logs/                                   # Serilog rolling + association log
 ```
 
@@ -73,7 +73,7 @@ Dashboard startup auto-provisions `cover.docx` and `cover-logo.jpg` from `wwwroo
 
 ## Explicitly Out of Scope
 
-Until the user explicitly directs otherwise, **do not** build: installers/MSIs, `.docx` watchers.
+Until the user explicitly directs otherwise, **do not** build `.docx` watchers. (Installers are now in-scope for client deployment — the Inno Setup script lives in `installer/FocusMed.iss`; the >100 MB built exe is gitignored.)
 
 ## PHI Warning
 
@@ -95,7 +95,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 6. **All DICOM roles live in `FocusMedScp`.** Do not invent separate SCP classes for C-STORE, C-FIND, C-MOVE, or Print Management.
 
-7. **Target frameworks: mixed `net10.0` and `net10.0-windows`.** `FocusMed.Data`, `FocusMed.Dicom`, `FocusMed.Worker` are cross-platform `net10.0`. `FocusMed.Dashboard`, `FocusMed.Printing`, `FocusMed.Printing.TestConsole`, `FocusMed.PrintCapture` are `net10.0-windows` (System.Printing, WPF, XPS). Build produces 0 warnings, 0 errors.
+7. **Target frameworks: mixed `net10.0` and `net10.0-windows`.** `FocusMed.Data`, `FocusMed.Dicom`, `FocusMed.Worker` are cross-platform `net10.0`. `FocusMed.Dashboard`, `FocusMed.Printing`, `FocusMed.Printing.TestConsole`, `FocusMed.Launcher` are `net10.0-windows` (System.Printing, WPF, XPS). Build produces 0 warnings, 0 errors.
 
 8. **fo-dicom transfer syntax names are non-standard.** Always pull `DicomTransferSyntax` / `DicomUID` static fields, never hand-type UIDs. The map in `FocusMedScp.cs` uses `JPEGProcess1`, `JPEGProcess2_4`, `JPEGProcess14`, `MPEG4AVCH264HighProfileLevel41` — not the human-friendly aliases.
 
@@ -135,17 +135,17 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 26. **NEVER generate UNKNOWN patient names.** All fallback paths use empty string `""` — never `UNKNOWN_<GUID>`. `StoreFileOnlyAsync` (line 38), N-SET handler (line 760), and `PngExtractionService` (line 168) all use `""` as fallback. UNKNOWN pollutes the DB with phantom patient records that confuse the dashboard.
 
-27. **N-SET patient resolution chain** (`FocusMedScp.cs:720-763`): (1) FK chain: `imageBox→FilmBox→PrintJob→Patient`, (2) inner DICOM dataset: `PatientID`/`PatientName` from `BasicColorImageSequence`/`BasicGrayscaleImageSequence`, (3) most recent C-STORE study, (4) empty string. Never generates UNKNOWN.
+27. **N-SET patient resolution chain** (`FocusMedScp.cs:720-763`): (1) FK chain: `imageBox→FilmBox→PrintJob→Patient`, (2) inner DICOM dataset: `PatientID`/`PatientName` from `BasicColorImageSequence`/`BasicGrayscaleImageSequence`, (3) **top-level `request.Dataset`** `PatientID`/`PatientName`, (4) empty string. The former "most recent C-STORE study" fallback was **removed** — it risked cross-patient PHI contamination. Resolution is logged at Information with the source tag ("PrintJob"/"InnerDataset"/"TopLevelDataset"/"none") so identity flow is verifiable. Never generates UNKNOWN.
 
 28. **N-DELETE removes PrintJob from DB** (`FocusMedScp.cs:948`). Previously only marked `Status = Completed`, leaving orphaned rows. Now calls `db.PrintJobs.Remove(printJob)` after removing child FilmBoxes and ImageBoxes.
 
 29. **StorageCommitmentScuService AE titles** (`StorageCommitmentScuService.cs:91,140`). `DicomClientFactory.Create` parameters are `_ourAet, job.CallingAet` (we are SCU, remote is SCP). Previously swapped — would cause strict SCPs to reject the association.
 
-30. **FilmBox N-CREATE does not fall back to arbitrary PrintJob** (`FocusMedScp.cs:572-575`). When `ReferencedFilmSessionSequence` is missing or the referenced PrintJob is not found, logs a warning and creates an orphaned FilmBox. Previously fell back to `OrderByDescending(CreatedAt)` which picked up unrelated PrintJobs.
+30. **FilmBox N-CREATE fallback is association-scoped, not arbitrary** (`FocusMedScp.cs:565-605`). When `ReferencedFilmSessionSequence` is missing or the referenced PrintJob is not found, the SCP reuses (a) the association's `_fallbackPrintJobSopUid` (set from the first FilmBox N-CREATE of this connection), then (b) the most recent PrintJob from the **same calling AE within 60s**, else (c) **creates an implicit PrintJob** — never an orphaned FilmBox. Do NOT resurrect the old `OrderByDescending(CreatedAt)` global fallback (picked up unrelated PrintJobs) nor go back to orphaning FilmBoxes.
 
 31. **N-ACTION with empty SOP UID does not complete arbitrary PrintJob** (`FocusMedScp.cs:875`). When both `sopUid` and `sopClassUid` are empty, logs a warning and returns Success without modifying any PrintJob. Previously fell back to completing the most recent PrintJob.
 
-32. **N-DELETE with empty SOP UID returns `InvalidArgumentValue`** (`FocusMedScp.cs:923-930`). Previously returned `Success` for empty UIDs, which is incorrect per DICOM spec.
+32. **N-DELETE with empty SOP UID returns `Success`** (`FocusMedScp.cs:955-965`). Some SCUs tear down without a SOP Instance UID; rejecting with `InvalidArgumentValue` broke their print flow ("already connected"-style device errors). The handler logs a warning and returns a manual `DicomNDeleteResponse` with `Status = Success`. Empty-UID N-DELETE is tolerated; non-empty UIDs still go through the full DeleteWithTransfer rollback path.
 
 33. **N-SET returns `ProcessingFailure` when ImageBox not found** (`FocusMedScp.cs:786-794`). Previously returned `Success` even when the imageBox lookup failed, misleading the SCU.
 
@@ -189,7 +189,7 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 53. **`DeletedStudies.razor` must declare `@implements IDisposable`** (`DeletedStudies.razor:3`). It creates a `Timer` instance in `OnInitializedAsync`. Without `IDisposable`, the timer leaks on navigation (Blazor disposes the component but the timer's CLR reference keeps firing, causing `ObjectDisposedException`). `Archives.razor` does **not** have a Timer and does **not** implement `IDisposable`.
 
-54. **`StudyDetails.razor` has no `@inject NavigationManager`** and no `@using FellowOakDicom`. Both were removed as dead code. The page navigates via `<a href>` links, not `Navigation.NavigateTo()`.
+54. **`StudyDetails.razor` has no `@using FellowOakDicom`** — removed as dead code. `NavigationManager` was absent too, but is now injected as `Nav` for the **manual merge** post-redirect (`ConfirmMerge` → `Nav.NavigateTo($"/study/{targetId}", forceLoad: true)`). All other navigation still uses `<a href>` links.
 
 55. **Data layer has 4 enums.** `StorageCommitmentStatus` (Pending/Completed/Failed), `PrintStatus` (Pending/Printing/Completed/Failed), `StudyStatus` (Receiving/Complete/Failed/Archived/Deleted), `AssociationOutcome` (Success/Rejected/Failed/PartiallyAccepted). `PrinterType` (GrayLevel/Multicolor) is in `FocusMed.Dicom.Options`, not the Data layer.
 
@@ -209,9 +209,9 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 62b. **PrintCapture popup lists ALL non-deleted studies, not just unassigned.** (`DatabaseService.GetSelectableStudiesAsync` — `resumes\DatabaseService.cs:20-36` and `ResumePickerWindow.xaml.cs:33`). The popup shows every study, with a violet "Resume" badge in the "Statut" column when `Study.ResumePdfPath != null`. Picking a study that already has a resume triggers a `MessageBox` confirmation "Cette etude a deja un resume associe... L'ancien fichier PDF sera supprime definitivement." Selecting "Yes" calls `AssignResumeAsync` which captures the OLD path, deletes the old file from disk, then assigns the new path. **This was a critical UX fix**: previously only unassigned studies showed in the list, so 2nd-print popups appeared empty (or filtered out the user's intended study).
 
-63. **PrintCapture process lock issue.** `FocusMed.PrintCapture.exe` can be locked by running processes in other user sessions. Build fails with MSB3027 when the exe is in use. Workaround: rename the locked exe before building, or kill the process first. `Stop-Process -Name "FocusMed.PrintCapture" -Force` may fail with access denied if the process is in another session.
+63. **Launcher process lock issue.** `FocusMed.Launcher.exe` can be locked by running processes in other user sessions. Build fails with MSB3027 when the exe is in use. Workaround: rename the locked exe before building, or kill the process first. `Stop-Process -Name "FocusMed.Launcher" -Force` may fail with access denied if the process is in another session.
 
-64. **Unlink Resume button on StudyDetails** (`StudyDetails.razor:89-102`). A red pill button "Retirer" appears next to the violet `Résumé` badge when `Study.ResumePdfPath != null`. Click opens a `ConfirmModal` asking "Le fichier PDF du resume sera supprime definitivement et ne pourra plus etre reassocie a cette etude. Continuer ?". On confirm, `StudyService.UnlinkResumeAsync(Study.Id)` (`StudyService.cs:116-148`) deletes the PDF from `%LOCALAPPDATA%\FocusMed\{study.ResumePdfPath}` AND clears `Study.ResumePdfPath` (file delete is wrapped in try/catch — DB update always succeeds even if the file is already gone). Uses `ToastNotification` for success/error feedback. After unlink, triggers `RegeneratePdfPreviewAsync()` to refresh the iframe without the resume page.
+64. **Unlink Resume button on StudyDetails** (`StudyDetails.razor:89-102`). The violet `Résumé` badge shows only "Résumé associé" — the long `resume_<id>_<guid>.pdf` filename is NOT shown in the pill (it moved to the element `title` tooltip for reference). A red pill button "Retirer" appears next to it when `Study.ResumePdfPath != null`. Click opens a `ConfirmModal` asking "Le fichier PDF du resume sera supprime definitivement et ne pourra plus etre reassocie a cette etude. Continuer ?". On confirm, `StudyService.UnlinkResumeAsync(Study.Id)` (`StudyService.cs:116-148`) deletes the PDF from `%LOCALAPPDATA%\FocusMed\{study.ResumePdfPath}` AND clears `Study.ResumePdfPath` (file delete is wrapped in try/catch — DB update always succeeds even if the file is already gone). Uses `ToastNotification` for success/error feedback. After unlink, triggers `RegeneratePdfPreviewAsync()` to refresh the iframe without the resume page.
 
 65. **Toast auto-dismiss uses a sequence guard** (`Home.razor:516`, `Archives.razor:343`, `DeletedStudies.razor:307`, `StudyDetails.razor:627`). Every page's `ShowToast` increments `_toastSeq`, waits 3s, and only clears the message if the seq still matches. This prevents a fast second toast from being erased by a delayed first toast's timer.
 
@@ -245,7 +245,29 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 
 80. **`FocusMed.Printing` project location** (`src/FocusMed.Printing/`). `PrintExecutionService` lives here, **not** in `FocusMed.Dicom`. AGENTS.md previously listed it under Dicom — that was wrong.
 
+**Warning:** The agent gotcha list intentionally grows. When it exceeds ~90 entries, migrate stable facts into `README.md`.
+
 81. **Post-Settings dead-code sweep** (2026-08-29). Removed with `Settings.razor`/`Prints.razor`: `PrintAuditEntry` entity + DbSet + migration (table dropped from DB + history row deleted), `FilmPrinterConfig`/`PrinterType`/`DicomNetworkingOptions.FilmPrinters` + Worker startup logging + `"FilmPrinters"` config key (DICOM Print SCU was already dead), `ITestPageService`/`TestPageService`, `IPrinterSettingsStore`/`PrinterSettingsStore`/`PrintSettings`, dead `RawPrinterPreset` fields (`IsBooklet`/`ForceGrayscale`/`Copies`). Nav bar now has exactly **3** links: Études / Archives / Supprimées. `Prints.razor`/`Settings.razor` do not exist — do not reference `/prints` or `/settings`.
+
+82. **Layout toolbar on StudyDetails** (`StudyDetails.razor`). Print + layout controls live in a second card row organized as **3 titled `grid` zones** (stacked below the `xl` breakpoint): **Résumé** (status badge + "Retirer"), **Mise en page** (Images/page + Marge + Espacement mm), **Impression** (mode select + "Imprimer" gradient button, `justify-end` in a `bg-brand-50/50` panel so the primary action always sits right). The `Copies` field was **removed** — `PrintAsync` always gets `Copies = 1`. images/page is a FREE NUMBER TEXT INPUT (`ImagesPerPageInput`, **default is modality-dependent** via `DefaultImagesPerPage`): CT/OT studies default to `"1"` (one image per page for clinical review), other modalities (SC prints/prescriptions) default to `""` = Auto; empty = Auto, so any count (2, 3, 4, 5…) is auto-scaled to fit the page. Auto = per-page cap ≤ 6 with BALANCED page split done by `PdfService`: 13 → 5+4+4, 7 → 4+3 — every page fills. Manual numbers 1..16 override the default. Changed via `@bind:after="OnLayoutChanged"` → `RegeneratePdfPreviewAsync()` (debounced 150ms). Values feed `EffectiveImagesPerPage/GapPx/MarginPx` into `PdfService.GeneratePrintPdf/GenerateBookletPrintPdf/GenerateFlatPrintPdf`. Frame default selection: print frames (`Modality "OT"` for legacy, `"SC"` for new prints) are selected by default when a study mixes prints with C-STORE data — in an OT/CT merged study the films start checked and the CT frames are unchecked (user re-checks via Tout/Aucun). A study with only C-STORE frames (no print-like modality) still starts fully selected. The images/page Auto badge shows `Auto → N/page · M page(s)` live. StudyDetails breadcrumb is a single row (Études `/` patient `·` date) — the "Retour aux études" button was removed (breadcrumb + nav cover it). Sidebar thumbnails are small `w-28 h-24` with `object-contain` (never cropped), rows `py-1.5` `space-y-1`, and a `max-h-[420px] lg:max-h-none` scroll cap when the two-panel stacks.
+
+83. **`PdfService.ComputeGridCols` is the shared aspect-aware grid helper** (`PdfService.cs`). Replaces the old hardcoded switch. It probes PNG IHDR width/height (`EstimateImageAspect`, first 8 files, median) to pick the grid ratio that best fills the page without cropping. Cost = `|ln(rows/cols) − ln(imageAspect/pageAspect)| + 0.35·(wasted cells/count)` — rows = `ceil(count/cols)`. The grid is recomputed **PER PAGE BATCH** (balanced split) so the last partial page re-lays out and fills the whole page; the `imagesLayerCache` key is prefixed `images_v2` (busted when the balanced-split algorithm changed). Every cell gets an identical explicit height (`cellH`) so all images render at the same size (contain via `.FitArea()`, never cropped); image bytes are pre-read in parallel into a `ConcurrentDictionary`. Do not inline a second grid switch elsewhere.
+
+84. **Images-layer PDF cache** (`PdfService.cs:444-458`). `GenerateImagesPdf` caches its output as `pdf-cache/images_{md5}.pdf` keyed on `(pageSize|perPage|gap|margin|paths)`. Cover PDF (SHA256, 24h TTL) + images layer (60min TTL) + merged PDF (60min) are cached independently — frame toggles only re-render the changed images layer in QuestPDF, not the whole merge. `CleanupOldPdfsAsync` sweeps all three (separate dirs for covers).
+
+85. **XPS page visual must NOT be a `FixedPage`** (`PrintExecutionService.cs:213`). `PdfPagePaginator.GetPage` returns a `DocumentPage` whose root visual is a **`Canvas`**, never a `FixedPage` — the XPS writer wraps each page in a `FixedPage` itself, and a nested `FixedPage` throws `XpsSerializationException: FixedPage cannot contain another FixedPage` (seen as "Windows print failed" in the log). The Canvas holds one `System.Windows.Controls.Image` (300-DPI PDFtoImage render, `Stretch.Fill`, frozen `BitmapImage`). If you change the visual container, ensure it is a plain layout root (`Canvas`/`Grid`), not a `FixedPage`/`FixedDocument`. Then rebuild + rerun; killed locked Dashboard exe before build per gotcha 6/63.
+
+86. **SCP instance state is per-association** (`FocusMedScp.cs:98` `_fallbackPrintJobSopUid`). fo-dicom instantiates `FocusMedScp` once per association, so instance fields are safe for connection-scoped fallback state. Never convert these to static/shared fields — that would leak one connection's implicit PrintJob into another's.
+
+87. **Print auto-merge happens in `DicomUpsertService.IngestPrintImageAsync`** (not in the SCP). Resolution order: (1) an explicit `StudyInstanceUID` in the print dataset that matches an existing Study → merge there; (2) non-empty `patientId` with a `Receiving`/`Complete` Study for that patient updated within `PrintMergeWindowSeconds` (default **300**); (3) empty patient + same `CallingAeTitle` within the window → merge; (4) last resort: ANY active (`Receiving`/`Complete`, never Archived/Deleted) study within the window. Otherwise a new Study is created (still with `_SC_` archive naming). A merged print is written into the **target study's existing archive directory** (from the first image's `FilePath`), never a parallel `_SC_` folder. Study/Series/SOP UIDs are sanitized via `TruncateUid` (digits + dots only, max 64 chars) before DB write — device UIDs containing hex letters or >64 chars would otherwise throw `DicomValidationException`. New print Series are tagged `Modality = "SC"` (matching the dataset and archive folder), NOT `"OT"`. On ingest failure the just-saved `.dcm` is deleted. `New lines: FocusMedScp.cs:98 (per-association field), DicomUpsertService.cs:118 (constructor window), DicomUpsertService.cs:230-280 (merge resolution), DicomUpsertService.cs:587 (TruncateUid)`. **Reverse merge** also runs from `StudyCompletionService.MergeRecentPrintsIntoStudyAsync` when a study completes: it only absorbs `Receiving` print studies with images `Source == "PRINT"` plus same-patient studies — it will NOT absorb unrelated C-STORE studies of a different patient, and both merge paths delete the orphaned `Patient` row once no other study references it.
+
+88. **`CallingAeTitle` is recorded on ingest.** `Study.CallingAeTitle` (`Study.cs:14`) and `PrintJob.CallingAeTitle` (`PrintJob.cs:10`) are nullable strings set from `Association.CallingAE` — C-STORE (`StoreFileOnlyAsync`) and print N-CREATE/N-SET. New columns indexed (`Study.CallingAeTitle`, composite `PrintJob.{CallingAeTitle,CreatedAt}`) in migration `PrintMergeSupport`. Used by the auto-merge (gotcha 87) and the FilmBox fallback (gotcha 30). Never empty-string — null when unknown.
+
+89. **Manual merge is a Dashboard feature: `StudyService.MergeStudyAsync(source,target)`** (`StudyService.cs:18-95`). Re-points `Series.StudyId` + `PrintJob.StudyId`/`PatientId` to the target, moves the source archive directory under the target's (best-effort, try/catch — DB stays consistent if the move fails), deletes **only** the source Study row (never `RemoveRange` on the re-pointed series — that cascades and deletes the just-moved images), and bumps the target's `LastUpdatedAt` + restores status from Archived/Deleted to Complete. UI: "Fusionner" button on `StudyDetails.razor` → picker modal lists non-deleted studies with image counts → ConfirmModal → `Nav.NavigateTo($"/study/{targetId}", forceLoad: true)`. Do NOT merge a study into itself (returns false).
+
+90. **Tailwind CSS is compiled MANUALLY, not by `dotnet build`.** `npm run build:css` (in `src/FocusMed.Dashboard`, `tailwindcss -i ./tailwind.input.css -o ./wwwroot/app.css --content "./Components/**/*.razor"`) generates `wwwroot/app.css` from utility classes scanned in `.razor` files. If you add a Tailwind class never used before (e.g. `sticky top-0`, `min-h-0`), it will render as a **no-op `static`** until you rerun `npm run build:css`. After any CSS-class change: rebuild CSS, then rebuild the project (0/0), then restart Dashboard.
+
+91. **Uniform page layout pattern (all 4 pages).** Every page root is `<div class="flex flex-col flex-1 min-w-0 gap-5">`; block spacing uses the parent `gap` (no `mb-6`/`mb-4`). List pages (Home/Archives/DeletedStudies) use the flexible table pattern: table card `flex-1 min-h-0 flex flex-col` + inner `<div class="overflow-auto flex-1 min-h-0">` + `<thead class="sticky top-0 z-10 bg-slate-50/50 ...">` + footer `shrink-0`. Section: on tall viewports the card grows to fill the screen (flex-1), on short ones the `<main>` scrolls. StudyDetails two-panel area is `flex flex-col lg:flex-row flex-1 min-h-[650px] gap-5` (stacks vertically below the `lg` breakpoint; sidebar `w-full lg:w-96` with the thumbnail list capped at `max-h-[420px] lg:max-h-none` when stacked; preview is the flex-1 partner). Responsive paddings: table cells/th/footers use `px-4 sm:px-6 py-4` / `px-4 sm:px-6 py-3.5`, toolbar/filter bars and the pagination footer use `flex-wrap`. Header is `min-h-16 py-2` (not fixed `h-16`) so it wraps without clipping. Card radius `rounded-xl`, inputs `rounded-lg border-slate-200`, badges ID/modality `px-2.5 py-1`. Keep this pattern when touching any page.
 
 ## Quick File Index
 
@@ -263,11 +285,11 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 - `src/FocusMed.Dicom/StorageForwardQueue.cs` — `Channel<T>`-based forward queue with `Complete()`/`PendingCount` for graceful shutdown.
 - `src/FocusMed.Dicom/Options/DicomNetworkingOptions.cs` — `DicomNetworking` section binding + `StorageForwardTargets`.
 - `src/FocusMed.Dicom/DicomHelpers.cs` — Static helpers: SanitizeFileName, GetFnv1aHash, GetDicomDate, FormatPatientName.
-- `src/FocusMed.Data/FocusMedDbContext.cs` — 11 DbSets, fluent FK config, enum conversion, 20 indexes.
+- `src/FocusMed.Data/FocusMedDbContext.cs` — 11 DbSets, fluent FK config, enum conversion, 22 indexes.
 - `src/FocusMed.Data/FocusMedDbContextFactory.cs` — `IDesignTimeDbContextFactory` for EF migrations.
 - `src/FocusMed.Data/DependencyInjection.cs` — `AddFocusMedData` extension method, registers `FocusMedDbContext` with Sqlite + `SqlitePragmaInterceptor` (WAL + busy_timeout + synchronous=NORMAL).
 - `src/FocusMed.Data/Entities/StorageCommitmentStatus.cs` — `Pending=0`, `Completed=1`, `Failed=2`.
-- `src/FocusMed.Data/Migrations/` — 1 EF migration (latest: `InitialSqlite`).
+- `src/FocusMed.Data/Migrations/` — 2 EF migrations (latest: `PrintMergeSupport`).
 - `src/FocusMed.Printing/Jobs/PrintExecutionService.cs` — print execution (Windows driver XPS path + raw TCP fallback), booklet imposition, Konica finishing injection, streaming paginator, A3 exact-detect.
 - `src/FocusMed.Printing/Imposition/BookletImpositionService.cs` — A4→A3 landscape 2-up imposition (4-slot signature math).
 - `src/FocusMed.Printing/Options/RawPrinterConfig.cs` — `RawPrinters` section, presets (Name/Ip/Port/PaperSize/WindowsPrinterName/Copies).
@@ -278,15 +300,36 @@ Each item is anchored to a verified file:line. Cite these before touching the li
 - `src/FocusMed.Dashboard/Components/Pages/DeletedStudies.razor` — `/deleted` route, deleted studies with restore/permanent delete, 10s auto-refresh timer.
 - `src/FocusMed.Dashboard/Components/Layout/MainLayout.razor` — nav bar (Études, Archives, Supprimées), server status badge (TCP liveness probe).
 - `src/FocusMed.Dashboard/Components/Shared/ToastNotification.razor` — toast notification component (role=alert, aria-live).
-- `src/FocusMed.Dashboard/Components/Shared/ConfirmModal.razor` — confirmation modal with French defaults, focus trap, Escape key, double-click guard.
+- `src/FocusMed.Dashboard/Components/Shared/ConfirmModal.razor` — confirmation modal with French defaults, focus on open + Escape key, double-click guard.
 - `src/FocusMed.Dashboard/Services/PdfService.cs` — PDF generation: cover (Word COM A4 / QuestPDF A3 fallback), images (QuestPDF), merge (PdfSharpCore), cache (MD5 hash + 60min TTL), cover cache (SHA256 + 24h TTL). `padToMultipleOf4` only for booklet.
 - `src/FocusMed.Dashboard/Services/StudyService.cs` — shared delete/soft-delete/restore/archive/unlink-resume logic. Registered as Scoped.
 - `src/FocusMed.Dashboard/Services/DeletedCleanupService.cs` — BackgroundService, auto-deletes Deleted studies after 30 days.
-- `src/FocusMed.PrintCapture/FocusMed.PrintCapture.csproj` — WPF app (.NET 10-windows), references FocusMed.Data, `UseWindowsForms=true` for tray icon.
-- `src/FocusMed.PrintCapture/icon.ico` — Embedded resource, 16x16 blue "F" tray icon.
-- `src/FocusMed.PrintCapture/App.xaml.cs` — WPF entry point, DI setup, printer creation, file monitoring. **System tray icon** (NotifyIcon): right-click menu (Ouvrir le Dashboard / Quitter), double-click opens `http://localhost:5000`, balloon notifications on startup and print capture. Starts hidden, window appears on print only.
-- `src/FocusMed.PrintCapture/Services/PrinterSetupService.cs` — creates "FocusMed" virtual printer on Windows using Local Port `C:\FocusMed_Prints\incoming.pdf` (no dialog — PDF auto-saved).
-- `src/FocusMed.PrintCapture/Services/PrintJobMonitorService.cs` — Timer poller on `incoming.pdf` (every 200ms), waits 300ms for size stabilization, validates `%PDF` + `%%EOF`, copies to `resumes/` folder, fires popup. Total detection: ~500ms.
-- `src/FocusMed.PrintCapture/Services/DatabaseService.cs` — EF Core queries for selectable studies + resume assignment.
-- `src/FocusMed.PrintCapture/Windows/ResumePickerWindow.xaml` — WPF popup for study selection.
-- `src/FocusMed.PrintCapture/Windows/ResumePickerWindow.xaml.cs` — code-behind for picker window, deletes monitor temp PDF on close, uses configured `ResumesFolder`.
+- `src/FocusMed.Launcher/FocusMed.Launcher.csproj` — WPF supervisor app (.NET 10-windows), references FocusMed.Data, `UseWindowsForms=true` for tray icon. Absorbed the former `FocusMed.PrintCapture`.
+- `src/FocusMed.Launcher/icon.ico` — Embedded resource, 16x16 blue "F" tray icon.
+- `src/FocusMed.Launcher/App.xaml.cs` — WPF entry point, DI setup, single-instance guard, startup of children, tray icon. **System tray icon** (NotifyIcon): right-click menu (Ouvrir le Dashboard / Quitter), double-click opens `http://localhost:5000`, balloon notifications on startup and print capture. Starts hidden, window appears on print only.
+- `src/FocusMed.Launcher/Services/SiteConfig.cs` — never-fail `config.json` loader (typed defaults, corrupt-file backup).
+- `src/FocusMed.Launcher/Services/ChildProcessSupervisor.cs` — watchdog restarting Worker + Dashboard children (restart policy + backoff).
+- `src/FocusMed.Launcher/Services/BootstrapService.cs` — one-time setup: folders, autostart task, firewall rule, virtual printer, DB migration. Every step tolerated.
+- `src/FocusMed.Launcher/Services/PrinterSetupService.cs` — creates "FocusMed" virtual printer on Windows using Local Port `C:\FocusMed_Prints\incoming.pdf` (no dialog — PDF auto-saved).
+- `src/FocusMed.Launcher/Services/PrintJobMonitorService.cs` — Timer poller on `incoming.pdf` (every 200ms), waits 300ms for size stabilization, validates `%PDF` + `%%EOF`, copies to `resumes/` folder, fires popup. Total detection: ~500ms.
+- `src/FocusMed.Launcher/Services/DatabaseService.cs` — EF Core queries for selectable studies + resume assignment.
+- `src/FocusMed.Launcher/Windows/ResumePickerWindow.xaml` — WPF popup for study selection.
+- `src/FocusMed.Launcher/Windows/ResumePickerWindow.xaml.cs` — code-behind for picker window, deletes monitor temp PDF on close, uses configured `ResumesFolder`.
+
+## Launcher (single-EXE deployment)
+
+Located `src/FocusMed.Launcher/` (`net10.0-windows`, WPF + WindowsForms). Absorbed the former `FocusMed.PrintCapture`. Not built/published in this worktree � source only.
+
+**What it supervises:** starts `FocusMed.Worker.exe` (DICOM listener 11112) and `FocusMed.Dashboard.exe` (Blazor :5000) as hidden child processes (CWD = folder containing each exe, so their `appsettings.json` resolves), exported env `FOCUSMED_DATA` + `FOCUSMED_DB_CONNECTION` for both. `ChildProcessSupervisor` always restarts a child on exit with backoff (no backoff on first start; 2s restart; after 3 fast exits <5s uptime, wait 10s?30s cap; backoff resets on a healthy long run). One child failing never takes down the launcher.
+
+**config.json** (in the launcher's exe dir, loaded by `SiteConfig.Load`; never-fail � corrupt files are backed up to `config.errored-{ts}.json`): `AETitle`, `DicomPort` (11112), `WebPort` (5000), `DataDirectory` (empty = `%LOCALAPPDATA%\FocusMed`), `RawPrinterIp` (192.168.1.160), `RawPrinterPort` (9100), `KonicaWindowsPrinterName`, `VirtualPrinterName` (FocusMed), `OutputDriverName` (Microsoft Print To PDF), `PrintJobsFolder` (C:\FocusMed_Prints), `ResumesFolder` (resumes), `AutostartEnabled` (true), `AutoOpenDashboardOnStart` (false).
+
+**Autostart task:** `schtasks /Create /TN "FocusMed" /TR "\"{launcherExe}\" --autostart" /SC ONLOGON /RL HIGHEST /F` (only when `AutostartEnabled`). `--autostart` suppresses the startup balloon. **Firewall rule:** `FocusMed DICOM TCP 11112` inbound allow TCP on `DicomPort`. **Virtual printer:** "FocusMed" via `Microsoft Print To PDF` driver on Local Port `C:\FocusMed_Prints\incoming.pdf`.
+
+**Env vars exported by the launcher:** `FOCUSMED_DATA` ? resolved data dir, `FOCUSMED_DB_CONNECTION` ? `Data Source={dataDir}\focusmed.db`, set before any DI. For the Dashboard child, `ASPNETCORE_URLS=http://0.0.0.0:{WebPort}` (LAN-reachable UI). Worker + Dashboard `appsettings.json` no longer hardcode `ConnectionString` � they fall back to `FOCUSMED_DB_CONNECTION`, so the launcher's value wins. Single-instance via mutex `Local\FocusMed.Launcher`.
+
+**Shared appsettings.json:** publish puts 3 exes in one folder, so their 3 `appsettings.json` files would clobber each other. `BootstrapService.EnsureSharedAppSettings()` (public, called synchronously in `App.xaml.cs` BEFORE any child starts, and re-asserted inside `BootstrapAsync`) regenerates ONE merged `appsettings.json` in the exe dir from `config.json` defaults: Serilog (file sinks to `%FOCUSMED_DATA%/logs`), `StudyStabilizationSeconds`, `PngExtraction`, `DicomNetworking` (AE/DicomPort from config.json, no storage-forward targets), `RawPrinters` (3 Konica presets built from `RawPrinterIp`/`RawPrinterPort`/`KonicaWindowsPrinterName`). Children read it from their CWD. Worker binds `0.0.0.0` from `DicomNetworking:BindAddress`; Dashboard binds `ASPNETCORE_URLS` exported by the launcher. Corrupt-file backup/regenerate logic lives in `SiteConfig.Load`.
+
+**Restart policy:** always restart; crash-loop detection per child with `<5s` uptime ? `fastExits++`, =3 ? backoff. Missing child exe is logged (throttled to 30s) instead of spamming Critical every 500ms. Tray tooltip (updated every 3s, `NotifyIcon.Text` max 63 chars) shows `FocusMed: Worker {Running|Stopped|Missing} | Dashboard {...}`.
+
+**Note:** `deploy/` is the live single-folder deployment (Worker + Dashboard + Launcher + merged `appsettings.json` + `config.json`) — republished and E2E smoke-tested (Worker binds 11112, Dashboard serves :5000 `/health` ok, migrations + metadata backfill ran). To republish after code changes (preserve merged appsettings + config.json): back up `deploy/appsettings.json`, then `dotnet publish` the Worker, Dashboard, Launcher csproj `-c Release -o deploy` in that order, then restore `appsettings.json` (the launcher regenerates it from `config.json` on startup anyway). Run the whole flow via `& "D:\FocusMed\deploy\FocusMed.Launcher.exe"` in an **Administrator** PowerShell — it supervises Worker + Dashboard and runs the resume print monitor. Do NOT run dev Worker/Dashboard (`dotnet run`) at the same time as the launcher (port 11112/5000 conflict + double restart supervision). `deploy/` is gitignored.

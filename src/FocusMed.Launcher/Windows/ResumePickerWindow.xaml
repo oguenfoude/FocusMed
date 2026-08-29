@@ -1,4 +1,4 @@
-<Window x:Class="FocusMed.PrintCapture.Windows.ResumePickerWindow"
+<Window x:Class="FocusMed.Launcher.Windows.ResumePickerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="FocusMed — Associer un resume"

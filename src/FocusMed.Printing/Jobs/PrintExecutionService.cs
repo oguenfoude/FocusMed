@@ -1,4 +1,5 @@
 using System.Printing;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows.Documents;
 using System.Windows.Media.Imaging;
@@ -199,18 +200,27 @@ internal sealed class PrintExecutionService(
                 Dpi = 300, Grayscale = _grayscale, BackgroundColor = SKColors.White
             });
 
-            using var pngStream = new MemoryStream();
-            skBitmap.Encode(pngStream, SKEncodedImageFormat.Png, 100);
-            pngStream.Position = 0;
+            // Feed raw BGRA pixels straight into a BitmapSource. The old path PNG-encoded
+            // the 300-DPI page and PNG-decoded it again via BitmapImage — two expensive
+            // codec roundtrips per page (multi-second on A3 booklets).
+            // Only wrap the intermediate in `using` when a copy was actually made —
+            // aliasing `skBitmap` into `using var bgra` would double-dispose it.
+            var needsCopy = skBitmap.ColorType != SKColorType.Bgra8888;
+            using var copy = needsCopy ? skBitmap.Copy(SKColorType.Bgra8888) : null;
+            var bgra = needsCopy ? copy! : skBitmap;
+            var stride = bgra.RowBytes;
+            var pixels = new byte[stride * bgra.Height];
+            Marshal.Copy(bgra.GetPixels(), pixels, 0, pixels.Length);
 
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.StreamSource = pngStream;
-            bmp.EndInit();
+            var bmp = BitmapSource.Create(
+                bgra.Width, bgra.Height, 96, 96,
+                skBitmap.Info.AlphaType == SKAlphaType.Unpremul
+                    ? System.Windows.Media.PixelFormats.Pbgra32
+                    : System.Windows.Media.PixelFormats.Bgra32,
+                null, pixels, stride);
             bmp.Freeze();
 
-            var page = new FixedPage { Width = _pageSize.Width, Height = _pageSize.Height };
+            var page = new System.Windows.Controls.Canvas { Width = _pageSize.Width, Height = _pageSize.Height };
             page.Children.Add(new System.Windows.Controls.Image
             {
                 Source = bmp, Width = _pageSize.Width, Height = _pageSize.Height,

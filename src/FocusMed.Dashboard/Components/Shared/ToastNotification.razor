@@ -1,7 +1,7 @@
 @if (!string.IsNullOrEmpty(Message))
 {
-    <div class="fixed bottom-6 right-6 z-50 @(IsError ? "bg-red-600" : "bg-emerald-600") text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 text-sm font-medium animate-slide-in-right"
-         role="@((IsError ? "alert" : "status"))" aria-live="assertive" aria-atomic="true">
+    <div class="fixed bottom-6 right-6 z-50 @(IsError ? "bg-red-600" : "bg-emerald-600") text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 text-sm font-medium animate-slide-in-right max-w-md"
+         role="@((IsError ? "alert" : "status"))" aria-live="@(IsError ? "assertive" : "polite")" aria-atomic="true">
         @if (IsError)
         {
             <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -14,7 +14,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
             </svg>
         }
-        <span>@Message</span>
+        <span class="break-words">@Message</span>
         <button @onclick="OnDismiss" class="ml-2 p-1 rounded-lg hover:bg-white/20 transition-colors shrink-0" title="Fermer">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />

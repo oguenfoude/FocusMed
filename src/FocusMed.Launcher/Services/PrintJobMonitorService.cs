@@ -3,7 +3,7 @@ using System.IO;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 
-namespace FocusMed.PrintCapture.Services;
+namespace FocusMed.Launcher.Services;
 
 public class PrintJobMonitorService : IDisposable
 {

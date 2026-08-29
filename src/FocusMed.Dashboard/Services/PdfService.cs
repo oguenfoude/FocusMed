@@ -437,25 +437,56 @@ public class PdfService
         var perPage = Math.Max(1, imagesPerPage);
         var gap = (float)Math.Max(0, gapPx);
         var margin = (float)Math.Max(0, marginPx);
+        var imageAspect = EstimateImageAspect(imagePaths);
+        var pageAspect = questPageSize.Width / questPageSize.Height;
 
-        int cols = perPage switch
+        // Images-layer cache: covers + merge are cheap; QuestPDF rendering is the slow part.
+        // Keying on (paths + layout + size + algo version) means frame toggles that only
+        // change the selection reuse a previously rendered images PDF instead of re-running
+        // QuestPDF from scratch. "images_v2" busts cache after the balanced-split change.
+        var imagesKeyBytes = System.Security.Cryptography.MD5.HashData(
+            System.Text.Encoding.UTF8.GetBytes(
+                $"images_v2|{pageSize}|{perPage}|{gapPx}|{marginPx}|{string.Join(";", imagePaths)}"));
+        var imagesHash = Convert.ToHexString(imagesKeyBytes).ToLowerInvariant();
+        var imagesCachePath = Path.Combine(_pdfCacheDir, $"images_{imagesHash}.pdf");
+
+        if (File.Exists(imagesCachePath))
         {
-            1 => 1,
-            2 => 2,
-            3 => 3,
-            4 => 2,
-            5 or 6 => 3,
-            7 or 8 or 9 => 3,
-            10 or 11 or 12 => 4,
-            13 or 14 or 15 or 16 => 4,
-            _ => (int)Math.Ceiling(Math.Sqrt(perPage))
-        };
+            File.Copy(imagesCachePath, outputPath, overwrite: true);
+            return;
+        }
+
+        // Pre-read all image bytes in parallel so rendering is fast and a slow disk
+        // read cannot stall individual page layout.
+        var bytesByPath = new ConcurrentDictionary<string, byte[]>();
+        Parallel.ForEach(imagePaths, imgPath =>
+        {
+            try { bytesByPath[imgPath] = File.ReadAllBytes(imgPath); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Failed to read image for PDF: {Path}", imgPath); }
+        });
+
+        // Balanced page split: spread the images as evenly as possible so the last
+        // page is never a sparse tail (e.g. 13 → 5+4+4, not 5+5+3). Every page then
+        // re-lays out its own grid to FILL the whole page (auto, scalable, flexible).
+        var total = imagePaths.Count;
+        var pageCount = Math.Max(1, (int)Math.Ceiling(total / (double)perPage));
+        var baseCount = total / pageCount;
+        var remainder = total - baseCount * pageCount;
 
         var document = QuestPDF.Fluent.Document.Create(container =>
         {
-            for (int i = 0; i < imagePaths.Count; i += perPage)
+            var offset = 0;
+            for (int p = 0; p < pageCount; p++)
             {
-                var batch = imagePaths.Skip(i).Take(perPage).ToList();
+                var batchSize = baseCount + (p < remainder ? 1 : 0);
+                var batch = imagePaths.Skip(offset).Take(batchSize).ToList();
+                offset += batchSize;
+
+                // Per-page grid: computed from the actual batch so every page fills.
+                var cols = ComputeGridCols(batch.Count, imageAspect, pageAspect);
+                var rows = (int)Math.Ceiling(batch.Count / (double)cols);
+                var cellH = (questPageSize.Height - 2 * margin - gap * (rows - 1)) / rows;
+
                 container.Page(page =>
                 {
                     page.Size(questPageSize);
@@ -474,8 +505,10 @@ public class PdfService
                         {
                             try
                             {
-                                var imgBytes = File.ReadAllBytes(imgPath);
+                                if (!bytesByPath.TryGetValue(imgPath, out var imgBytes))
+                                    imgBytes = File.ReadAllBytes(imgPath);
                                 table.Cell()
+                                    .Height(cellH)
                                     .Padding(gap / 2f)
                                     .AlignCenter()
                                     .AlignMiddle()
@@ -494,6 +527,75 @@ public class PdfService
 
         using var fs = File.Create(outputPath);
         document.GeneratePdf(fs);
+
+        try
+        {
+            File.Copy(outputPath, imagesCachePath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Images-layer cache write failed (non-fatal): {Path}", imagesCachePath);
+        }
+    }
+
+    /// <summary>
+    /// Estimates the median pixel aspect ratio (width/height) of the given PNG files
+    /// by reading each file's IHDR chunk (bytes 16-23, big-endian). Falls back to 4:3.
+    /// </summary>
+    private static double EstimateImageAspect(IReadOnlyList<string> imagePaths)
+    {
+        var aspects = new List<double>();
+        var sample = imagePaths.Take(8).ToList();
+        foreach (var path in sample)
+        {
+            try
+            {
+                using var fs = File.OpenRead(path);
+                var header = new byte[24];
+                if (fs.Read(header, 0, 24) < 24) continue;
+                if (header[0] != 0x89 || header[1] != 0x50 || header[12] != (byte)'I' || header[13] != (byte)'H') continue;
+                var w = (header[16] << 24) | (header[17] << 16) | (header[18] << 8) | header[19];
+                var h = (header[20] << 24) | (header[21] << 16) | (header[22] << 8) | header[23];
+                if (w > 0 && h > 0 && w <= 65536 && h <= 65536)
+                    aspects.Add(w / (double)h);
+            }
+            catch { }
+        }
+        if (aspects.Count == 0) return 4.0 / 3.0;
+        aspects.Sort();
+        return aspects[aspects.Count / 2];
+    }
+
+    /// <summary>
+    /// Picks the column count for a grid that fills the page with the given number of images.
+    /// Rows = ceil(count / cols). The grid ratio rows/cols is matched to the page-to-image aspect
+    /// so landscape images stack vertically (fill the paper) and larger sets get a denser grid.
+    /// Images stay `.FitArea()` (contain — never crops anatomy). 1→1, 2→1×2, 3→1×3, 4→2×2, 5-6→2×3,
+    /// 8→2×4, 9→2×5, 12→3×4, 16→3×6 for typical 4:3 images on a portrait page.
+    /// </summary>
+    public static int ComputeGridCols(int count, double imageAspect = 0, double pageAspect = 0)
+    {
+        if (count <= 0) return 1;
+        var ia = imageAspect <= 0 ? 4.0 / 3.0 : imageAspect;
+        var pa = pageAspect <= 0 ? 595.0 / 842.0 : pageAspect;
+        var targetRatio = Math.Clamp(ia / pa, 0.4, 2.5); // rows/cols that best fills the page
+        var logTarget = Math.Log(targetRatio);
+
+        var bestCols = 1;
+        var bestCost = double.MaxValue;
+        for (int cols = 1; cols <= count; cols++)
+        {
+            var rows = (int)Math.Ceiling(count / (double)cols);
+            var ratioCost = Math.Abs(Math.Log(rows / (double)cols) - logTarget);
+            var waste = (double)(rows * cols - count) / count;
+            var cost = ratioCost + 0.35 * waste;
+            if (cost < bestCost)
+            {
+                bestCost = cost;
+                bestCols = cols;
+            }
+        }
+        return bestCols;
     }
 
     private void MergePdfs(string outputPath, string coverPdfPath, string? resumePdfPath, string? imagesPdfPath, string pageSize = "A4", bool padToMultipleOf4 = false)
@@ -571,6 +673,24 @@ public class PdfService
     public void DeletePdf(string pdfUrl)
     {
         DeletePdfAsync(pdfUrl).GetAwaiter().GetResult();
+    }
+
+    public int GetPageCount(string pdfUrl)
+    {
+        if (string.IsNullOrEmpty(pdfUrl)) return 0;
+        var relativePath = pdfUrl.TrimStart('/');
+        var filePath = Path.Combine(_pdfCacheDir, Path.GetFileName(relativePath));
+        if (!File.Exists(filePath)) return 0;
+        try
+        {
+            using var doc = PdfReader.Open(filePath, PdfDocumentOpenMode.Import);
+            return doc.PageCount;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "GetPageCount failed for {Path}", pdfUrl);
+            return 0;
+        }
     }
 
     private async Task CleanupOldPdfsAsync(int maxAgeMinutes = 60)

@@ -1,8 +1,8 @@
 using System.IO;
 using System.Windows;
-using FocusMed.PrintCapture.Services;
+using FocusMed.Launcher.Services;
 
-namespace FocusMed.PrintCapture.Windows;
+namespace FocusMed.Launcher.Windows;
 
 public partial class ResumePickerWindow : Window
 {

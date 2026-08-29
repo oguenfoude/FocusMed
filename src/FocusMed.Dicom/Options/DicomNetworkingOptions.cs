@@ -9,6 +9,7 @@ public class DicomNetworkingOptions
     public string BindAddress { get; set; } = "0.0.0.0";
     public int DicomPort { get; set; } = 11112;
     public bool EnforceAeWhitelist { get; set; }
+    public int PrintMergeWindowSeconds { get; set; } = 300;
     public List<string> SupportedTransferSyntaxes { get; set; } = [];
     public List<AllowedCallingAe> AllowedCallingAETitles { get; set; } = [];
     public Dictionary<string, AeEndpoint> StorageCommitmentScuMapping { get; set; } = [];

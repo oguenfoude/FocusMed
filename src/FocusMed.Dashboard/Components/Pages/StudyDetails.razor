@@ -42,30 +42,29 @@
 }
 else
 {
+    <div class="flex flex-col flex-1 min-h-[700px] min-w-0 gap-5">
     <!-- Top Breadcrumb Bar -->
-    <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
-        <div class="flex items-center gap-2 text-sm text-slate-500">
-            <a href="/" class="hover:text-brand-600 font-semibold transition-colors flex items-center gap-1">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-                Études
-            </a>
-            <span class="text-slate-300">/</span>
-            <span class="text-slate-900 font-bold text-base">@(DicomHelpers.FormatPatientName(Study.Patient?.PatientName))</span>
-            <span class="text-slate-400">·</span>
-            <span class="text-slate-500">@(Study.StudyDate?.ToString("dd/MM/yyyy") ?? Study.CreatedAt.ToString("dd/MM/yyyy"))</span>
-        </div>
+    <div class="flex items-center gap-2 text-sm text-slate-500 flex-wrap shrink-0">
+        <a href="/" class="hover:text-brand-600 font-semibold transition-colors flex items-center gap-1">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+            Études
+        </a>
+        <span class="text-slate-300">/</span>
+        <span class="text-slate-900 font-bold text-base">@(DicomHelpers.FormatPatientName(Study.Patient?.PatientName))</span>
+        <span class="text-slate-400">·</span>
+        <span class="text-slate-500">@(Study.StudyDate?.ToString("dd/MM/yyyy") ?? Study.CreatedAt.ToString("dd/MM/yyyy"))</span>
     </div>
 
     <!-- Big Patient Info Card -->
-    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 mb-4">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-3 shrink-0">
         <div class="flex flex-wrap items-center justify-between gap-6">
             <!-- Patient identity block (Big text) -->
-            <div class="flex items-center gap-4 min-w-[280px]">
-                <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shrink-0 shadow-lg shadow-brand-500/20 text-white">
-                    <svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>
+            <div class="flex items-center gap-3 min-w-[280px]">
+                <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shrink-0 shadow-lg shadow-brand-500/20 text-white">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>
                 </div>
                 <div>
-                    <h1 class="text-2xl font-extrabold text-slate-900 tracking-tight leading-none mb-2">@(DicomHelpers.FormatPatientName(Study.Patient?.PatientName))</h1>
+                    <h1 class="text-lg font-extrabold text-slate-900 tracking-tight leading-none mb-1.5">@(DicomHelpers.FormatPatientName(Study.Patient?.PatientName))</h1>
                     <div class="flex flex-wrap items-center gap-2 text-xs">
                         <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-mono font-bold border border-slate-200">ID: @(string.IsNullOrWhiteSpace(Study.Patient?.PatientId) ? "—" : Study.Patient.PatientId)</span>
                         <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-semibold border border-slate-200">@FormatSex(Study.Patient?.Sex)</span>
@@ -108,19 +107,19 @@ else
             </div>
         </div>
 
-        <!-- Patient Card Bottom Controls Row: Resume + PDF Controls + Print Button -->
-        <div class="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-4">
-            <!-- Left: Resume Status -->
-            <div class="flex items-center gap-2">
-                <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">Résumé Médical:</span>
+        <!-- Patient Card Bottom Controls: 3 clean titled zones (Résumé / Mise en page / Impression) -->
+        <div class="mt-3 pt-3 border-t border-slate-100 grid grid-cols-1 xl:grid-cols-[auto_1fr_auto] gap-3 items-stretch">
+            <!-- Zone 1: Résumé -->
+            <div class="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-50/60 border border-slate-100 min-w-0">
+                <span class="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">Résumé</span>
                 @if (!string.IsNullOrEmpty(Study.ResumePdfPath))
                 {
-                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                        Résumé associé (@Path.GetFileName(Study.ResumePdfPath))
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200 truncate min-w-0" title="@Study.ResumePdfPath">
+                        <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                        <span class="truncate">Résumé associé</span>
                     </span>
                     <button @onclick="OpenUnlinkConfirm" disabled="@IsUnlinking"
-                            class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors disabled:opacity-50 shadow-sm"
+                            class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors disabled:opacity-50 shrink-0"
                             title="Supprimer le résumé associé">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
                         Retirer
@@ -132,20 +131,55 @@ else
                 }
             </div>
 
-            <!-- Right: Print (dropdown + copies + button) -->
-            <div class="flex items-center gap-2 flex-wrap">
+            <!-- Zone 2: Mise en page -->
+            <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-slate-50/60 border border-slate-100 flex-wrap min-w-0">
+                <span class="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">Mise en page</span>
+                <div class="flex items-center gap-1.5">
+                    <span class="text-xs text-slate-500 font-medium">Images/page</span>
+                    <input type="number" min="1" max="16" placeholder="Auto"
+                           @bind="ImagesPerPageInput" @bind:after="OnLayoutChanged" disabled="@IsRegeneratingPdf"
+                           class="w-20 px-2 py-2 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 text-center disabled:opacity-50"
+                           title="Nombre d'images par page. Vide = Auto (répartition uniforme, ≤ 6 images par page)." />
+                    @if (ImagesPerPageMode == "Auto")
+                    {
+                        <span class="text-[10px] font-bold px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+                              title="Répartition automatique selon le nombre d'images sélectionnées">
+                            Auto → @EffectiveImagesPerPage/page · @EstimatedPageCount page(s)
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="text-[10px] font-medium px-2 py-1 rounded-full bg-slate-50 text-slate-600 border border-slate-200">
+                            @EffectiveImagesPerPage/page · @EstimatedPageCount page(s)
+                        </span>
+                    }
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <span class="text-xs text-slate-500 font-medium">Marge</span>
+                    <input type="number" min="0" max="50" @bind="MarginPx" @bind:after="OnLayoutChanged" disabled="@IsRegeneratingPdf"
+                           class="w-16 px-2 py-2 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 text-center disabled:opacity-50"
+                           title="Marge de la page en mm" />
+                    <span class="text-xs text-slate-500">mm</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <span class="text-xs text-slate-500 font-medium">Espacement</span>
+                    <input type="number" min="0" max="20" @bind="GapPx" @bind:after="OnLayoutChanged" disabled="@IsRegeneratingPdf"
+                           class="w-16 px-2 py-2 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 text-center disabled:opacity-50"
+                           title="Espacement entre les images en mm" />
+                    <span class="text-xs text-slate-500">mm</span>
+                </div>
+            </div>
+
+            <!-- Zone 3: Impression (primary action) -->
+            <div class="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-brand-50/50 border border-brand-100 flex-wrap justify-end">
+                <span class="text-xs font-bold text-brand-700 uppercase tracking-wider shrink-0">Impression</span>
                 <select @bind="SelectedPrintMode" @bind:after="OnPrintModeChanged" disabled="@IsPrinting"
-                        class="px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        class="px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Livret : A4 plié en A3, agrafé au centre. Plat : feuilles simples.">
                     <option value="BookletA3">Livret A3 — plié + agrafé</option>
                     <option value="FlatA3">Plat A3</option>
                     <option value="FlatA4">Plat A4</option>
                 </select>
-
-                <input type="number" min="1" max="99" @bind="Copies" disabled="@IsPrinting"
-                       class="w-14 px-2 py-2 text-xs bg-white border border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-500 text-center disabled:opacity-50 disabled:cursor-not-allowed"
-                       title="Nombre d'exemplaires" />
-
                 <button @onclick="PrintStudy" disabled="@(IsPrinting || IsRegeneratingPdf || string.IsNullOrEmpty(PdfPreviewUrl))"
                         class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-brand-600 to-brand-700 hover:from-brand-700 hover:to-brand-800 border border-brand-700 transition-all disabled:opacity-50 shadow-md shadow-brand-500/20 active:scale-[0.98]">
                     @if (IsPrinting)
@@ -162,26 +196,26 @@ else
             </div>
         </div>
     </div>
+    <div class="flex flex-col lg:flex-row flex-1 min-h-[650px] gap-5">
 
-    <!-- Main content: Sidebar + PDF Preview -->
-    <div class="flex gap-4" style="height: calc(100vh - 270px); min-height: 500px;">
-
-        <!-- IMAGE SIDEBAR (narrow, scrollable) -->
-        <div class="w-80 shrink-0 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+        <!-- IMAGE SIDEBAR (scrollable) -->
+        <div class="w-full lg:w-96 shrink-0 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden min-w-0">
             <!-- Sidebar header -->
             <div class="px-3 py-2.5 border-b border-slate-100 bg-slate-50/50">
                 <div class="flex items-center justify-between mb-2">
-                    <span class="text-sm font-bold text-slate-800">Images</span>
+                    <span class="text-sm font-bold text-slate-800 flex items-center gap-2">
+                        Images
+                        @if (AvailableFrames.Count > 0)
+                        {
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-100">@AvailableFrames.Count</span>
+                        }
+                    </span>
                     @if (IsExtracting)
                     {
                         <span class="text-[10px] text-brand-600 font-medium flex items-center gap-1">
                             <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                            …
+                            Extraction…
                         </span>
-                    }
-                    else
-                    {
-                        <span class="text-[10px] text-slate-400 font-medium">@AvailableFrames.Count</span>
                     }
                 </div>
                 @if (!IsExtracting && AvailableFrames.Count > 0)
@@ -194,7 +228,7 @@ else
             </div>
 
             <!-- Thumbnail list (scrollable) -->
-            <div class="flex-1 overflow-y-auto p-2 space-y-1.5">
+            <div class="flex-1 overflow-y-auto p-2 space-y-1 max-h-[420px] lg:max-h-none">
                 @if (ImageError != null)
                 {
                     <div class="text-[10px] text-red-600 bg-red-50 rounded-lg p-2">@ImageError</div>
@@ -202,7 +236,7 @@ else
                 else if (IsExtracting)
                 {
                     <div class="flex flex-col items-center justify-center py-10 gap-2 text-slate-400">
-                        <svg class="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                        <svg class="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                         <span class="text-[10px] font-medium">Extraction des images…</span>
                     </div>
                 }
@@ -222,7 +256,7 @@ else
                         var i = idx;
                         idx++;
                         var isSelected = SelectedFrameIds.Contains(frame.SopInstanceUid);
-                        <div class="group flex items-center gap-3 p-2 rounded-xl cursor-pointer transition-colors @(isSelected ? "bg-brand-50 border border-brand-200" : "hover:bg-slate-50 border border-transparent")"
+                        <div class="group flex items-center gap-2.5 py-1.5 pl-2 pr-1.5 rounded-lg cursor-pointer transition-colors @(isSelected ? "bg-brand-50 border border-brand-200" : "hover:bg-slate-50 border border-transparent")"
                              @onclick="() => ToggleFrameSelection(frame.SopInstanceUid)"
                              @ondblclick="() => OpenLightbox(i)">
                             <div class="w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors @(isSelected ? "bg-brand-500 border-brand-500" : "border-slate-300 bg-white")">
@@ -231,17 +265,15 @@ else
                                     <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>
                                 }
                             </div>
-                            <div class="w-32 h-24 rounded-lg bg-slate-100 overflow-hidden shrink-0 border border-slate-200">
+                            <div class="w-28 h-24 rounded-lg bg-slate-100 overflow-hidden shrink-0 border @(isSelected ? "border-brand-300" : "border-slate-200 group-hover:border-brand-200") transition-colors">
                                 <img src="@webPath" class="w-full h-full object-contain" alt="Frame @(frame.FrameIndex + 1)" loading="lazy" />
                             </div>
-                            <div class="flex-1 min-w-0">
-                                <div class="flex items-center gap-2">
-                                    <span class="text-sm font-bold text-slate-900">@(frame.FrameIndex + 1)</span>
-                                    @if (!string.IsNullOrEmpty(frame.Modality))
-                                    {
-                                        <span class="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">@frame.Modality</span>
-                                    }
-                                </div>
+                            <div class="flex-1 min-w-0 flex items-center gap-2">
+                                <span class="text-sm font-bold text-slate-900">@(frame.FrameIndex + 1)</span>
+                                @if (!string.IsNullOrEmpty(frame.Modality))
+                                {
+                                    <span class="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md truncate">@frame.Modality</span>
+                                }
                             </div>
                             <button @onclick="() => OpenLightbox(i)" @onclick:stopPropagation
                                      class="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-slate-200 transition-all shrink-0" title="Agrandir">
@@ -283,22 +315,45 @@ else
             }
             else if (!string.IsNullOrEmpty(PdfPreviewUrl))
             {
-                <div class="relative flex-1 w-full h-full">
-                    <iframe src="@PdfPreviewUrl"
-                            style="width: 100%; height: 100%; border: none;"
-                            title="Aperçu PDF"></iframe>
-                    @if (IsRegeneratingPdf)
-                    {
-                        <div class="absolute inset-0 bg-white/40 backdrop-blur-[1px] flex items-center justify-center pointer-events-none transition-all z-10">
-                            <div class="bg-white/95 shadow-xl border border-slate-200 px-4 py-2 rounded-xl flex items-center gap-2 text-xs font-bold text-brand-700">
-                                <svg class="w-4 h-4 text-brand-600 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                                Mise à jour du PDF…
-                            </div>
+                <div class="relative flex-1 w-full h-full flex flex-col min-w-0">
+                    <!-- Preview toolbar: format / page count / open in new tab -->
+                    <div class="shrink-0 flex items-center justify-between gap-3 px-4 py-2 border-b border-slate-100 bg-slate-50/70">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="text-xs font-bold text-slate-700 uppercase tracking-wider shrink-0">Aperçu PDF</span>
+                            <span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-brand-50 text-brand-700 border border-brand-100 hidden sm:inline-flex">
+                                @(SelectedPrintMode == "FlatA3" ? "A3 plat" : SelectedPrintMode == "FlatA4" ? "A4 plat" : "A3 livret")
+                            </span>
+                            @if (PageCount > 0)
+                            {
+                                <span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">@PageCount page(s) · @SelectedFrameIds.Count image(s)</span>
+                            }
                         </div>
-                    }
+                        <div class="flex items-center gap-2 shrink-0">
+                            @if (IsRegeneratingPdf)
+                            {
+                                <span class="inline-flex items-center gap-1.5 text-[10px] font-bold text-brand-700 bg-brand-50 border border-brand-200 px-2 py-1 rounded-lg">
+                                    <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                    Régénération…
+                                </span>
+                            }
+                            <a href="@PdfPreviewUrl" target="_blank" rel="noopener"
+                               class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 hover:text-brand-700 transition-colors"
+                               title="Ouvrir le PDF en plein écran">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" /></svg>
+                                Ouvrir
+                            </a>
+                        </div>
+                    </div>
+                    <!-- PDF frame -->
+                    <div class="relative flex-1 w-full min-h-0">
+                        <iframe src="@PdfPreviewUrl"
+                                style="width: 100%; height: 100%; border: none;"
+                                title="Aperçu PDF"></iframe>
+                    </div>
                 </div>
             }
         </div>
+    </div>
     </div>
 
 
@@ -362,8 +417,6 @@ else
               OnConfirm="ConfirmUnlinkResume"
               OnCancel="CancelUnlinkResume" />
 
-
-
 <!-- Toast notification -->
 <ToastNotification Message="@StatusMessage" IsError="@IsError" OnDismiss="ClearToast" />
 
@@ -379,12 +432,53 @@ else
     private bool IsExtracting = true;
     private string? ImageError;
 
-    private const int ImagesPerPage = 1;
-    private const int GapPx = 1;
-    private const int MarginPx = 10;
+    private string ImagesPerPageInput = "1";
+    private int GapPx = 1;
+    private int MarginPx = 10;
+
+    // Empty (or invalid) text = Auto. Valid numbers 1..16 = manual override.
+    private string ImagesPerPageMode => string.IsNullOrWhiteSpace(ImagesPerPageInput)
+        ? "Auto"
+        : int.TryParse(ImagesPerPageInput.Trim(), out var v) && v >= 1 && v <= 16
+            ? v.ToString()
+            : "Auto";
+
+    private int ManualImagesPerPage => ImagesPerPageMode == "Auto"
+        ? EffectiveAutoPerPage
+        : int.Parse(ImagesPerPageMode);
+
+    // Auto: max images-per-page cap (≤ 6 unless the user typed more). The actual page
+    // split is balanced by PdfService (13 → 5+4+4, 7 → 4+3) so every page fills fully.
+    private int EffectiveAutoPerPage => ComputeAutoPerPage(Math.Max(1, SelectedFrameIds.Count));
+
+    private int EffectiveImagesPerPage => ImagesPerPageMode == "Auto"
+        ? EffectiveAutoPerPage
+        : ManualImagesPerPage;
+
+    // Estimated output page count for the layout badge. Booklet pads to a multiple
+    // of 4 pages (imposition), so the page count is rounded up to 4 here too.
+    private int EstimatedPageCount
+    {
+        get
+        {
+            var count = Math.Max(1, SelectedFrameIds.Count);
+            var pages = (int)Math.Ceiling(count / (double)EffectiveImagesPerPage);
+            if (SelectedPrintMode == "BookletA3")
+                pages = (int)(Math.Ceiling(pages / 4.0) * 4);
+            return pages;
+        }
+    }
+
+    private static int ComputeAutoPerPage(int count)
+    {
+        if (count <= 0) return 1;
+        var pages = (int)Math.Ceiling(count / 6.0);
+        return Math.Clamp((int)Math.Ceiling(count / (double)pages), 1, 16);
+    }
 
     private string? PdfPreviewUrl;
     private bool IsRegeneratingPdf;
+    private int PageCount;
     private CancellationTokenSource? _regenCts;
 
 
@@ -402,7 +496,6 @@ else
 
     private string SelectedPrintMode { get; set; } = "BookletA3";
     private bool IsPrinting;
-    private int Copies = 1;
 
     private string StatusMessage = "";
     private bool IsError = false;
@@ -433,8 +526,23 @@ else
             .AsSplitQuery()
             .FirstOrDefaultAsync(s => s.Id == Id);
 
+        if (Study != null)
+            ImagesPerPageInput = DefaultImagesPerPage(Study);
+
         IsLoading = false;
         await InvokeAsync(StateHasChanged);
+    }
+
+    // CT and OT (diagnostic image series) default to 1 image per page so each slice is
+    // reviewed at full scale. Other modalities (SC prints, prescriptions, etc.) default
+    // to Auto (empty) so any image count — 2, 3, 4, 5… — is auto-scaled to fit the page.
+    // Manual override 1..16 always wins once the user types a number.
+    private static string DefaultImagesPerPage(Study study)
+    {
+        var onePerPage = study.Series.Any(s =>
+            string.Equals(s.Modality, "CT", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s.Modality, "OT", StringComparison.OrdinalIgnoreCase));
+        return onePerPage ? "1" : "";
     }
 
     private async Task ExtractImagesAsync()
@@ -447,11 +555,17 @@ else
             Frames = await PngExtractionService.GetOrExtractFramesAsync(Study!.Id);
             _availableFrames = Frames.Where(f => f.FileExists).ToList();
 
-            var modalities = _availableFrames.Select(f => f.Modality).Where(m => !string.IsNullOrEmpty(m)).Distinct().ToList();
-            if (modalities.Contains("OT"))
-                SelectedFrameIds = new HashSet<string>(_availableFrames.Where(f => f.Modality == "OT").Select(f => f.SopInstanceUid));
-            else
-                SelectedFrameIds = new HashSet<string>(_availableFrames.Select(f => f.SopInstanceUid));
+            // Default: select the PRINT frames (Modality "OT" for legacy prints, "SC" for new
+            // prints) when the study mixes prints with C-STORE data (e.g. CT). In an
+            // OT/CT merged study the print images (the films) are what the user prints —
+            // C-STORE frames start deselected. A study with only C-STORE frames (no
+            // print-like modality) still starts fully selected.
+            var printLike = new[] { "OT", "SC" };
+            var hasPrintFrames = _availableFrames.Any(f => printLike.Contains(f.Modality, StringComparer.OrdinalIgnoreCase));
+            SelectedFrameIds = new HashSet<string>(
+                hasPrintFrames
+                    ? _availableFrames.Where(f => printLike.Contains(f.Modality, StringComparer.OrdinalIgnoreCase)).Select(f => f.SopInstanceUid)
+                    : _availableFrames.Select(f => f.SopInstanceUid));
 
             if (SelectedFrameIds.Count > 0)
                 await RegeneratePdfPreviewAsync();
@@ -486,6 +600,7 @@ else
                 if (!string.IsNullOrEmpty(PdfPreviewUrl))
                     try { PdfService.DeletePdf(PdfPreviewUrl); } catch { }
                 PdfPreviewUrl = null;
+                PageCount = 0;
                 await InvokeAsync(StateHasChanged);
                 return;
             }
@@ -515,7 +630,7 @@ else
             string pdfPageSize = SelectedPrintMode == "FlatA3" ? "A3" : "A4";
 
             var newUrl = await Task.Run(() =>
-                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, pdfPageSize, isBooklet, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx), ct);
+                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, pdfPageSize, isBooklet, imagesPerPage: EffectiveImagesPerPage, gapPx: GapPx, marginPx: MarginPx), ct);
 
 
 
@@ -526,6 +641,7 @@ else
             {
                 var oldUrl = PdfPreviewUrl;
                 PdfPreviewUrl = newUrl;
+                PageCount = PdfService.GetPageCount(newUrl);
                 IsRegeneratingPdf = false;
                 await InvokeAsync(StateHasChanged);
                 if (!string.IsNullOrEmpty(oldUrl) && oldUrl != newUrl)
@@ -534,6 +650,7 @@ else
             else
             {
                 PdfPreviewUrl = null;
+                PageCount = 0;
                 IsRegeneratingPdf = false;
                 await InvokeAsync(StateHasChanged);
             }
@@ -551,6 +668,14 @@ else
     {
         // Regenerate so the iframe matches the selected print mode (A3 for flat A3,
         // A4 for booklet/flat A4). The actual A3 booklet imposition happens only at print time.
+        if (SelectedFrameIds.Count > 0)
+            _ = RegeneratePdfPreviewAsync();
+    }
+
+    private void OnLayoutChanged()
+    {
+        // Layout options (images per page / margin / gap) directly affect the preview layout.
+        // Debounced inside RegeneratePdfPreviewAsync; the pdf-cache key includes these values.
         if (SelectedFrameIds.Count > 0)
             _ = RegeneratePdfPreviewAsync();
     }
@@ -685,13 +810,13 @@ else
             if (isBooklet)
             {
                 tempPdfPath = await Task.Run(() =>
-                    PdfService.GenerateBookletPrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx));
+                    PdfService.GenerateBookletPrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, imagesPerPage: EffectiveImagesPerPage, gapPx: GapPx, marginPx: MarginPx));
                 pdfPath = tempPdfPath;
             }
             else if (SelectedPrintMode == "FlatA3")
             {
                 tempPdfPath = await Task.Run(() =>
-                    PdfService.GenerateFlatPrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, imagesPerPage: ImagesPerPage, gapPx: GapPx, marginPx: MarginPx));
+                    PdfService.GenerateFlatPrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, imagesPerPage: EffectiveImagesPerPage, gapPx: GapPx, marginPx: MarginPx));
                 pdfPath = tempPdfPath;
             }
             else
@@ -712,7 +837,7 @@ else
                 PdfPath = pdfPath,
                 Profile = profile,
                 PrinterName = presetName,
-                Copies = Copies,
+                Copies = 1,
                 ForceGrayscale = profile.ForceGrayscale
             });
 

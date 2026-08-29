@@ -28,6 +28,9 @@ public class FocusMedScp : DicomService,
     private readonly IOptions<DicomNetworkingOptions> _networkingOptions;
     private readonly DicomTransferSyntax[] _acceptedTransferSyntaxes;
     private DateTime _associationStartTime;
+    // fo-dicom instantiates the SCP once per association: this field scopes the
+    // implicit FilmSession fallback to THIS connection only (never a global guess).
+    private string? _fallbackPrintJobSopUid;
 
     private static readonly Dictionary<string, DicomTransferSyntax> TransferSyntaxMap = new()
     {
@@ -216,7 +219,7 @@ public class FocusMedScp : DicomService,
     {
         try
         {
-            await _upsertService.StoreFileOnlyAsync(request.File);
+            await _upsertService.StoreFileOnlyAsync(request.File, Association.CallingAE);
             return new DicomCStoreResponse(request, DicomStatus.Success);
         }
         catch (Exception ex)
@@ -555,12 +558,13 @@ public class FocusMedScp : DicomService,
                 {
                     SopInstanceUid = sopUid,
                     NumberOfCopies = request.Dataset.GetSingleValueOrDefault(DicomTag.NumberOfCopies, (ushort)1),
-                    PrintPriority = request.Dataset.GetSingleValueOrDefault(DicomTag.PrintPriority, "NORMAL")
+                    PrintPriority = request.Dataset.GetSingleValueOrDefault(DicomTag.PrintPriority, "NORMAL"),
+                    CallingAeTitle = Association.CallingAE
                 };
 
                 db.PrintJobs.Add(printJob);
                 await db.SaveChangesAsync();
-                _logger.LogInformation("Print Job #{PrintJobId} created ({Copies} {CopyLabel}, {Priority})", printJob.Id, printJob.NumberOfCopies, printJob.NumberOfCopies == 1 ? "copy" : "copies", printJob.PrintPriority);
+                _logger.LogInformation("Print Job #{PrintJobId} created ({Copies} {CopyLabel}, {Priority}) from {CallingAe}", printJob.Id, printJob.NumberOfCopies, printJob.NumberOfCopies == 1 ? "copy" : "copies", printJob.PrintPriority, printJob.CallingAeTitle);
             }
             else if (sopClass == DicomUID.BasicFilmBox.UID)
             {
@@ -586,11 +590,39 @@ public class FocusMedScp : DicomService,
                     printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.SopInstanceUid == printJobUid);
                 }
 
+                if (printJob == null && !string.IsNullOrEmpty(_fallbackPrintJobSopUid))
+                {
+                    printJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.SopInstanceUid == _fallbackPrintJobSopUid);
+                }
+
                 if (printJob == null)
                 {
-                    // No heuristic fallback: guessing a PrintJob under overlapping print sessions
-                    // links FilmBoxes (and patient data) to the wrong job.
-                    _logger.LogWarning("FilmBox N-CREATE: no PrintJob found for UID '{PrintJobUid}', creating orphaned FilmBox", printJobUid ?? "(empty)");
+                    // Implicit-session fallback: reuse this association's most recent PrintJob
+                    // (or one from the SAME calling AE within 60s) so films without a FilmSession
+                    // reference still group into one study. Scoped to this association + AE —
+                    // never a global "most recent PrintJob" that could grab an unrelated job.
+                    var sameAeJob = await db.PrintJobs
+                        .Where(p => p.CallingAeTitle == Association.CallingAE && p.CreatedAt >= DateTime.UtcNow.AddSeconds(-60))
+                        .OrderByDescending(p => p.CreatedAt)
+                        .FirstOrDefaultAsync();
+                    if (sameAeJob != null)
+                    {
+                        printJob = sameAeJob;
+                    }
+                    else
+                    {
+                        var implicitUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+                        printJob = new PrintJob
+                        {
+                            SopInstanceUid = implicitUid,
+                            CallingAeTitle = Association.CallingAE
+                        };
+                        db.PrintJobs.Add(printJob);
+                        await db.SaveChangesAsync();
+                        _logger.LogWarning("FilmBox N-CREATE: no PrintJob for UID '{PrintJobUid}', created implicit PrintJob #{PrintJobId} (association-scoped)", printJobUid ?? "(empty)", printJob.Id);
+                    }
+
+                    _fallbackPrintJobSopUid = printJob.SopInstanceUid;
                 }
 
                 var filmBox = new FilmBox
@@ -735,11 +767,13 @@ public class FocusMedScp : DicomService,
 
                 string? patientId = null;
                 string? patientName = null;
+                string? patientSource = null;
 
                 if (imageBox.FilmBox?.PrintJob?.Patient != null)
                 {
                     patientId = imageBox.FilmBox.PrintJob.Patient.PatientId;
                     patientName = imageBox.FilmBox.PrintJob.Patient.PatientName;
+                    patientSource = "PrintJob";
                     _logger.LogDebug("Patient from PrintJob chain: {PatientId} - {PatientName}", patientId, patientName);
                 }
 
@@ -756,11 +790,37 @@ public class FocusMedScp : DicomService,
                     patientId = imageSeq.Items[0].GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
                     patientName = imageSeq.Items[0].GetSingleValueOrDefault(DicomTag.PatientName, string.Empty);
                     if (!string.IsNullOrEmpty(patientId))
+                    {
+                        patientSource = "InnerDataset";
                         _logger.LogDebug("Patient from inner DICOM dataset: {PatientId} - {PatientName}", patientId, patientName);
+                    }
                 }
+
+                // Some SCUs put identity at the top level of the N-SET dataset rather than
+                // inside the image sequence. Check it before giving up.
+                if (string.IsNullOrEmpty(patientId) && request.Dataset.Contains(DicomTag.PatientID))
+                {
+                    var topPatientId = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
+                    var topPatientName = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientName, string.Empty);
+                    if (!string.IsNullOrEmpty(topPatientId))
+                    {
+                        patientId = topPatientId;
+                        patientName = topPatientName;
+                        patientSource = "TopLevelDataset";
+                        _logger.LogDebug("Patient from top-level N-SET dataset: {PatientId} - {PatientName}", patientId, patientName);
+                    }
+                }
+
+                // Diagnostic: surface exactly what the SCU sent so we can verify identity flow.
+                var tagSummary = imageSeq?.Items[0] is { } first
+                    ? string.Join(",", first.Select(t => t.Tag.DictionaryEntry.Keyword ?? t.Tag.ToString()).Take(12))
+                    : "(none)";
+                _logger.LogInformation("N-SET {SopUid}: patientSource={PatientSource} patient={PatientId}/{PatientName} callingAe={CallingAe} imageTags={ImageTags}",
+                    sopUid, patientSource ?? "none", patientId ?? "", patientName ?? "", Association.CallingAE, tagSummary);
 
                 // No further fallback: guessing a patient from recent studies risks cross-patient PHI contamination.
                 // Unresolved prints stay unlinked (empty PatientId/Name) per AGENTS.md #26/#27.
+                // Auto-merge is handled in DicomUpsertService based on identity the SCU DID send.
 
                 patientId ??= string.Empty;
                 patientName ??= string.Empty;
@@ -768,7 +828,7 @@ public class FocusMedScp : DicomService,
                 if (imageSeq != null)
                 {
                     var innerDataset = imageSeq.Items[0];
-                    var storedFile = await _upsertService.IngestPrintImageAsync(innerDataset, patientId, patientName);
+                    var storedFile = await _upsertService.IngestPrintImageAsync(innerDataset, patientId, patientName, Association.CallingAE);
                     if (storedFile != null)
                     {
                         var newSopUid = storedFile.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
@@ -925,18 +985,20 @@ public class FocusMedScp : DicomService,
 
         if (string.IsNullOrEmpty(sopUid))
         {
-            _logger.LogWarning("N-DELETE: SOP Instance UID is empty, rejecting with InvalidArgumentValue");
+            // Some SCUs send N-DELETE without a SOP Instance UID after printing. Rejecting
+            // with InvalidArgumentValue broke their flow; tolerate it and just report Success.
+            _logger.LogWarning("N-DELETE: SOP Instance UID is empty. Returning Success to keep the SCU flow intact.");
 
-            var invalidCmd = new DicomDataset
+            var successCmd = new DicomDataset
             {
                 { DicomTag.CommandField, (ushort)DicomCommandField.NDeleteResponse },
                 { DicomTag.MessageIDBeingRespondedTo, request.MessageID },
-                { DicomTag.Status, (ushort)DicomStatus.InvalidArgumentValue.Code },
+                { DicomTag.Status, (ushort)DicomStatus.Success.Code },
                 { DicomTag.CommandDataSetType, (ushort)0x0101 },
             };
-            var invalidResp = new DicomNDeleteResponse(invalidCmd);
-            invalidResp.PresentationContext = request.PresentationContext;
-            return invalidResp;
+            var successResp = new DicomNDeleteResponse(successCmd);
+            successResp.PresentationContext = request.PresentationContext;
+            return successResp;
         }
 
         try

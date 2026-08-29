@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using Microsoft.Extensions.Logging;
 
-namespace FocusMed.PrintCapture.Services;
+namespace FocusMed.Launcher.Services;
 
 public class PrinterSetupService
 {

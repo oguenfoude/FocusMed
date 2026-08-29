@@ -71,6 +71,7 @@ try
     Log.Information("Bind Address: {BindAddress}", dicomOpts.BindAddress);
     Log.Information("Max PDU: {MaxPdu}", dicomOpts.MaxPduSize);
     Log.Information("AE Whitelist: {Enabled}", dicomOpts.EnforceAeWhitelist ? "Enabled" : "Disabled");
+    Log.Information("Print Merge Window: {Seconds}s", dicomOpts.PrintMergeWindowSeconds);
 
     var enabledTargets = dicomOpts.StorageForwardTargets.Where(t => t.Enabled).ToList();
     Log.Information("Storage Forward Targets configured: {Count}", enabledTargets.Count);

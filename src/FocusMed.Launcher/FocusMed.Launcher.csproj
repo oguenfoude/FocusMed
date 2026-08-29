@@ -5,6 +5,8 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>FocusMed.Launcher</AssemblyName>
+    <RootNamespace>FocusMed.Launcher</RootNamespace>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -35,7 +37,7 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Remove="icon.ico" />
-    <EmbeddedResource Include="icon.ico" LogicalName="FocusMed.PrintCapture.icon.ico" />
+    <EmbeddedResource Include="icon.ico" LogicalName="FocusMed.Launcher.icon.ico" />
   </ItemGroup>
 
 </Project>

@@ -1,6 +1,6 @@
 # FocusMed
 
-Multi-role DICOM Service Class Provider (SCP) on .NET 10 / PostgreSQL. One TCP port handles C-STORE, C-ECHO, C-FIND, C-MOVE, Print Management, Storage Commitment, and Modality Worklist.
+Multi-role DICOM Service Class Provider (SCP) on .NET 10 / SQLite. One TCP port handles C-STORE, C-ECHO, C-FIND, C-MOVE, Print Management, Storage Commitment, and Modality Worklist.
 
 > Looking for AI-agent context (file:line gotchas, scope-per-request, etc.)? See [`AGENTS.md`](AGENTS.md).
 
@@ -9,19 +9,18 @@ Multi-role DICOM Service Class Provider (SCP) on .NET 10 / PostgreSQL. One TCP p
 ### Prerequisites
 
 - [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- PostgreSQL on `localhost:5432`, database `focusmed` (created automatically)
-- [DCMTK](https://dcmtk.org/) for testing (optional)
 
 ### Run
 
 ```powershell
 dotnet build
-dotnet run --project src/FocusMed.Worker
+dotnet run --project src/FocusMed.Worker     # DICOM listener TCP :11112
+dotnet run --project src/FocusMed.Dashboard  # Blazor Server UI HTTP :5000
 ```
 
-> **The terminal must run as Administrator.** The app binds to TCP port `11112`.
+> **The Worker terminal must run as Administrator** — it binds TCP port `11112`.
 
-On first startup, EF Core applies all migrations automatically via `Database.Migrate()`. No manual SQL step.
+On first startup, EF Core applies all migrations automatically via `Database.Migrate()`. The SQLite database `focusmed.db` is created in the working directory (or the `FOCUSMED_DB_CONNECTION` location).
 
 ### Startup Output
 
@@ -33,8 +32,9 @@ Port: 11112
 Bind Address: 0.0.0.0
 Max PDU: 65536
 AE Whitelist: Disabled
-Film Printers configured: 0
+Print Merge Window: 300s
 Storage Forward Targets configured: 0
+PNG extraction enabled
 DICOM listener successfully starting on 0.0.0.0:11112 as AE Title 'FOCUSMED'
 ```
 
@@ -42,50 +42,45 @@ DICOM listener successfully starting on 0.0.0.0:11112 as AE Title 'FOCUSMED'
 
 ```
 src/
-├── FocusMed.Data/       PostgreSQL + EF Core. 11 entities. No business logic. (net10.0)
-├── FocusMed.Dicom/      fo-dicom-based SCP. Ingestion, MWL, Print, Storage Commitment. (net10.0)
-├── FocusMed.Worker/     Top-level Program.cs, Serilog, DI, listener. (net10.0)
-├── FocusMed.Dashboard/  Blazor Server UI (HTTP :5000). Browse/delete/archive studies, PDF preview. (net10.0)
-├── FocusMed.PrintCapture/  WPF app — creates the "FocusMed" virtual printer, monitors print spooler, captures printed PDFs as studies. (net10.0-windows)
+├── FocusMed.Data/               SQLite + EF Core. 11 entities, 4 enums, 2 migrations. No business logic. (net10.0)
+├── FocusMed.Dicom/              fo-dicom-based SCP. Ingestion, MWL, Print, Storage Commitment, auto-merge. (net10.0)
+├── FocusMed.Worker/             Top-level Program.cs, Serilog, DI, DICOM listener. (net10.0)
+├── FocusMed.Dashboard/          Blazor Server UI (HTTP :5000). Browse/archive/delete studies, PDF preview + printing. (net10.0-windows)
+├── FocusMed.Printing/           Print engine — Windows driver (XPS) + raw TCP, booklet imposition, Konica finishing. (net10.0-windows)
+├── FocusMed.Printing.TestConsole/  Console diagnostic harness for the print engine. (net10.0-windows)
+└── FocusMed.Launcher/           WPF supervisor — tray app, virtual "FocusMed" printer, resume-capture popup, restarts Worker + Dashboard. (net10.0-windows)
 ```
 
-Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom`. `PrintCapture` → `Data`. Solution is `FocusMed.slnx` (XML, not classic `.sln`).
+Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom` + `Printing`. `Launcher` → `Data`. `Printing` has no project dependencies. Solution is `FocusMed.slnx` (XML, not classic `.sln`).
 
 ## Dashboard
 
-A separate Blazor Server project for browsing received studies. It is **not** involved in DICOM ingestion — only the Worker receives via TCP port `11112`. To run everything:
-
-```powershell
-dotnet run --project src/FocusMed.Worker          # TCP :11112
-dotnet run --project src/FocusMed.Dashboard       # HTTP :5000
-```
+A separate Blazor Server project (InteractiveServer, all UI in French) for browsing received studies. It is **not** involved in DICOM ingestion — only the Worker receives via TCP port `11112`.
 
 The Dashboard provides:
 - **Études** (`/`) — studies list with search, date filter, pagination, soft-delete
 - **Archives** (`/archives`) — archived studies with restore
 - **Supprimées** (`/deleted`) — deleted studies with permanent delete (auto-purge after 30 days)
-- **Study details** (`/study/{id}`) — patient info, image sidebar, A4-portrait PDF preview iframe, lightbox
-
-> DICOM-side Print Management (N-CREATE/SET/ACTION/DELETE) is implemented in `FocusMedScp.cs` and `PrintScuService.cs` — that's a separate system at the DICOM protocol level. Physical printing from the Dashboard is not yet implemented.
+- **Study details** (`/study/{id}`) — patient info, image sidebar, layout controls, PDF preview iframe, lightbox, and **Imprimer** (Livret A3 / Plat A3 / Plat A4 via the `FocusMed.Printing` engine)
 
 ## Features
 
 | DICOM Role | Notes |
 |-----------|-------|
-| **C-STORE** | Acquire images; automatic UID repair; per-frame PNG extraction; FNV-1a archival |
+| **C-STORE** | Acquire images; automatic UID repair; per-frame on-demand PNG extraction; auto-merge prints into studies |
 | **C-ECHO** | Verification |
-| **C-FIND** | Patient / Study / Series queries against PostgreSQL |
-| **C-FIND (MWL)** | Modality Worklist against `WorklistEntries` |
+| **C-FIND** | Patient / Study / Series queries against SQLite |
+| **C-FIND (MWL)** | Modality Worklist (non-standard entry condition, see AGENTS.md) |
 | **C-MOVE** | Send stored `.dcm` files to a move destination AE |
 | **Storage Commitment** | N-ACTION received; N-EVENT-REPORT sent via reverse association with correct SOP Class UIDs from DB (requires per-site SCU mapping) |
-| **Print Management** | N-CREATE/SET/ACTION/DELETE for Film Session/Box/Image Box; multi-film-size support (A3, A4, 8INX10IN, 14INX17IN); decoupled execution via `PrintExecutionService` |
+| **Print Management** | N-CREATE/SET/ACTION/DELETE for Film Session/Box/Image Box; physical printing via `FocusMed.Printing` (Windows driver / raw TCP), decoupled from N-ACTION |
 
 Other:
-- Enriched association logging to `%LOCALAPPDATA%/FocusMed/logs/dicom_associations.log`
-- Study completion detection via background polling
+- Enriched association logging to `%LOCALAPPDATA%\FocusMed\logs\dicom_associations.log`
+- Study completion detection via background polling (stable after `StudyStabilizationSeconds`)
 - Graceful shutdown drain for storage forward queue
-- Startup config summary (AE title, port, printers, forward targets)
-- Print decoupled: N-ACTION returns success immediately, physical print triggered separately
+- Resume capture: print to the "FocusMed" virtual printer → WPF popup picks a study and attaches the PDF
+- NuGet cache-friendly, zero build warnings
 
 ## Testing with DCMTK
 
@@ -110,6 +105,8 @@ Data directory resolves in this order:
 ├── images/
 │   └── <PatientName>_<Modality>_<YYYYMMDD>/<SeriesUid>/   # PNG per frame (on-demand)
 ├── pdf-cache/                                # Generated PDFs (60min TTL, auto-cleaned)
+│   └── covers/                               # Cover page cache (24h TTL)
+├── resumes/                                  # Launcher resume PDFs
 └── logs/                                   # Serilog rolling + association log
 ```
 
@@ -120,7 +117,7 @@ Folders use `<Modality>` from DICOM tag (CT, MR, etc.) or `SC` for print images.
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `FOCUSMED_DATA` | Override data directory | `%LOCALAPPDATA%\FocusMed` |
-| `FOCUSMED_DB_CONNECTION` | Override PostgreSQL connection string | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin` |
+| `FOCUSMED_DB_CONNECTION` | Override SQLite connection string | `Data Source=focusmed.db` |
 
 ## Entities
 
@@ -130,13 +127,13 @@ PrintJob (1) ──< FilmBox (N) ──< PrintImageBox (N)
 StorageCommitmentJob (standalone) • WorklistEntry (standalone) • AssociationAuditEntry (standalone)
 ```
 
-Unique indexes on every UID column (`StudyInstanceUid`, `SeriesInstanceUid`, `SopInstanceUid`).
+Enums: `StorageCommitmentStatus` (Pending/Completed/Failed), `PrintStatus` (Pending/Printing/Completed/Failed), `StudyStatus` (Receiving/Complete/Failed/Archived/Deleted), `AssociationOutcome` (Success/Rejected/Failed/PartiallyAccepted).
 
-`DicomImage` includes `SopClassUid` (populated on ingest from DICOM `SOPClassUID` tag). `WorklistEntry` includes `StudyInstanceUid` (generated and persisted on first MWL query). `StorageCommitmentJob.Status` is an enum (`StorageCommitmentStatus`: Pending=0, Completed=1, Failed=2) stored as integer.
+`DicomImage` includes `SopClassUid` (populated on ingest from DICOM `SOPClassUID` tag). `Study.CallingAeTitle` and `PrintJob.CallingAeTitle` are recorded on ingest and used by the print auto-merge. `Study.ResumePdfPath` points to the Launcher-assigned resume PDF.
 
 ## Configuration
 
-All non-default config goes in `src/FocusMed.Worker/appsettings.json`.
+All non-default config goes in `src/FocusMed.Worker/appsettings.json` (the Launcher regenerates a merged `appsettings.json` from `config.json` for deployed children).
 
 ### `DicomNetworking` section
 
@@ -151,13 +148,15 @@ All non-default config goes in `src/FocusMed.Worker/appsettings.json`.
 | `AllowedCallingAETitles` | `[]` | `{AETitle, IPAddress}` allowlist |
 | `StorageCommitmentScuMapping` | `{}` | Calling AE → `{Ip, Port}` for N-EVENT-REPORT callbacks |
 | `StorageForwardTargets` | `[]` | C-STORE SCU forward targets (see below) |
+| `PrintMergeWindowSeconds` | `300` | Window for auto-merging print images into existing studies |
 
 ### Other top-level keys
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `ConnectionString` | `Host=localhost;Port=5432;Database=focusmed;Username=postgres;Password=admin` | PostgreSQL |
+| `ConnectionString` | `Data Source=focusmed.db` | SQLite connection string |
 | `StudyStabilizationSeconds` | `60` | Inactivity before study → Complete |
+| `PngExtraction:Enabled` | `true` | On-demand PNG extraction toggle |
 
 ### `StorageForwardTargets[]` (C-STORE SCU Auto-Forward)
 
@@ -183,32 +182,19 @@ dotnet ef migrations add <Name> --project src/FocusMed.Data --startup-project sr
 ```
 
 Existing migrations are auto-applied on app startup. Current set:
-- `20260627140620_AddStorageCommitmentAndWorklist`
-- `20260627232933_AddAssociationAuditEntry`
-- `20260705102645_AddSopClassUidAndStudyInstanceUid`
-- `20260706214141_ConvertStorageCommitmentStatusToEnum`
-- `20260708151541_MakePrintJobAndFilmBoxIdsNullable`
-- `20260713161922_AddPatientAndStudyToPrintJob`
-- `20260713164254_AllowDuplicateStudies`
-- `20260713200338_AddDicomImageSource`
-- `20260714181929_MakeDicomFramePngPathNullable`
-- `20260714190917_AddFkIndexesAndStudyLastUpdatedAt`
-- `20260714210848_RemoveUnusedIndexesAndPatientCreatedAt`
-- `20260719114954_AddMetadataFields`
-- `20260719181410_AddArchivedAndExcludeFromMerge`
-- `20260719201409_RemoveExcludeFromMerge`
-- `20260719205917_AddDeletedStatus`
-- `20260721162736_AddUserPreferences`
-- `20260721215348_UpdateUserPreferences`
-- `20260722150452_AddDocumentEntity`
-- `20260723140556_RemoveUserPreferencesAndDocuments`
+- `20260821215516_InitialSqlite`
+- `20260829135437_PrintMergeSupport`
+
+## Deployment
+
+- `deploy/` (gitignored) is the live single-folder deployment: Worker + Dashboard + Launcher + merged `appsettings.json` + `config.json`. Republish it with `dotnet publish -c Release -o deploy` (Worker, Dashboard, Launcher), preserving the merged `appsettings.json`.
+- Run it with `& "D:\FocusMed\deploy\FocusMed.Launcher.exe"` in an **Administrator** shell — the Launcher supervises Worker + Dashboard and runs the resume-print monitor.
+- The `FocusMed.Launcher` is a WPF tray supervisor: starts Worker + Dashboard hidden, always restarts them, creates the "FocusMed" virtual printer (Microsoft Print To PDF on a Local Port), installs an ONLOGON autostart task, and opens a firewall rule for the DICOM port. Its `config.json` holds the site settings (AE title, ports, Konica raw printer IP, etc.).
+- A client installer is built from `installer/FocusMed.iss` with Inno Setup 6 (output: `installer/FocusMedSetup-*.exe`; note the binary is >100 MB so it is gitignored — only the `.iss` script is tracked).
 
 ## Out of Scope (by design)
 
-Until explicitly requested, FocusMed does **not** include:
-- Installers/MSIs, `.docx` watchers, deployment scripts
-- Installers / MSIs / deployment scripts
-- `.docx` watchers or converters
+Until explicitly requested, FocusMed does **not** include `.docx` watchers.
 
 ## License
 

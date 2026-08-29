@@ -53,3 +53,10 @@ study*.png
 phase*.png
 dashboard-*.txt
 src/FocusMed.Dashboard/package-lock.json
+
+# Deploy / publish output
+deploy/
+publish/
+
+# Installer script (.iss) is tracked; the built Setup binary is huge (>100MB, exceeds GitHub limit)
+installer/*.exe
