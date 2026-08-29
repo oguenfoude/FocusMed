@@ -158,7 +158,7 @@ public partial class App : System.Windows.Application
             SetupTrayIcon(autostart);
             StartTooltipUpdater();
 
-            if (_cfg.AutoOpenDashboardOnStart)
+            if (!autostart)
                 OpenDashboard();
 
             Log.Information("Status:    Running (system tray)");
