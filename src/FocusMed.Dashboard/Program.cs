@@ -24,6 +24,35 @@ if (int.TryParse(builder.Configuration.GetValue<string?>("Urls:Port") ?? "5000",
     builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(webPort));
 }
 
+// Pre-flight port check: instead of crashing deep inside Kestrel bind (which would make the
+// Launcher silently crash-loop), fail fast with a clear message. When launched by the
+// Launcher, ASPNETCORE_URLS supplies the port; otherwise Urls:Port (default 5000) is used.
+var boundPort = webPort;
+try
+{
+    var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+    if (!string.IsNullOrWhiteSpace(urls))
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(urls, @":(\d+)[;/]?");
+        if (m.Success && int.TryParse(m.Groups[1].Value, out var p) && p is > 0 and <= 65535)
+            boundPort = p;
+    }
+}
+catch { }
+
+if (boundPort is > 0 and <= 65535)
+{
+    var inUse = System.Net.NetworkInformation.IPGlobalProperties
+        .GetIPGlobalProperties()
+        .GetActiveTcpListeners()
+        .Any(endpoint => endpoint.Port == boundPort);
+    if (inUse)
+    {
+        Console.Error.WriteLine($"FATAL: Port {boundPort} is already in use. The Dashboard cannot start. Free the port or change WebPort in config.json.");
+        return;
+    }
+}
+
 QuestPDF.Settings.License = LicenseType.Community;
 
 var connectionString = builder.Configuration.GetValue<string>("ConnectionString")
