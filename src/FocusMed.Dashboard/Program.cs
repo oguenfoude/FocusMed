@@ -13,6 +13,10 @@ using FellowOakDicom;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Ensure Kestrel listens on both IPv4 and IPv6 loopback so localhost:5000 works.
+// Without this, Chrome resolves localhost to ::1 (IPv6) but server only binds IPv4.
+builder.WebHost.UseUrls("http://0.0.0.0:5000");
+
 QuestPDF.Settings.License = LicenseType.Community;
 
 var connectionString = builder.Configuration.GetValue<string>("ConnectionString")

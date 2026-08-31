@@ -198,7 +198,7 @@ public partial class App : System.Windows.Application
 
                     Process.Start(new ProcessStartInfo
                     {
-                        FileName = $"http://localhost:{port}",
+                        FileName = $"http://127.0.0.1:{port}",
                         UseShellExecute = true
                     });
                 }
@@ -285,7 +285,7 @@ public partial class App : System.Windows.Application
         {
             Process.Start(new ProcessStartInfo
             {
-                FileName = $"http://localhost:{_cfg?.WebPort ?? 5000}",
+                FileName = $"http://127.0.0.1:{_cfg?.WebPort ?? 5000}",
                 UseShellExecute = true
             });
         }
