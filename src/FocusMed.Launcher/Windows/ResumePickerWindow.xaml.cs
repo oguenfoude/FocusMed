@@ -26,7 +26,9 @@ public partial class ResumePickerWindow : Window
         try
         {
             StatusText.Text = "Chargement...";
-            var studies = await _databaseService.GetSelectableStudiesAsync();
+            var studies = ShowAllCheckbox?.IsChecked == true
+                ? await _databaseService.GetAllStudiesAsync()
+                : await _databaseService.GetSelectableStudiesAsync();
 
             _studies = studies.Select(s => new StudyItem
             {
@@ -36,7 +38,8 @@ public partial class ResumePickerWindow : Window
                     : s.Patient.PatientName.Replace("^", " "),
                 StudyDate = s.StudyDate?.ToString("dd/MM/yyyy") ?? s.CreatedAt.ToString("dd/MM/yyyy"),
                 Modality = s.Series.FirstOrDefault()?.Modality ?? "-",
-                ImageCount = s.Series.SelectMany(se => se.Images).Count()
+                ImageCount = s.Series.SelectMany(se => se.Images).Count(),
+                HasResume = !string.IsNullOrEmpty(s.ResumePdfPath)
             }).ToList();
 
             ApplyFilter();
@@ -49,7 +52,7 @@ public partial class ResumePickerWindow : Window
 
     private void ApplyFilter()
     {
-        var term = SearchBox.Text?.Trim() ?? "";
+        var term = SearchBox?.Text?.Trim() ?? "";
         var filtered = string.IsNullOrEmpty(term)
             ? _studies
             : _studies.Where(s =>
@@ -67,6 +70,11 @@ public partial class ResumePickerWindow : Window
     private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
         ApplyFilter();
+    }
+
+    private async void ShowAll_Changed(object sender, RoutedEventArgs e)
+    {
+        await LoadStudiesAsync();
     }
 
     private void StudiesGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -138,5 +146,6 @@ public partial class ResumePickerWindow : Window
         public string StudyDate { get; set; } = "";
         public string Modality { get; set; } = "";
         public int ImageCount { get; set; }
+        public bool HasResume { get; set; }
     }
 }

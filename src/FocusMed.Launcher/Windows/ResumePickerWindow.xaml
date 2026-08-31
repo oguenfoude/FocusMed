@@ -33,17 +33,29 @@
                        FontSize="14" Foreground="#334155" FontWeight="Normal"/>
         </Border>
 
-        <!-- Search -->
+        <!-- Search + Filter -->
         <Border Grid.Row="2" Background="White" CornerRadius="8"
                 BorderBrush="#E2E8F0" BorderThickness="1" Padding="12,8" Margin="0,0,0,8">
-            <DockPanel>
-                <TextBlock DockPanel.Dock="Left" Text="Rechercher :"
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="Rechercher :"
                            FontSize="14" Foreground="#334155" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                <TextBox x:Name="SearchBox"
+                <TextBox Grid.Column="1" x:Name="SearchBox"
                          TextChanged="SearchBox_TextChanged"
                          FontSize="14" Padding="8,6"
                          VerticalContentAlignment="Center"/>
-            </DockPanel>
+                <CheckBox Grid.Column="2" x:Name="ShowAllCheckbox"
+                          Content="Toutes les études"
+                          FontSize="13" Foreground="#475569"
+                          VerticalAlignment="Center" Margin="12,0,0,0"
+                          Checked="ShowAll_Changed"
+                          Unchecked="ShowAll_Changed"/>
+            </Grid>
         </Border>
 
         <!-- Study list -->

@@ -48,6 +48,26 @@ public class DatabaseService
         return studies;
     }
 
+    public async Task<List<Study>> GetAllStudiesAsync()
+    {
+        _logger.LogDebug("Querying all studies...");
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+
+        var studies = await db.Studies
+            .Include(s => s.Patient)
+            .Include(s => s.Series)
+                .ThenInclude(ss => ss.Images)
+            .AsSplitQuery()
+            .Where(s => s.Status != StudyStatus.Deleted
+                && s.Status != StudyStatus.Archived)
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync();
+
+        _logger.LogInformation("Found {Count} total studies", studies.Count);
+        return studies;
+    }
+
     public async Task<bool> AssignResumeAsync(int studyId, string resumePdfRelativePath)
     {
         _logger.LogInformation("Assigning resume to Study {StudyId}: {Path}", studyId, resumePdfRelativePath);
