@@ -24,13 +24,23 @@ public class DatabaseService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
+        // Show only TODAY's studies that do NOT already have an assigned resume, so the
+        // picker after a print is short and fast. "Today" is resolved in local time then
+        // converted to UTC (CreatedAt is stored as UTC, see AGENTS.md gotcha #17).
+        var localNow = DateTime.Now;
+        var todayStartUtc = localNow.Date.ToUniversalTime();
+        var todayEndUtc = todayStartUtc.AddDays(1);
+
         var studies = await db.Studies
             .Include(s => s.Patient)
             .Include(s => s.Series)
                 .ThenInclude(ss => ss.Images)
             .AsSplitQuery()
             .Where(s => s.Status != StudyStatus.Deleted
-                && s.Status != StudyStatus.Archived)
+                && s.Status != StudyStatus.Archived
+                && string.IsNullOrEmpty(s.ResumePdfPath)
+                && s.CreatedAt >= todayStartUtc
+                && s.CreatedAt < todayEndUtc)
             .OrderByDescending(s => s.CreatedAt)
             .ToListAsync();
 

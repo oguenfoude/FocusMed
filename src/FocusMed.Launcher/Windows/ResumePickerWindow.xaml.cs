@@ -36,8 +36,7 @@ public partial class ResumePickerWindow : Window
                     : s.Patient.PatientName.Replace("^", " "),
                 StudyDate = s.StudyDate?.ToString("dd/MM/yyyy") ?? s.CreatedAt.ToString("dd/MM/yyyy"),
                 Modality = s.Series.FirstOrDefault()?.Modality ?? "-",
-                ImageCount = s.Series.SelectMany(se => se.Images).Count(),
-                HasResume = !string.IsNullOrEmpty(s.ResumePdfPath)
+                ImageCount = s.Series.SelectMany(se => se.Images).Count()
             }).ToList();
 
             StudiesGrid.ItemsSource = _studies;
@@ -65,16 +64,6 @@ public partial class ResumePickerWindow : Window
         {
             System.Windows.MessageBox.Show("Aucun document a associer.", "FocusMed", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
-        }
-
-        if (selected.HasResume)
-        {
-            var result = System.Windows.MessageBox.Show(
-                $"Cette etude a deja un resume associe.\n\nVoulez-vous le remplacer par celui-ci ?\n\n(L'ancien fichier PDF sera supprime definitivement.)",
-                "FocusMed",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-            if (result != MessageBoxResult.Yes) return;
         }
 
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
@@ -131,6 +120,5 @@ public partial class ResumePickerWindow : Window
         public string StudyDate { get; set; } = "";
         public string Modality { get; set; } = "";
         public int ImageCount { get; set; }
-        public bool HasResume { get; set; }
     }
 }
