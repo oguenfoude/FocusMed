@@ -64,9 +64,12 @@ public sealed class ChildProcessSupervisor : IDisposable
                     _worker ??= EnsureRunning(_workerExe, "Worker", "FocusMed.Worker.exe",
                         ref _workerFastExits, ref _workerLastExit, ref _workerMissingLogged, ct);
 
+                    // Bind BOTH IPv4 (0.0.0.0) and IPv6 ([::]) so localhost (::1), 127.0.0.1,
+                    // and the LAN IP all reach the Blazor Server SignalR circuit. A single
+                    // 0.0.0.0 (IPv4-only) binding leaves Chrome's localhost (IPv6) circuit dead.
                     _dashboard ??= EnsureRunning(_dashboardExe, "Dashboard", "FocusMed.Dashboard.exe",
                         ref _dashboardFastExits, ref _dashboardLastExit, ref _dashboardMissingLogged, ct,
-                        $"ASPNETCORE_URLS=http://0.0.0.0:{_webPort}");
+                        $"ASPNETCORE_URLS=http://0.0.0.0:{_webPort};http://[::]:{_webPort}");
 
                     await Task.Delay(CheckIntervalMs, ct);
                 }

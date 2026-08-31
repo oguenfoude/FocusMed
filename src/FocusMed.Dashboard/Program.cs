@@ -13,9 +13,16 @@ using FellowOakDicom;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Ensure Kestrel listens on both IPv4 and IPv6 loopback so localhost:5000 works.
-// Without this, Chrome resolves localhost to ::1 (IPv6) but server only binds IPv4.
-builder.WebHost.UseUrls("http://0.0.0.0:5000");
+// Bind on BOTH IPv4 and IPv6 so localhost (::1), 127.0.0.1, and the LAN IP all reach
+// the Blazor Server SignalR circuit. ListenAnyIP uses a dual-stack socket on Windows,
+// avoiding the classic "page loads but buttons are dead on localhost" IPv4/IPv6 mismatch.
+// Note: when launched by the Launcher, ASPNETCORE_URLS (=0.0.0.0:[::]) takes precedence
+// over this; this code-level binding covers direct dotnet run / manual launches.
+if (int.TryParse(builder.Configuration.GetValue<string?>("Urls:Port") ?? "5000", out var webPort)
+    && webPort is > 0 and <= 65535)
+{
+    builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(webPort));
+}
 
 QuestPDF.Settings.License = LicenseType.Community;
 

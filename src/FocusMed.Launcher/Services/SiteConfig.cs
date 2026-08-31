@@ -27,6 +27,9 @@ public class SiteConfig
     public bool AutostartEnabled { get; set; } = true;
     public bool AutoOpenDashboardOnStart { get; set; } = false;
 
+    /// <summary>Detected LAN IP used to open the Dashboard (confirmed reliable on client PCs).</summary>
+    public string LocalIp { get; set; } = "";
+
     /// <summary>Data directory: explicit override or %LOCALAPPDATA%\FocusMed.</summary>
     public string ResolvedDataDirectory =>
         string.IsNullOrWhiteSpace(DataDirectory)
@@ -95,6 +98,7 @@ public class SiteConfig
             var ip = DetectLocalIp();
             if (!string.IsNullOrWhiteSpace(ip))
             {
+                LocalIp = ip;
                 logger.LogInformation("Auto-detected local IP: {Ip}", ip);
             }
         }

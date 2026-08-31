@@ -183,6 +183,7 @@ public partial class App : System.Windows.Application
                 try
                 {
                     var port = 5000;
+                    var host = "127.0.0.1";
                     try
                     {
                         var cfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
@@ -192,13 +193,14 @@ public partial class App : System.Windows.Application
                             var cfg = System.Text.Json.JsonSerializer.Deserialize<SiteConfig>(json,
                                 new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                             if (cfg?.WebPort > 0) port = cfg.WebPort;
+                            if (!string.IsNullOrWhiteSpace(cfg?.LocalIp)) host = cfg.LocalIp;
                         }
                     }
                     catch { }
 
                     Process.Start(new ProcessStartInfo
                     {
-                        FileName = $"http://127.0.0.1:{port}",
+                        FileName = $"http://{host}:{port}",
                         UseShellExecute = true
                     });
                 }
@@ -285,7 +287,7 @@ public partial class App : System.Windows.Application
         {
             Process.Start(new ProcessStartInfo
             {
-                FileName = $"http://127.0.0.1:{_cfg?.WebPort ?? 5000}",
+                FileName = DashboardUrl(),
                 UseShellExecute = true
             });
         }
@@ -293,6 +295,14 @@ public partial class App : System.Windows.Application
         {
             Log.Warning(ex, "Could not open dashboard");
         }
+    }
+
+    private string DashboardUrl()
+    {
+        var port = _cfg?.WebPort ?? 5000;
+        // Prefer the confirmed-working LAN IP, then fall back to IPv4 loopback.
+        var host = !string.IsNullOrWhiteSpace(_cfg?.LocalIp) ? _cfg.LocalIp : "127.0.0.1";
+        return $"http://{host}:{port}";
     }
 
     private void OnNewResumePdf(string pdfPath)
