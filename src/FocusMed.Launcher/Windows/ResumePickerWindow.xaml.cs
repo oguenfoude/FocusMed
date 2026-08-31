@@ -39,16 +39,34 @@ public partial class ResumePickerWindow : Window
                 ImageCount = s.Series.SelectMany(se => se.Images).Count()
             }).ToList();
 
-            StudiesGrid.ItemsSource = _studies;
-
-            StatusText.Text = _studies.Count > 0
-                ? $"{_studies.Count} etude(s)"
-                : "Aucune etude disponible.";
+            ApplyFilter();
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Erreur: {ex.Message}";
         }
+    }
+
+    private void ApplyFilter()
+    {
+        var term = SearchBox.Text?.Trim() ?? "";
+        var filtered = string.IsNullOrEmpty(term)
+            ? _studies
+            : _studies.Where(s =>
+                s.PatientName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || s.Id.ToString().Contains(term, StringComparison.OrdinalIgnoreCase)
+                || s.Modality.Equals(term, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        StudiesGrid.ItemsSource = filtered;
+
+        StatusText.Text = filtered.Count > 0
+            ? $"{filtered.Count} etude(s)"
+            : "Aucune etude correspondante.";
+    }
+
+    private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        ApplyFilter();
     }
 
     private void StudiesGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)

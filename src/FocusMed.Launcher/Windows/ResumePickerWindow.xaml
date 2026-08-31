@@ -12,6 +12,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -26,14 +27,27 @@
 
         <!-- Status -->
         <Border Grid.Row="1" Background="White" CornerRadius="8"
-                BorderBrush="#E2E8F0" BorderThickness="1" Padding="14,10" Margin="0,0,0,12">
+                BorderBrush="#E2E8F0" BorderThickness="1" Padding="14,10" Margin="0,0,0,8">
             <TextBlock x:Name="StatusText"
                        Text="S\u00e9lectionnez une \u00e9tude pour y associer le document imprim\u00e9."
                        FontSize="14" Foreground="#334155" FontWeight="Normal"/>
         </Border>
 
+        <!-- Search -->
+        <Border Grid.Row="2" Background="White" CornerRadius="8"
+                BorderBrush="#E2E8F0" BorderThickness="1" Padding="12,8" Margin="0,0,0,8">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="Rechercher :"
+                           FontSize="14" Foreground="#334155" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBox x:Name="SearchBox"
+                         TextChanged="SearchBox_TextChanged"
+                         FontSize="14" Padding="8,6"
+                         VerticalContentAlignment="Center"/>
+            </DockPanel>
+        </Border>
+
         <!-- Study list -->
-        <Border Grid.Row="2" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="8"
+        <Border Grid.Row="3" BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="8"
                 Background="White" ClipToBounds="True">
             <DataGrid x:Name="StudiesGrid"
                       AutoGenerateColumns="False"
@@ -110,7 +124,7 @@
         </Border>
 
         <!-- Buttons -->
-        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button x:Name="ConfirmButton" Content="Associer"
                     Width="140" Height="42" Margin="0,0,10,0"
                     IsEnabled="False"
