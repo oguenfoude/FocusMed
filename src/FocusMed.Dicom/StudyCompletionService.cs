@@ -117,7 +117,8 @@ public class StudyCompletionService : BackgroundService
             .OrderByDescending(s => s.LastUpdatedAt)
             .ToListAsync(ct);
 
-        // Also merge same-patient studies (even if Complete) within the window.
+        // Also merge same-patient studies (even if Complete), regardless of timing.
+        // CT/OT/SC for the same patient consolidate into one study — no time window.
         if (targetStudy.PatientId > 0)
         {
             var samePatient = await db.Studies
@@ -126,8 +127,7 @@ public class StudyCompletionService : BackgroundService
                 .AsSplitQuery()
                 .Where(s => s.Id != targetStudy.Id
                     && s.PatientId == targetStudy.PatientId
-                    && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete)
-                    && s.LastUpdatedAt >= windowStart)
+                    && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete))
                 .OrderByDescending(s => s.LastUpdatedAt)
                 .ToListAsync(ct);
 

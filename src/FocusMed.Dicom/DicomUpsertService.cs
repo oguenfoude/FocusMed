@@ -97,6 +97,18 @@ var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string
         sopUid = TruncateUid(sopUid);
         dataset.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
 
+        // Resolve the final study UID up front so the per-study lock is keyed on the true
+        // target: either the same UID (existing dedup) or the patient's existing active study
+        // (CT/OT/SC consolidation). Without this, a lock taken on the incoming UID would not
+        // serialize concurrent inserts into the consolidated target study.
+        using (var resolveScope = _scopeFactory.CreateScope())
+        {
+            var resolveDb = resolveScope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+            var existingPatient = resolveDb.Patients.FirstOrDefault(p => p.PatientId == patientId);
+            studyUid = await ResolveStoreTargetUidAsync(resolveDb, studyUid, existingPatient?.Id ?? 0);
+        }
+        dataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
+
         var studyLock = AcquireStudyLockRef(studyUid);
         await studyLock.WaitAsync();
         string filePath = "";
@@ -136,6 +148,27 @@ var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string
             }
 
             var study = db.Studies.FirstOrDefault(s => s.StudyInstanceUid == studyUid && s.Status == StudyStatus.Receiving && s.LastUpdatedAt >= DateTime.UtcNow.AddSeconds(-15));
+
+            // CT/OT/SC consolidation: if the same-UID lookup missed (target is Complete, or UID
+            // differed before resolution), reuse the patient's most recent active study instead
+            // of creating a parallel one. This guarantees two incomplete CTs, or a CT + OT for
+            // the same patient, land in ONE study.
+            if (study == null && patient.Id != 0)
+            {
+                study = await db.Studies
+                    .Include(s => s.Patient)
+                    .Where(s => s.PatientId == patient.Id
+                        && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete))
+                    .OrderByDescending(s => s.LastUpdatedAt)
+                    .FirstOrDefaultAsync();
+                if (study != null)
+                {
+                    studyUid = study.StudyInstanceUid;
+                    dataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
+                    _logger.LogInformation("C-STORE consolidated into existing patient study {TargetId} (uid={Uid}) AE={Ae}",
+                        study.Id, studyUid, callingAeTitle ?? "(null)");
+                }
+            }
 
             if (study == null)
             {
@@ -200,7 +233,24 @@ else
             var safeModality = DicomHelpers.SanitizeFileName(modality);
             var datePart = studyDate?.ToString("yyyyMMdd") ?? "nodate";
             var studyDirName = $"{safePatientName}_{safeModality}_{datePart}_{studyHash}";
-            var studyDir = Path.Combine(_archivePath, studyDirName);
+            // Reuse the existing study's folder when consolidating (CT/OT/SC into the same
+            // study) so a merged modality does NOT create a parallel folder.
+            var existingStudyImagePath = await db.DicomImages
+                .Where(i => i.Series.StudyId == study.Id)
+                .Select(i => i.FilePath)
+                .FirstOrDefaultAsync();
+            string studyDir;
+            if (!string.IsNullOrWhiteSpace(existingStudyImagePath))
+            {
+                var existingSeriesDir = Path.GetDirectoryName(existingStudyImagePath);
+                studyDir = string.IsNullOrWhiteSpace(existingSeriesDir)
+                    ? Path.Combine(_archivePath, studyDirName)
+                    : (Path.GetDirectoryName(existingSeriesDir) ?? Path.Combine(_archivePath, studyDirName));
+            }
+            else
+            {
+                studyDir = Path.Combine(_archivePath, studyDirName);
+            }
             Directory.CreateDirectory(studyDir);
 
             var infoPath = Path.Combine(studyDir, "study-info.json");
@@ -260,6 +310,36 @@ else
         {
             ReleaseStudyLockRef(studyUid, studyLock);
         }
+    }
+
+    /// <summary>
+    /// Resolves the study UID that a C-STORE image should be locked on and written into.
+    /// Returns the incoming UID unchanged when no consolidation applies, or the patient's
+    /// most recent active (Receiving/Complete) study UID when one exists. This is the
+    /// pre-lock twin of the in-lock patient-based lookup so the per-study semaphore is
+    /// keyed on the true write target.
+    /// </summary>
+    private static async Task<string> ResolveStoreTargetUidAsync(FocusMedDbContext db, string studyUid, int patientDbId)
+    {
+        var sameUid = await db.Studies
+            .FirstOrDefaultAsync(s => s.StudyInstanceUid == studyUid
+                && s.Status == StudyStatus.Receiving
+                && s.LastUpdatedAt >= DateTime.UtcNow.AddSeconds(-15));
+        if (sameUid != null)
+            return sameUid.StudyInstanceUid;
+
+        if (patientDbId != 0)
+        {
+            var byPatient = await db.Studies
+                .Where(s => s.PatientId == patientDbId
+                    && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete))
+                .OrderByDescending(s => s.LastUpdatedAt)
+                .FirstOrDefaultAsync();
+            if (byPatient != null)
+                return byPatient.StudyInstanceUid;
+        }
+
+        return studyUid;
     }
 
     public async Task BackfillMetadataAsync(CancellationToken cancellationToken = default)
@@ -546,7 +626,8 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
             if (byUid != null) return (byUid, byUid.StudyInstanceUid);
         }
 
-        // 2) Same patient, Receiving or Complete, within the merge window.
+        // 2) Same patient, Receiving or Complete. No time window — CT/OT/SC for the same
+        //    patient always consolidate into ONE active study, regardless of timing.
         if (!string.IsNullOrWhiteSpace(patientId))
         {
             var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId);
@@ -554,8 +635,7 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
             {
                 var byPatient = await db.Studies
                     .Where(s => s.PatientId == patient.Id
-                        && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete)
-                        && s.LastUpdatedAt >= windowStart)
+                        && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete))
                     .OrderByDescending(s => s.LastUpdatedAt)
                     .FirstOrDefaultAsync();
                 if (byPatient != null) return (byPatient, byPatient.StudyInstanceUid);
@@ -601,9 +681,9 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
     }
 
     /// <summary>
-    /// When a CT/real study is created via C-STORE, find any recent anonymous print studies
-    /// (empty patient, within the merge window) and re-point their series into this study.
-    /// Called from StoreFileOnlyAsync immediately after creating a new study.
+    /// When a CT/real study is created via C-STORE, find any recent print studies for the same
+    /// patient (named or anonymous, within the merge window) and re-point their series into this
+    /// study. Called from StoreFileOnlyAsync immediately after creating a new study.
     /// </summary>
     private async Task MergeRecentAnonymousStudiesAsync(FocusMedDbContext db, Study targetStudy)
     {
@@ -616,7 +696,9 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
             .Where(s => s.Id != targetStudy.Id
                 && s.Status == StudyStatus.Receiving
                 && s.LastUpdatedAt >= windowStart
-                && s.Patient != null && s.Patient.PatientId == "")
+                && s.Patient != null
+                && (s.Patient.PatientId == ""
+                    || s.Patient.PatientId == targetStudy.Patient.PatientId))
             .ToListAsync();
 
         foreach (var printStudy in toMerge)
