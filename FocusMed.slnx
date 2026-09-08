@@ -7,5 +7,6 @@
     <Project Path="src/FocusMed.Launcher/FocusMed.Launcher.csproj" />
     <Project Path="src/FocusMed.Printing.TestConsole/FocusMed.Printing.TestConsole.csproj" />
     <Project Path="src/FocusMed.Printing/FocusMed.Printing.csproj" />
+    <Project Path="src/FocusMed.Tests/FocusMed.Tests.csproj" />
   </Folder>
 </Solution>

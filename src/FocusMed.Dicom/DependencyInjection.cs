@@ -19,6 +19,7 @@ public static class DependencyInjection
         services.AddSingleton<PngExtractionService>();
         services.AddHostedService<StudyCompletionService>();
         services.AddHostedService<StorageCommitmentScuService>();
+        services.AddHostedService<BackupService>();
         services.AddSingleton<IStorageForwardQueue, StorageForwardQueue>();
         services.AddHostedService<StorageForwardService>();
 

@@ -26,6 +26,9 @@ public class SiteConfig
     public string ResumesFolder { get; set; } = "resumes";
     public bool AutostartEnabled { get; set; } = true;
     public bool AutoOpenDashboardOnStart { get; set; } = false;
+    public bool BackupEnabled { get; set; } = true;
+    public int BackupIntervalHours { get; set; } = 24;
+    public int BackupRetentionDays { get; set; } = 7;
 
     /// <summary>Detected LAN IP used to open the Dashboard (confirmed reliable on client PCs).</summary>
     public string LocalIp { get; set; } = "";

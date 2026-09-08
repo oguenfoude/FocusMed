@@ -122,7 +122,7 @@
             null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
         _soundTimer = new System.Threading.Timer(
             _ => _ = CheckArrivalsAsync(),
-            null, TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(4));
+            null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

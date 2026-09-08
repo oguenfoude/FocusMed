@@ -136,6 +136,13 @@ public class BootstrapService
                     }
                 },
                 ["StudyStabilizationSeconds"] = 60,
+                ["Backup"] = new Dictionary<string, object?>
+                {
+                    ["Enabled"] = _cfg.BackupEnabled,
+                    ["IntervalHours"] = _cfg.BackupIntervalHours,
+                    ["RetentionDays"] = _cfg.BackupRetentionDays,
+                    ["Folder"] = "backups"
+                },
                 ["PngExtraction"] = new Dictionary<string, object?> { ["Enabled"] = true },
                 ["DicomNetworking"] = net,
                 ["Logging"] = new Dictionary<string, object?>

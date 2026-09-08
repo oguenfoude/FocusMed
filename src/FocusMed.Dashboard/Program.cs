@@ -8,10 +8,24 @@ using FocusMed.Printing.Jobs;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Infrastructure;
+using Serilog;
 
 using FellowOakDicom;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// File logging: the Dashboard runs as a HIDDEN child of the Launcher, so plain
+// console output goes nowhere. Mirror the Worker's file sink into the data dir.
+var serilogDataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+Directory.CreateDirectory(Path.Combine(serilogDataDir, "logs"));
+builder.Host.UseSerilog((ctx, lc) => lc
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore", Serilog.Events.LogEventLevel.Warning)
+    .WriteTo.Console()
+    .WriteTo.File(Path.Combine(serilogDataDir, "logs", "dashboard-.log"),
+        rollingInterval: Serilog.RollingInterval.Day, retainedFileCountLimit: 14));
 
 // Bind on BOTH IPv4 and IPv6 so localhost (::1), 127.0.0.1, and the LAN IP all reach
 // the Blazor Server SignalR circuit. ListenAnyIP uses a dual-stack socket on Windows,
@@ -93,6 +107,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.UseSerilogRequestLogging();
 app.UseAntiforgery();
 app.MapStaticAssets();
 

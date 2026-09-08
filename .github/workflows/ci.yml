@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build (0 warnings, 0 errors)
+        run: dotnet build --nologo -warnaserror
+
+      - name: Test
+        run: dotnet test src/FocusMed.Tests --no-build --nologo
+
+  installer:
+    needs: build-test
+    runs-on: windows-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish self-contained win-x64
+        run: |
+          dotnet publish src/FocusMed.Worker -c Release -r win-x64 --self-contained true -o deploy
+          dotnet publish src/FocusMed.Dashboard -c Release -r win-x64 --self-contained true -o deploy
+          dotnet publish src/FocusMed.Launcher -c Release -r win-x64 --self-contained true -o deploy
+          Get-ChildItem deploy -Recurse -Directory | Where-Object { $_.FullName -match '\\runtimes\\(linux|osx|maccatalyst)\b|\\runtimes\\win-arm64$|\\runtimes\\win-x86$' } | Remove-Item -Recurse -Force
+          Get-ChildItem deploy -Recurse -Include *.pdb -File | Remove-Item -Force
+          Get-ChildItem deploy -Recurse -Directory -Filter 'BuildHost-*' | Remove-Item -Recurse -Force
+          Remove-Item deploy/package.json, deploy/package-lock.json -Force -ErrorAction SilentlyContinue
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\FocusMed.iss'
+
+      - name: Upload setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: FocusMedSetup
+          path: installer/FocusMedSetup-*.exe
