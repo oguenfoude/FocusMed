@@ -8,6 +8,7 @@ public class PrintJob
     public int NumberOfCopies { get; set; } = 1;
     public string PrintPriority { get; set; } = "NORMAL";
     public string? CallingAeTitle { get; set; }
+    public string? RemoteIp { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public int? PatientId { get; set; }

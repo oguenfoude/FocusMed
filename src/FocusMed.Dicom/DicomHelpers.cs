@@ -56,4 +56,16 @@ public static class DicomHelpers
         if (string.IsNullOrWhiteSpace(name)) return "Inconnu";
         return name.Replace("^", " ");
     }
+
+    // Deletion guard for cleanup paths: true only when `dir` is strictly
+    // INSIDE `root` (never root itself or anything above it). All archive/png
+    // deletions must pass through this — a wrong GetParent chain once pointed
+    // at the whole archive/ folder (DeletedCleanupService, 2026-09-08).
+    public static bool IsSubdirectoryOf(string dir, string root)
+    {
+        if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(root)) return false;
+        var fullDir = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar);
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar);
+        return fullDir.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
 }

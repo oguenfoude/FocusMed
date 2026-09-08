@@ -3,6 +3,7 @@ using System;
 using FocusMed.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FocusMed.Data.Migrations
 {
     [DbContext(typeof(FocusMedDbContext))]
-    partial class FocusMedDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260907174140_SourceTracking")]
+    partial class SourceTracking
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -50,7 +53,7 @@ namespace FocusMed.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("AssociationAuditEntries", (string)null);
+                    b.ToTable("AssociationAuditEntries");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.DicomFrame", b =>
@@ -75,7 +78,7 @@ namespace FocusMed.Data.Migrations
 
                     b.HasIndex("DicomImageId");
 
-                    b.ToTable("DicomFrames", (string)null);
+                    b.ToTable("DicomFrames");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.DicomImage", b =>
@@ -117,7 +120,7 @@ namespace FocusMed.Data.Migrations
 
                     b.HasIndex("Source");
 
-                    b.ToTable("DicomImages", (string)null);
+                    b.ToTable("DicomImages");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.FilmBox", b =>
@@ -151,7 +154,7 @@ namespace FocusMed.Data.Migrations
                     b.HasIndex("SopInstanceUid")
                         .IsUnique();
 
-                    b.ToTable("FilmBoxes", (string)null);
+                    b.ToTable("FilmBoxes");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.Patient", b =>
@@ -178,7 +181,7 @@ namespace FocusMed.Data.Migrations
 
                     b.HasIndex("PatientId");
 
-                    b.ToTable("Patients", (string)null);
+                    b.ToTable("Patients");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.PrintImageBox", b =>
@@ -211,7 +214,7 @@ namespace FocusMed.Data.Migrations
                     b.HasIndex("SopInstanceUid")
                         .IsUnique();
 
-                    b.ToTable("PrintImageBoxes", (string)null);
+                    b.ToTable("PrintImageBoxes");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.PrintJob", b =>
@@ -262,7 +265,7 @@ namespace FocusMed.Data.Migrations
 
                     b.HasIndex("CallingAeTitle", "CreatedAt");
 
-                    b.ToTable("PrintJobs", (string)null);
+                    b.ToTable("PrintJobs");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.Series", b =>
@@ -291,7 +294,7 @@ namespace FocusMed.Data.Migrations
 
                     b.HasIndex("StudyId");
 
-                    b.ToTable("Series", (string)null);
+                    b.ToTable("Series");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.StorageCommitmentJob", b =>
@@ -325,7 +328,7 @@ namespace FocusMed.Data.Migrations
 
                     b.HasIndex("Status");
 
-                    b.ToTable("StorageCommitmentJobs", (string)null);
+                    b.ToTable("StorageCommitmentJobs");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.Study", b =>
@@ -391,7 +394,7 @@ namespace FocusMed.Data.Migrations
 
                     b.HasIndex("StudyInstanceUid");
 
-                    b.ToTable("Studies", (string)null);
+                    b.ToTable("Studies");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.WorklistEntry", b =>
@@ -435,7 +438,7 @@ namespace FocusMed.Data.Migrations
 
                     b.HasIndex("PatientName");
 
-                    b.ToTable("WorklistEntries", (string)null);
+                    b.ToTable("WorklistEntries");
                 });
 
             modelBuilder.Entity("FocusMed.Data.Entities.DicomFrame", b =>

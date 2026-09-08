@@ -23,4 +23,14 @@
     <ProjectReference Include="..\FocusMed.Dicom\FocusMed.Dicom.csproj" />
     <ProjectReference Include="..\FocusMed.Data\FocusMed.Data.csproj" />
   </ItemGroup>
+
+  <!-- Framework-dependent publish drops hostfxr.dll/hostpolicy.dll next to the apphost;
+       the generated exe prefers those app-local hosts and then fails global runtime
+       lookup ("No frameworks were found"). Delete them so the apphost resolves the
+       machine-wide .NET 10 install. Skipped for self-contained publish, where the
+       app-local hosts + bundled runtime are REQUIRED. -->
+  <Target Name="RemoveAppLocalHostFx" AfterTargets="Publish" Condition="'$(SelfContained)' != 'true'">
+    <Delete Files="$(PublishDir)hostfxr.dll" />
+    <Delete Files="$(PublishDir)hostpolicy.dll" />
+  </Target>
 </Project>

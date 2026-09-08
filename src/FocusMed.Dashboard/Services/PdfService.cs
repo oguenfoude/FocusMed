@@ -35,7 +35,7 @@ public class PdfService
         _coverLogoPath = Path.Combine(dataDir, "cover-logo.jpg");
     }
 
-    public string GeneratePrintPdf(
+    public async Task<string> GeneratePrintPdf(
         string patientName,
         string studyDate,
         string studyDescription,
@@ -45,9 +45,10 @@ public class PdfService
         bool isBooklet = false,
         int imagesPerPage = 1,
         int gapPx = 1,
-        int marginPx = 10)
+        int marginPx = 10,
+        CancellationToken ct = default)
     {
-        CleanupOldPdfsAsync().GetAwaiter().GetResult();
+        await CleanupOldPdfsAsync();
 
         var validPaths = imagePaths.Where(File.Exists).ToList();
         if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
@@ -64,9 +65,11 @@ public class PdfService
         }
 
         var pdfLock = AcquirePdfLockRef(hashStr);
-        pdfLock.Wait();
+        var lockTaken = false;
         try
         {
+            await pdfLock.WaitAsync(ct);
+            lockTaken = true;
             if (File.Exists(finalPath))
                 return $"/pdf-cache/{fileName}";
 
@@ -121,7 +124,10 @@ public class PdfService
         }
         finally
         {
-            ReleasePdfLockRef(hashStr, pdfLock);
+            if (lockTaken)
+                ReleasePdfLockRef(hashStr, pdfLock);
+            else
+                AbandonPdfLockRef(hashStr);
         }
     }
 
@@ -146,6 +152,23 @@ public class PdfService
         {
             var remaining = _pdfLockCounts.AddOrUpdate(hash, 0, (_, c) => c - 1);
             semaphore.Release();
+            if (remaining <= 0)
+            {
+                _pdfLockCounts.TryRemove(hash, out _);
+                _pdfLocks.TryRemove(hash, out _);
+            }
+        }
+    }
+
+    // Cancelled-wait path: the refcount was incremented at acquire but the
+    // semaphore was never entered, so decrement WITHOUT Release(). Removing the
+    // dictionary entry at zero is safe — any in-flight holder keeps its own
+    // reference and releases it normally; newcomers GetOrAdd a fresh instance.
+    private static void AbandonPdfLockRef(string hash)
+    {
+        lock (_pdfLockGate)
+        {
+            var remaining = _pdfLockCounts.AddOrUpdate(hash, 0, (_, c) => c - 1);
             if (remaining <= 0)
             {
                 _pdfLockCounts.TryRemove(hash, out _);

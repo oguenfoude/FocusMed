@@ -105,11 +105,22 @@ foreach (var asset in new[] { "cover.docx", "cover-logo.jpg" })
 {
     var src = Path.Combine(wwwroot, asset);
     var dst = Path.Combine(dataDir, asset);
-    if (!File.Exists(dst) && File.Exists(src))
+    try
     {
-        try { File.Copy(src, dst); }
-        catch (Exception ex) { Console.WriteLine($"Cover asset provision failed ({asset}): {ex.Message}"); }
+        if (File.Exists(dst))
+        {
+            Console.WriteLine($"Cover asset present ({asset}): {dst}");
+            continue;
+        }
+        if (!File.Exists(src))
+        {
+            Console.WriteLine($"Cover asset source missing ({asset}): {src} — {asset} will not be available until the build drops it into {wwwroot}.");
+            continue;
+        }
+        File.Copy(src, dst);
+        Console.WriteLine($"Cover asset provisioned ({asset}): {src} → {dst}");
     }
+    catch (Exception ex) { Console.WriteLine($"Cover asset provision failed ({asset}): {ex.Message}"); }
 }
 
 app.UseStaticFiles(new StaticFileOptions

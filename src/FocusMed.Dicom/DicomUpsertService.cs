@@ -69,7 +69,7 @@ public DicomUpsertService(
     }
 
 
-public async Task StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle = null)
+public async Task StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle = null, string? remoteIp = null)
     {
         var dataset = dicomFile.Dataset;
         var patientId = dataset.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
@@ -189,6 +189,7 @@ study = new Study
                     Manufacturer = string.IsNullOrWhiteSpace(manufacturer) ? null : manufacturer,
                     ReferringPhysicianName = string.IsNullOrWhiteSpace(referringPhysician) ? null : referringPhysician,
                     CallingAeTitle = string.IsNullOrWhiteSpace(callingAeTitle) ? null : callingAeTitle,
+                    RemoteIp = string.IsNullOrWhiteSpace(remoteIp) ? null : remoteIp,
                     Status = StudyStatus.Receiving
                 };
                 db.Studies.Add(study);
@@ -203,6 +204,8 @@ else
                 study.LastUpdatedAt = DateTime.UtcNow;
                 if (string.IsNullOrWhiteSpace(study.CallingAeTitle))
                     study.CallingAeTitle = string.IsNullOrWhiteSpace(callingAeTitle) ? null : callingAeTitle;
+                if (string.IsNullOrWhiteSpace(study.RemoteIp))
+                    study.RemoteIp = string.IsNullOrWhiteSpace(remoteIp) ? null : remoteIp;
                 if (!string.IsNullOrWhiteSpace(studyDescription)) study.Description = studyDescription;
                 if (!string.IsNullOrWhiteSpace(accessionNumber)) study.AccessionNumber = accessionNumber;
                 if (!string.IsNullOrWhiteSpace(institutionName)) study.InstitutionName = institutionName;
@@ -433,7 +436,7 @@ else
             _logger.LogInformation("Backfilled metadata from {Count} DICOM files", backfilled);
     }
 
-public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, string patientId, string patientName, string? callingAeTitle = null)
+public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, string patientId, string patientName, string? callingAeTitle = null, string? remoteIp = null)
     {
         var sopUid = TruncateUid(DicomUIDGenerator.GenerateDerivedFromUUID().UID);
         var studyUid = TruncateUid(DicomUIDGenerator.GenerateDerivedFromUUID().UID);
@@ -450,6 +453,29 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
             { DicomTag.StudyDate, DateTime.UtcNow.ToString("yyyyMMdd") },
             { DicomTag.Modality, "SC" },
         };
+
+        // Carry over any patient/study metadata the SCU sent (PS3.4 Annex H allows these in the
+        // Film Session Proposed Study Sequence / Image Box) instead of discarding them — this is
+        // how a SonoVision print can retain PatientID, StudyDate, AccessionNumber etc. in the
+        // stored .dcm even when the print carries no pixel-level identity.
+        if (imageDataset.TryGetSingleValue(DicomTag.StudyDate, out string? srcStudyDate) && !string.IsNullOrWhiteSpace(srcStudyDate))
+            newDataset.AddOrUpdate(DicomTag.StudyDate, srcStudyDate);
+        if (imageDataset.TryGetSingleValue(DicomTag.PatientBirthDate, out string? srcBirthDate) && !string.IsNullOrWhiteSpace(srcBirthDate))
+            newDataset.Add(DicomTag.PatientBirthDate, srcBirthDate);
+        if (imageDataset.TryGetSingleValue(DicomTag.PatientSex, out string? srcSex) && !string.IsNullOrWhiteSpace(srcSex))
+            newDataset.Add(DicomTag.PatientSex, srcSex);
+        foreach (var (srcTag, dstTag) in new[]
+        {
+            (DicomTag.StudyDescription, DicomTag.StudyDescription),
+            (DicomTag.AccessionNumber, DicomTag.AccessionNumber),
+            (DicomTag.InstitutionName, DicomTag.InstitutionName),
+            (DicomTag.Manufacturer, DicomTag.Manufacturer),
+            (DicomTag.ReferringPhysicianName, DicomTag.ReferringPhysicianName),
+        })
+        {
+            if (imageDataset.TryGetSingleValue(srcTag, out string? v) && !string.IsNullOrWhiteSpace(v))
+                newDataset.Add(dstTag, v);
+        }
 
         if (imageDataset.TryGetSingleValue(DicomTag.SamplesPerPixel, out ushort spp))
             newDataset.Add(DicomTag.SamplesPerPixel, spp);
@@ -499,11 +525,26 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
+            var patientBirthDate = imageDataset.GetSingleValueOrDefault(DicomTag.PatientBirthDate, "");
+            var patientSex = imageDataset.GetSingleValueOrDefault(DicomTag.PatientSex, "");
+
             var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId);
             if (patient == null)
             {
-                patient = new Patient { PatientId = patientId, PatientName = patientName };
+                patient = new Patient
+                {
+                    PatientId = patientId,
+                    PatientName = patientName,
+                    BirthDate = string.IsNullOrWhiteSpace(patientBirthDate) ? null : patientBirthDate,
+                    Sex = string.IsNullOrWhiteSpace(patientSex) ? null : patientSex
+                };
                 db.Patients.Add(patient);
+            }
+            else
+            {
+                patient.PatientName = patientName;
+                if (!string.IsNullOrWhiteSpace(patientBirthDate)) patient.BirthDate = patientBirthDate;
+                if (!string.IsNullOrWhiteSpace(patientSex)) patient.Sex = patientSex;
             }
 
             Study study;
@@ -511,6 +552,10 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
             {
                 study = await db.Studies.Include(s => s.Patient).FirstOrDefaultAsync(s => s.Id == target.Id) ?? target;
                 study.LastUpdatedAt = DateTime.UtcNow;
+                if (string.IsNullOrWhiteSpace(study.CallingAeTitle) && !string.IsNullOrWhiteSpace(callingAeTitle))
+                    study.CallingAeTitle = callingAeTitle;
+                if (string.IsNullOrWhiteSpace(study.RemoteIp) && !string.IsNullOrWhiteSpace(remoteIp))
+                    study.RemoteIp = remoteIp;
                 if (study.Status != StudyStatus.Receiving && study.Status != StudyStatus.Complete)
                     study.Status = StudyStatus.Receiving;
             }
@@ -522,6 +567,7 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
                     StudyInstanceUid = studyUid,
                     StudyDate = DateTime.UtcNow,
                     CallingAeTitle = string.IsNullOrWhiteSpace(callingAeTitle) ? null : callingAeTitle,
+                    RemoteIp = string.IsNullOrWhiteSpace(remoteIp) ? null : remoteIp,
                     Status = StudyStatus.Receiving
                 };
                 db.Studies.Add(study);
@@ -589,8 +635,8 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
 
             await db.SaveChangesAsync();
             _notificationService.NotifyStudyChanged();
-            _logger.LogInformation("Print image ingested: {PatientName} | SOP={SopUid} | Study={StudyUid}{Merge}",
-                patientName, sopUid, studyUid, target != null ? " (merged)" : "");
+            _logger.LogInformation("Print image ingested: patient='{PatientId}' name='{PatientName}' birth='{BirthDate}' sex='{Sex}' | SOP={SopUid} | Study={StudyUid} | AE={Ae} | IP={Ip}{Merge}",
+                patientId, patientName, patientBirthDate ?? "(none)", patientSex ?? "(none)", sopUid, studyUid, callingAeTitle ?? "(null)", remoteIp ?? "(null)", target != null ? " (merged)" : "");
 
             return dicomFile;
         }
@@ -655,20 +701,6 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
             if (byAe != null) return (byAe, byAe.StudyInstanceUid);
         }
 
-        // 4) Last resort: ANY active study within the window. The print and CT may
-        //    have different CallingAeTitles, UIDs, or patient IDs but still belong
-        //    to the same session. The 300s window is narrow enough to avoid
-        //    merging unrelated studies. Never merge into Archived/Deleted —
-        //    those are not active data.
-        {
-            var anyRecent = await db.Studies
-                .Where(s => s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete)
-                .Where(s => s.LastUpdatedAt >= windowStart)
-                .OrderByDescending(s => s.LastUpdatedAt)
-                .FirstOrDefaultAsync();
-            if (anyRecent != null) return (anyRecent, anyRecent.StudyInstanceUid);
-        }
-
         return (null, null);
     }
 
@@ -689,16 +721,24 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
     {
         var windowStart = DateTime.UtcNow.AddSeconds(-_printMergeWindowSeconds);
 
+        // Absorb PRINT studies for the same patient (named or anonymous). Also absorb
+        // STUDIES THAT ALREADY COMPLETED when they are PRINT studies from the same
+        // CallingAeTitle within the window — a print that arrived before the CT (and
+        // completed its 60s stabilization) would otherwise be stranded forever as an
+        // anonymous orphan with no way to link it to the real study.
         var toMerge = await db.Studies
             .Include(s => s.Patient)
             .Include(s => s.Series).ThenInclude(s => s.Images)
             .AsSplitQuery()
             .Where(s => s.Id != targetStudy.Id
-                && s.Status == StudyStatus.Receiving
+                && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete)
                 && s.LastUpdatedAt >= windowStart
                 && s.Patient != null
                 && (s.Patient.PatientId == ""
-                    || s.Patient.PatientId == targetStudy.Patient.PatientId))
+                    || s.Patient.PatientId == targetStudy.Patient.PatientId
+                    || (s.CallingAeTitle != null
+                        && s.CallingAeTitle == targetStudy.CallingAeTitle
+                        && s.Series.Any(sr => sr.Images.Any(i => i.Source == "PRINT")))))
             .ToListAsync();
 
         foreach (var printStudy in toMerge)

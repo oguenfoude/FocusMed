@@ -78,7 +78,7 @@ else
             <div class="flex flex-wrap items-center gap-3">
                 <div class="flex flex-col gap-1.5">
                     <div class="flex items-center gap-2">
-                        <span class="px-3 py-1 rounded-full text-xs font-extrabold bg-cyan-50 text-cyan-700 border border-cyan-200">C-STORE</span>
+                        <span class="px-3 py-1 rounded-full text-xs font-extrabold @(StudySource == "PRINT" ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-cyan-50 text-cyan-700 border-cyan-200") border">@StudySource</span>
                         @if (Study.Status == StudyStatus.Complete)
                         {
                             <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> Terminé</span>
@@ -97,6 +97,16 @@ else
                         <span>@Study.Series.Count série(s)</span>
                         <span>·</span>
                         <span>@TotalImageCount image(s)</span>
+                        @if (!string.IsNullOrWhiteSpace(Study.CallingAeTitle))
+                        {
+                            <span>·</span>
+                            <span class="font-bold text-slate-800 font-mono">@Study.CallingAeTitle</span>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(Study.RemoteIp))
+                        {
+                            <span>·</span>
+                            <span class="font-mono text-slate-500">@Study.RemoteIp</span>
+                        }
                         @if (!string.IsNullOrWhiteSpace(Study.InstitutionName))
                         {
                             <span>·</span>
@@ -205,9 +215,9 @@ else
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-sm font-bold text-slate-800 flex items-center gap-2">
                         Images
-                        @if (AvailableFrames.Count > 0)
+                        @if (VisibleFrames.Count > 0)
                         {
-                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-100">@AvailableFrames.Count</span>
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-100">@VisibleFrames.Count</span>
                         }
                     </span>
                     @if (IsExtracting)
@@ -218,11 +228,17 @@ else
                         </span>
                     }
                 </div>
-                @if (!IsExtracting && AvailableFrames.Count > 0)
+                @if (!IsExtracting && VisibleFrames.Count > 0)
                 {
                     <div class="flex items-center gap-1">
                         <button @onclick="SelectAllFrames" disabled="@IsExtracting" class="flex-1 px-2 py-1 text-[10px] font-semibold text-brand-700 bg-brand-50 rounded hover:bg-brand-100 transition-colors border border-brand-100 disabled:opacity-50">Tout</button>
                         <button @onclick="DeselectAllFrames" disabled="@IsExtracting" class="flex-1 px-2 py-1 text-[10px] font-semibold text-slate-500 bg-slate-100 rounded hover:bg-slate-200 transition-colors disabled:opacity-50">Aucun</button>
+                        @if (HasPrintFrames)
+                        {
+                            <button @onclick="ToggleCtVisibility" class="flex-1 px-2 py-1 text-[10px] font-semibold text-slate-600 bg-white rounded hover:bg-slate-200 transition-colors border border-slate-200" title="@(_showCtImages ? "Masquer les images C-STORE (TDM)" : "Afficher aussi les images C-STORE (TDM)")">
+                                @(_showCtImages ? "Films seuls" : "Tout afficher")
+                            </button>
+                        }
                     </div>
                 }
             </div>
@@ -240,7 +256,7 @@ else
                         <span class="text-[10px] font-medium">Extraction des images…</span>
                     </div>
                 }
-                else if (AvailableFrames.Count == 0)
+                else if (VisibleFrames.Count == 0)
                 {
                     <div class="text-center py-8">
                         <svg class="w-8 h-8 text-slate-300 mx-auto mb-2" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
@@ -250,7 +266,7 @@ else
                 else
                 {
                     var idx = 0;
-                    @foreach (var frame in AvailableFrames)
+                    @foreach (var frame in VisibleFrames)
                     {
                         var webPath = GetWebPath(frame.PngPath);
                         var i = idx;
@@ -287,7 +303,7 @@ else
             <!-- Sidebar footer -->
             <div class="px-3 py-2 border-t border-slate-100 bg-slate-50/50">
                 <span class="text-xs text-slate-600 font-medium">
-                    <span class="text-slate-900 font-bold">@SelectedFrameIds.Count</span> / @AvailableFrames.Count sélectionnée(s)
+                    <span class="text-slate-900 font-bold">@SelectedFrameIds.Count</span> / @VisibleFrames.Count sélectionnée(s)
                 </span>
             </div>
         </div>
@@ -373,7 +389,7 @@ else
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" /></svg>
                 </button>
             }
-            @if (LightboxIndex < AvailableFrames.Count - 1)
+            @if (LightboxIndex < VisibleFrames.Count - 1)
             {
                 <button @onclick="NextImage" @onclick:stopPropagation
                         class="absolute right-4 top-1/2 -translate-y-1/2 z-50 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors">
@@ -382,7 +398,7 @@ else
             }
 
             <div class="flex items-center justify-center w-full h-full p-16" @onclick:stopPropagation>
-                <img src="@GetWebPath(AvailableFrames[LightboxIndex].PngPath)"
+                <img src="@GetWebPath(VisibleFrames[LightboxIndex].PngPath)"
                      class="max-w-full max-h-full object-contain select-none"
                      style="transform: scale(@ZoomLevel); transform-origin: center center; transition: transform 0.2s ease;"
                      draggable="false" />
@@ -402,7 +418,7 @@ else
             </div>
 
             <div class="absolute bottom-6 right-6 z-50 text-xs text-white/70 font-medium">
-                @(LightboxIndex + 1) / @AvailableFrames.Count
+                @(LightboxIndex + 1) / @VisibleFrames.Count
             </div>
         </div>
     }
@@ -480,6 +496,9 @@ else
     private bool IsRegeneratingPdf;
     private int PageCount;
     private CancellationTokenSource? _regenCts;
+    private CancellationTokenSource? _extractCts;
+    private readonly object _regenLock = new();
+    private bool _disposed;
 
 
     private bool LightboxOpen;
@@ -488,6 +507,28 @@ else
     private ElementReference LightboxRef;
     private List<FrameResult> _availableFrames = new();
     private List<FrameResult> AvailableFrames => _availableFrames;
+    private bool _showCtImages = false;
+
+    // True when the study contains any DICOM-print image (Source "PRINT": the SonoVision
+    // films). The C-STORE images (e.g. a CT exam) are just support data — hidden by
+    // default so the study shows only the films to print. Pure C-STORE studies (no
+    // print source) always show everything.
+    private bool HasPrintFrames => _availableFrames.Any(f => f.Source == "PRINT");
+
+    private List<FrameResult> VisibleFrames
+    {
+        get
+        {
+            if (HasPrintFrames && !_showCtImages)
+                return _availableFrames.Where(f => f.Source == "PRINT").ToList();
+            return _availableFrames;
+        }
+    }
+
+    private void ToggleCtVisibility()
+    {
+        _showCtImages = !_showCtImages;
+    }
 
     private HashSet<string> SelectedFrameIds = new();
 
@@ -500,6 +541,18 @@ else
     private string StatusMessage = "";
     private bool IsError = false;
 
+    // Source of the study's frames: PRINT when ANY image has Source == "PRINT"
+    // (DICOM print from SonoVision), else C-STORE. Fixes the hardcoded badge.
+    private string StudySource
+    {
+        get
+        {
+            if (Study?.Series?.SelectMany(s => s.Images).Any(i => i.Source == "PRINT") == true)
+                return "PRINT";
+            return "C-STORE";
+        }
+    }
+
 
     protected override async Task OnInitializedAsync()
     {
@@ -509,7 +562,8 @@ else
         if (Study != null)
         {
             TotalImageCount = Study.Series.SelectMany(s => s.Images).Count();
-            _ = ExtractImagesAsync();
+            _extractCts = new CancellationTokenSource();
+            _ = ExtractImagesAsync(_extractCts.Token);
         }
         else
         {
@@ -533,43 +587,45 @@ else
         await InvokeAsync(StateHasChanged);
     }
 
-    // CT and OT (diagnostic image series) default to 1 image per page so each slice is
-    // reviewed at full scale. Other modalities (SC prints, prescriptions, etc.) default
-    // to Auto (empty) so any image count — 2, 3, 4, 5… — is auto-scaled to fit the page.
-    // Manual override 1..16 always wins once the user types a number.
+    // SonoVision films (Source "PRINT", modality SC or OT) always default to ONE image
+    // per page — each film is a full clinical image to review at scale. CT/OT diagnostic
+    // series are also 1/page. Other modalities (auto-scaled prescriptions, etc.) default
+    // to Auto (empty).
     private static string DefaultImagesPerPage(Study study)
     {
-        var onePerPage = study.Series.Any(s =>
-            string.Equals(s.Modality, "CT", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(s.Modality, "OT", StringComparison.OrdinalIgnoreCase));
+        var onePerPage = study.Series.SelectMany(s => s.Images).Any(i => i.Source == "PRINT")
+            || study.Series.Any(s =>
+                string.Equals(s.Modality, "CT", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(s.Modality, "OT", StringComparison.OrdinalIgnoreCase));
         return onePerPage ? "1" : "";
     }
 
-    private async Task ExtractImagesAsync()
+    private async Task ExtractImagesAsync(CancellationToken ct)
     {
         IsExtracting = true;
         await InvokeAsync(StateHasChanged);
 
         try
         {
-            Frames = await PngExtractionService.GetOrExtractFramesAsync(Study!.Id);
+            Frames = await PngExtractionService.GetOrExtractFramesAsync(Study!.Id, ct);
+            if (_disposed || ct.IsCancellationRequested) return;
             _availableFrames = Frames.Where(f => f.FileExists).ToList();
 
-            // Default: select the PRINT frames (Modality "OT" for legacy prints, "SC" for new
-            // prints) when the study mixes prints with C-STORE data (e.g. CT). In an
-            // OT/CT merged study the print images (the films) are what the user prints —
-            // C-STORE frames start deselected. A study with only C-STORE frames (no
-            // print-like modality) still starts fully selected.
-            var printLike = new[] { "OT", "SC" };
-            var hasPrintFrames = _availableFrames.Any(f => printLike.Contains(f.Modality, StringComparer.OrdinalIgnoreCase));
+            // Default: select only the PRINT frames (the SonoVision films) when the study
+            // mixes prints with C-STORE data (e.g. a CT exam). C-STORE frames start
+            // deselected AND hidden. A study with only C-STORE frames (no print source)
+            // still starts fully selected.
+            _showCtImages = false;
+            var hasPrintFrames = _availableFrames.Any(f => f.Source == "PRINT");
             SelectedFrameIds = new HashSet<string>(
                 hasPrintFrames
-                    ? _availableFrames.Where(f => printLike.Contains(f.Modality, StringComparer.OrdinalIgnoreCase)).Select(f => f.SopInstanceUid)
+                    ? _availableFrames.Where(f => f.Source == "PRINT").Select(f => f.SopInstanceUid)
                     : _availableFrames.Select(f => f.SopInstanceUid));
 
             if (SelectedFrameIds.Count > 0)
                 await RegeneratePdfPreviewAsync();
         }
+        catch (OperationCanceledException) { /* navigation-away — not an error */ }
         catch (Exception ex)
         {
             Logger.LogError(ex, "PNG extraction failed for Study {StudyId}", Study!.Id);
@@ -580,20 +636,26 @@ else
         finally
         {
             IsExtracting = false;
-            await InvokeAsync(StateHasChanged);
+            if (!_disposed)
+                await InvokeAsync(StateHasChanged);
         }
     }
 
     private async Task RegeneratePdfPreviewAsync()
     {
-        _regenCts?.Cancel();
-        _regenCts?.Dispose();
-        _regenCts = new CancellationTokenSource();
+        if (_disposed) return;
+        lock (_regenLock)
+        {
+            _regenCts?.Cancel();
+            _regenCts?.Dispose();
+            _regenCts = new CancellationTokenSource();
+        }
         var ct = _regenCts.Token;
 
         try
         {
             await Task.Delay(150, ct);
+            if (_disposed || ct.IsCancellationRequested) return;
 
             if (SelectedFrameIds.Count == 0)
             {
@@ -630,7 +692,7 @@ else
             string pdfPageSize = SelectedPrintMode == "FlatA3" ? "A3" : "A4";
 
             var newUrl = await Task.Run(() =>
-                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, pdfPageSize, isBooklet, imagesPerPage: EffectiveImagesPerPage, gapPx: GapPx, marginPx: MarginPx), ct);
+                PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, pdfPageSize, isBooklet, imagesPerPage: EffectiveImagesPerPage, gapPx: GapPx, marginPx: MarginPx, ct: ct), ct);
 
 
 
@@ -689,7 +751,7 @@ else
 
     private void SelectAllFrames()
     {
-        SelectedFrameIds = new HashSet<string>(AvailableFrames.Select(f => f.SopInstanceUid));
+        SelectedFrameIds = new HashSet<string>(VisibleFrames.Select(f => f.SopInstanceUid));
         _ = RegeneratePdfPreviewAsync();
     }
 
@@ -864,8 +926,11 @@ else
 
     public void Dispose()
     {
+        _disposed = true;
         _regenCts?.Cancel();
         _regenCts?.Dispose();
+        _extractCts?.Cancel();
+        _extractCts?.Dispose();
         if (!string.IsNullOrEmpty(Study?.StudyInstanceUid))
         {
             try { PngExtractionService.ReleaseStudyPng(Study.StudyInstanceUid); } catch { }
@@ -921,7 +986,7 @@ else
 
     private void NextImage()
     {
-        if (LightboxIndex < AvailableFrames.Count - 1)
+        if (LightboxIndex < VisibleFrames.Count - 1)
         {
             LightboxIndex++;
             ZoomLevel = 1.0;

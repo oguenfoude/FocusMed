@@ -1,8 +1,12 @@
 @inherits LayoutComponentBase
 @implements IDisposable
+@implements IAsyncDisposable
+@using Microsoft.JSInterop
 @inject NavigationManager Navigation
 @inject IConfiguration Config
 @inject ILogger<MainLayout> Logger
+@inject IDbContextFactory<FocusMedDbContext> DbFactory
+@inject IJSRuntime JS
 
 <div class="flex flex-col min-h-screen bg-slate-50">
     <!-- Brand accent strip -->
@@ -52,6 +56,13 @@
 
         <!-- Right Side -->
         <div class="flex items-center gap-4 shrink-0">
+            <button @onclick="ToggleSound" title="@(_soundMuted ? "Activer le son d'arrivée" : "Couper le son d'arrivée")"
+                    style="@(_soundMuted ? "opacity:.35" : null)"
+                    class="p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 active:scale-95 transition-all">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+                </svg>
+            </button>
             <button @onclick="RefreshPage" title="Rafraîchir"
                     class="p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 active:scale-95 transition-all">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -88,6 +99,16 @@
     private System.Threading.Timer? _healthTimer;
     private int _dicomPort = 11112;
 
+    // Arrival chime: polls MAX(DicomImages.Id) every 4s. Every C-STORE and every
+    // print N-SET inserts image rows (merges/completions/deletes do not), so a
+    // jump means new DICOM arrived. Cross-process by design: the Worker's
+    // in-memory StudyNotificationService never reaches this Dashboard process.
+    private System.Threading.Timer? _soundTimer;
+    private int _lastImageId;
+    private bool _soundBaselineSet;
+    private bool _soundMuted;
+    private IJSObjectReference? _soundModule;
+
     protected override void OnInitialized()
     {
         var port = Config.GetValue<int?>("DicomNetworking:DicomPort");
@@ -99,6 +120,56 @@
         _healthTimer = new System.Threading.Timer(
             _ => { var online = CheckServer(); if (online != ServerOnline) _ = InvokeAsync(() => { ServerOnline = online; StateHasChanged(); }); },
             null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+        _soundTimer = new System.Threading.Timer(
+            _ => _ = CheckArrivalsAsync(),
+            null, TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(4));
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            _soundModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/notification.js");
+            _soundMuted = await _soundModule.InvokeAsync<bool>("isSoundMuted");
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Sound module failed to load");
+        }
+    }
+
+    private async Task CheckArrivalsAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var maxId = await db.DicomImages.MaxAsync(i => (int?)i.Id) ?? 0;
+            var prev = _lastImageId;
+            _lastImageId = maxId;
+            if (!_soundBaselineSet) { _soundBaselineSet = true; return; } // silent baseline on load
+            if (maxId <= prev || _soundModule is null) return;
+            await InvokeAsync(() => _soundModule.InvokeVoidAsync("playNotificationSound").AsTask());
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Arrival sound check failed");
+        }
+    }
+
+    private async Task ToggleSound()
+    {
+        _soundMuted = !_soundMuted;
+        try
+        {
+            if (_soundModule is not null)
+                await _soundModule.InvokeVoidAsync("setSoundMuted", _soundMuted);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Sound toggle failed");
+        }
     }
 
     private void CheckServerNow()
@@ -135,5 +206,15 @@
     public void Dispose()
     {
         _healthTimer?.Dispose();
+        _soundTimer?.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_soundModule is not null)
+        {
+            try { await _soundModule.DisposeAsync(); }
+            catch { /* circuit gone — ignore */ }
+        }
     }
 }

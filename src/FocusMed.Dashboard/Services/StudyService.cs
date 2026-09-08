@@ -1,5 +1,6 @@
 using FocusMed.Data;
 using FocusMed.Data.Entities;
+using FocusMed.Dicom;
 using Microsoft.EntityFrameworkCore;
 
 namespace FocusMed.Dashboard.Services;
@@ -104,6 +105,7 @@ public class StudyService
             .ToListAsync();
 
         var archiveDirs = new HashSet<string>();
+        var pngDirs = new HashSet<string>();
         foreach (var img in images)
         {
             if (!string.IsNullOrEmpty(img.FilePath))
@@ -115,6 +117,11 @@ public class StudyService
                     if (studyDir != null) archiveDirs.Add(studyDir);
                 }
             }
+            if (!string.IsNullOrEmpty(img.PngPath))
+            {
+                var pngDir = Path.GetDirectoryName(img.PngPath);
+                if (pngDir != null) pngDirs.Add(pngDir);
+            }
             _db.DicomFrames.RemoveRange(img.Frames);
         }
         _db.DicomImages.RemoveRange(images);
@@ -124,14 +131,32 @@ public class StudyService
 
         var study = await _db.Studies.FindAsync(studyId);
         var patientId = study?.PatientId;
+        var resumeToDelete = study?.ResumePdfPath;
         if (study != null) _db.Studies.Remove(study);
 
         await _db.SaveChangesAsync();
 
+        var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+        var imagesRoot = Path.Combine(dataDir, "images");
         foreach (var dir in archiveDirs)
         {
             try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
             catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete archive dir {Dir}", dir); }
+        }
+        foreach (var dir in pngDirs)
+        {
+            try { if (Directory.Exists(dir) && DicomHelpers.IsSubdirectoryOf(dir, imagesRoot)) Directory.Delete(dir, recursive: true); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete PNG dir {Dir}", dir); }
+        }
+        if (!string.IsNullOrEmpty(resumeToDelete))
+        {
+            var resumeFull = Path.GetFullPath(Path.Combine(dataDir, resumeToDelete));
+            if (resumeFull.StartsWith(dataDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                try { if (File.Exists(resumeFull)) File.Delete(resumeFull); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete resume PDF {Path}", resumeFull); }
+            }
         }
 
         CleanupImageDirectories();
@@ -237,12 +262,12 @@ public class StudyService
                     var pngs = Directory.GetFiles(seriesDir, "*.png");
                     if (pngs.Length == 0)
                     {
-                        try { Directory.Delete(seriesDir, true); } catch { }
+                        try { Directory.Delete(seriesDir, true); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete empty series dir {Dir}", seriesDir); }
                     }
                 }
                 if (Directory.Exists(studyDir) && !Directory.EnumerateFileSystemEntries(studyDir).Any())
                 {
-                    try { Directory.Delete(studyDir, true); } catch { }
+                    try { Directory.Delete(studyDir, true); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete empty study dir {Dir}", studyDir); }
                 }
             }
         }

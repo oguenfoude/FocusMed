@@ -109,7 +109,7 @@ public sealed class ChildProcessSupervisor : IDisposable
             _logger.LogInformation("{Role} backoff: waiting {Delay}s before restart", role, delay.TotalSeconds);
             SetStatus(role, $"Restarting (backoff {delay.TotalSeconds:0}s)");
             try { Task.Delay(delay, ct).GetAwaiter().GetResult(); }
-            catch (OperationCanceledException) { return null; }
+            catch (OperationCanceledException) { _logger.LogDebug("{Role} backoff cancelled during shutdown", role); return null; }
             if (ct.IsCancellationRequested) return null;
         }
 
@@ -163,6 +163,7 @@ public sealed class ChildProcessSupervisor : IDisposable
                 }
                 catch (OperationCanceledException)
                 {
+                    _logger.LogDebug("{Role} WaitForExit cancelled (shutdown)", role);
                     return;
                 }
                 catch (Exception ex)
@@ -251,7 +252,8 @@ public sealed class ChildProcessSupervisor : IDisposable
 
         // Give the loop a moment to observe the shutdown flag and exit.
         try { await Task.Delay(CheckIntervalMs + 100, new CancellationTokenSource(grace).Token); }
-        catch { }
+        catch (OperationCanceledException) { _logger.LogDebug("Supervisor loop delay cancelled during shutdown"); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Supervisor loop delay error"); }
     }
 
     private async Task StopProcessAsync(Process? process, string role)
@@ -269,7 +271,7 @@ public sealed class ChildProcessSupervisor : IDisposable
             process.CloseMainWindow();
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             try { await process.WaitForExitAsync(cts.Token); }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) { _logger.LogDebug("{Role} CloseMainWindow wait cancelled", role); }
         }
         catch (Exception ex)
         {
@@ -289,7 +291,8 @@ public sealed class ChildProcessSupervisor : IDisposable
             }
         }
 
-        try { process.Dispose(); } catch { }
+        try { process.Dispose(); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Failed to dispose {Role} process", role); }
     }
 
     public void Dispose()

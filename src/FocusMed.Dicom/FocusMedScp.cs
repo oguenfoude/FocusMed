@@ -32,6 +32,15 @@ public class FocusMedScp : DicomService,
     // implicit FilmSession fallback to THIS connection only (never a global guess).
     private string? _fallbackPrintJobSopUid;
 
+    // Identity captured at FilmSession N-CREATE time (from Proposed Study Sequence 2130,00A0)
+    // and reused during N-SET, so a SonoVision print that sends demographics at session level
+    // retains them even if the image N-SET itself carries none. Association-scoped, not static.
+    private string? _incomingPatientId;
+    private string? _incomingPatientName;
+    private string? _incomingStudyUid;
+    private string? _incomingPatientBirthDate;
+    private string? _incomingPatientSex;
+
     private static readonly Dictionary<string, DicomTransferSyntax> TransferSyntaxMap = new()
     {
         ["ImplicitVRLittleEndian"] = DicomTransferSyntax.ImplicitVRLittleEndian,
@@ -219,7 +228,7 @@ public class FocusMedScp : DicomService,
     {
         try
         {
-            await _upsertService.StoreFileOnlyAsync(request.File, Association.CallingAE);
+            await _upsertService.StoreFileOnlyAsync(request.File, Association.CallingAE, Association.RemoteHost);
             return new DicomCStoreResponse(request, DicomStatus.Success);
         }
         catch (Exception ex)
@@ -559,12 +568,53 @@ public class FocusMedScp : DicomService,
                     SopInstanceUid = sopUid,
                     NumberOfCopies = request.Dataset.GetSingleValueOrDefault(DicomTag.NumberOfCopies, (ushort)1),
                     PrintPriority = request.Dataset.GetSingleValueOrDefault(DicomTag.PrintPriority, "NORMAL"),
-                    CallingAeTitle = Association.CallingAE
+                    CallingAeTitle = Association.CallingAE,
+                    RemoteIp = Association.RemoteHost
                 };
+
+                // PS3.4 Annex H Table H.4-2: patient demographics travel in the Film Session's
+                // Proposed Study Sequence. Capture none/storage-commitment optional tags there
+                // so N-SET can link the print without guessing. Also accept top-level identity
+                // tags some SCUs place directly in the N-CREATE dataset.
+                if (request.Dataset.TryGetSequence(DicomTag.ProposedStudySequence, out var proposedSeq)
+                    && proposedSeq.Items.Count > 0)
+                {
+                    var item = proposedSeq.Items[0];
+                    var proposedPatientId = item.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
+                    var proposedPatientName = item.GetSingleValueOrDefault(DicomTag.PatientName, string.Empty);
+                    var proposedStudyUid = item.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
+                    var proposedBirthDate = item.GetSingleValueOrDefault(DicomTag.PatientBirthDate, string.Empty);
+                    var proposedSex = item.GetSingleValueOrDefault(DicomTag.PatientSex, string.Empty);
+                    if (!string.IsNullOrWhiteSpace(proposedPatientId) || !string.IsNullOrWhiteSpace(proposedPatientName))
+                    {
+                        _incomingPatientId = proposedPatientId;
+                        _incomingPatientName = proposedPatientName;
+                        _incomingStudyUid = proposedStudyUid;
+                        if (!string.IsNullOrWhiteSpace(proposedBirthDate)) _incomingPatientBirthDate = proposedBirthDate;
+                        if (!string.IsNullOrWhiteSpace(proposedSex)) _incomingPatientSex = proposedSex;
+                        _logger.LogInformation("FilmSession N-CREATE captured identity from ProposedStudySequence: {PatientId}/{PatientName} study={StudyUid} birth={BirthDate} sex={Sex}",
+                            _incomingPatientId, _incomingPatientName, _incomingStudyUid ?? "(none)", _incomingPatientBirthDate ?? "(none)", _incomingPatientSex ?? "(none)");
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(request.Dataset.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty))
+                    || !string.IsNullOrWhiteSpace(request.Dataset.GetSingleValueOrDefault(DicomTag.PatientName, string.Empty)))
+                {
+                    _incomingPatientId = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
+                    _incomingPatientName = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientName, string.Empty);
+                    _incomingStudyUid = request.Dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
+                    var topBirthDate = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientBirthDate, string.Empty);
+                    var topSex = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientSex, string.Empty);
+                    if (!string.IsNullOrWhiteSpace(topBirthDate)) _incomingPatientBirthDate = topBirthDate;
+                    if (!string.IsNullOrWhiteSpace(topSex)) _incomingPatientSex = topSex;
+                    _logger.LogInformation("FilmSession N-CREATE captured identity from top-level dataset: {PatientId}/{PatientName} study={StudyUid} birth={BirthDate} sex={Sex}",
+                        _incomingPatientId, _incomingPatientName, _incomingStudyUid ?? "(none)", _incomingPatientBirthDate ?? "(none)", _incomingPatientSex ?? "(none)");
+                }
 
                 db.PrintJobs.Add(printJob);
                 await db.SaveChangesAsync();
                 _logger.LogInformation("Print Job #{PrintJobId} created ({Copies} {CopyLabel}, {Priority}) from {CallingAe}", printJob.Id, printJob.NumberOfCopies, printJob.NumberOfCopies == 1 ? "copy" : "copies", printJob.PrintPriority, printJob.CallingAeTitle);
+
+                LogDatasetTags(request.Dataset, "FilmSession N-CREATE");
             }
             else if (sopClass == DicomUID.BasicFilmBox.UID)
             {
@@ -615,7 +665,8 @@ public class FocusMedScp : DicomService,
                         printJob = new PrintJob
                         {
                             SopInstanceUid = implicitUid,
-                            CallingAeTitle = Association.CallingAE
+                            CallingAeTitle = Association.CallingAE,
+                            RemoteIp = Association.RemoteHost
                         };
                         db.PrintJobs.Add(printJob);
                         await db.SaveChangesAsync();
@@ -757,6 +808,8 @@ public class FocusMedScp : DicomService,
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
+            LogDatasetTags(request.Dataset, "N-SET");
+
             var imageBox = await db.PrintImageBoxes
                 .Include(i => i.FilmBox).ThenInclude(f => f!.PrintJob).ThenInclude(p => p!.Patient)
                 .FirstOrDefaultAsync(i => i.SopInstanceUid == sopUid);
@@ -768,6 +821,8 @@ public class FocusMedScp : DicomService,
                 string? patientId = null;
                 string? patientName = null;
                 string? patientSource = null;
+                string? birthDate = null;
+                string? sex = null;
 
                 if (imageBox.FilmBox?.PrintJob?.Patient != null)
                 {
@@ -787,12 +842,35 @@ public class FocusMedScp : DicomService,
 
                 if (string.IsNullOrEmpty(patientId) && imageSeq != null && imageSeq.Items.Count > 0)
                 {
-                    patientId = imageSeq.Items[0].GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
-                    patientName = imageSeq.Items[0].GetSingleValueOrDefault(DicomTag.PatientName, string.Empty);
+                    var inner = imageSeq.Items[0];
+                    patientId = inner.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
+                    patientName = inner.GetSingleValueOrDefault(DicomTag.PatientName, string.Empty);
+                    birthDate = inner.GetSingleValueOrDefault(DicomTag.PatientBirthDate, string.Empty);
+                    sex = inner.GetSingleValueOrDefault(DicomTag.PatientSex, string.Empty);
                     if (!string.IsNullOrEmpty(patientId))
                     {
                         patientSource = "InnerDataset";
                         _logger.LogDebug("Patient from inner DICOM dataset: {PatientId} - {PatientName}", patientId, patientName);
+                    }
+                }
+
+                // PS3.4 Annex H Tables H.4-10/H.4-11: the Image Box N-SET also carries an
+                // Original Image Sequence (2130,00C0) with mandatory PatientID, Study/Series
+                // UIDs. Read it as a secondary source before falling back to FilmSession/top-level.
+                if (string.IsNullOrEmpty(patientId) && request.Dataset.TryGetSequence(DicomTag.OriginalImageSequence, out var origSeq)
+                    && origSeq.Items.Count > 0)
+                {
+                    var origItem = origSeq.Items[0];
+                    patientId = origItem.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
+                    if (!string.IsNullOrEmpty(patientId))
+                    {
+                        patientName = origItem.GetSingleValueOrDefault(DicomTag.PatientName, string.Empty);
+                        if (string.IsNullOrEmpty(birthDate))
+                            birthDate = origItem.GetSingleValueOrDefault(DicomTag.PatientBirthDate, string.Empty);
+                        if (string.IsNullOrEmpty(sex))
+                            sex = origItem.GetSingleValueOrDefault(DicomTag.PatientSex, string.Empty);
+                        patientSource = "OriginalImageSequence";
+                        _logger.LogDebug("Patient from Original Image Sequence: {PatientId} - {PatientName}", patientId, patientName);
                     }
                 }
 
@@ -806,9 +884,26 @@ public class FocusMedScp : DicomService,
                     {
                         patientId = topPatientId;
                         patientName = topPatientName;
+                        if (string.IsNullOrEmpty(birthDate))
+                            birthDate = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientBirthDate, string.Empty);
+                        if (string.IsNullOrEmpty(sex))
+                            sex = request.Dataset.GetSingleValueOrDefault(DicomTag.PatientSex, string.Empty);
                         patientSource = "TopLevelDataset";
                         _logger.LogDebug("Patient from top-level N-SET dataset: {PatientId} - {PatientName}", patientId, patientName);
                     }
+                }
+
+                // FilmSession-created identity this association already received at N-CREATE.
+                // Association-scoped, so it only pairs THIS print session's demographics — never
+                // a cross-connection guess.
+                if (string.IsNullOrEmpty(patientId) && !string.IsNullOrWhiteSpace(_incomingPatientId))
+                {
+                    patientId = _incomingPatientId;
+                    patientName = _incomingPatientName ?? string.Empty;
+                    if (string.IsNullOrEmpty(birthDate)) birthDate = _incomingPatientBirthDate;
+                    if (string.IsNullOrEmpty(sex)) sex = _incomingPatientSex;
+                    patientSource = "FilmSession";
+                    _logger.LogDebug("Patient from FilmSession Proposed Study Sequence: {PatientId} - {PatientName}", patientId, patientName);
                 }
 
                 // Diagnostic: surface exactly what the SCU sent so we can verify identity flow.
@@ -822,13 +917,34 @@ public class FocusMedScp : DicomService,
                 // Unresolved prints stay unlinked (empty PatientId/Name) per AGENTS.md #26/#27.
                 // Auto-merge is handled in DicomUpsertService based on identity the SCU DID send.
 
+                // Session-level demographics (captured at FilmSession N-CREATE) backfill any
+                // image-level gaps regardless of which tier resolved the patient ID.
+                if (string.IsNullOrEmpty(birthDate)) birthDate = _incomingPatientBirthDate;
+                if (string.IsNullOrEmpty(sex)) sex = _incomingPatientSex;
+
                 patientId ??= string.Empty;
                 patientName ??= string.Empty;
 
                 if (imageSeq != null)
                 {
                     var innerDataset = imageSeq.Items[0];
-                    var storedFile = await _upsertService.IngestPrintImageAsync(innerDataset, patientId, patientName, Association.CallingAE);
+
+                    // If the association's FilmSession N-CREATE carried a StudyInstanceUID
+                    // (Proposed Study Sequence), surface it into the image dataset so the
+                    // merge resolver in IngestPrintImageAsync can link to that study. Use it
+                    // only when the image itself carried none — the image-level UID wins.
+                    if (!innerDataset.Contains(DicomTag.StudyInstanceUID) && !string.IsNullOrWhiteSpace(_incomingStudyUid))
+                        innerDataset.AddOrUpdate(DicomTag.StudyInstanceUID, _incomingStudyUid);
+
+                    // Same for birth date/sex captured at FilmSession time — surface them into
+                    // the image dataset so the Patient entity is created with demographics when
+                    // the SCU sent identity only at session level.
+                    if (!innerDataset.Contains(DicomTag.PatientBirthDate) && !string.IsNullOrWhiteSpace(birthDate))
+                        innerDataset.AddOrUpdate(DicomTag.PatientBirthDate, birthDate);
+                    if (!innerDataset.Contains(DicomTag.PatientSex) && !string.IsNullOrWhiteSpace(sex))
+                        innerDataset.AddOrUpdate(DicomTag.PatientSex, sex);
+
+                    var storedFile = await _upsertService.IngestPrintImageAsync(innerDataset, patientId, patientName, Association.CallingAE, Association.RemoteHost);
                     if (storedFile != null)
                     {
                         var newSopUid = storedFile.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
@@ -940,8 +1056,17 @@ public class FocusMedScp : DicomService,
                             Status = StorageCommitmentStatus.Pending
                         };
 
-                        db.StorageCommitmentJobs.Add(job);
-                        await db.SaveChangesAsync();
+                        var duplicate = await db.StorageCommitmentJobs
+                            .AnyAsync(j => j.TransactionUid == transactionUid);
+                        if (duplicate)
+                        {
+                            _logger.LogDebug("Duplicate StorageCommitment TransactionUID {TransactionUid} ignored", transactionUid);
+                        }
+                        else
+                        {
+                            db.StorageCommitmentJobs.Add(job);
+                            await db.SaveChangesAsync();
+                        }
                     }
                 }
             }
@@ -1076,6 +1201,60 @@ public class FocusMedScp : DicomService,
     public Task<DicomNEventReportResponse> OnNEventReportRequestAsync(DicomNEventReportRequest request)
     {
         return Task.FromResult(new DicomNEventReportResponse(request, DicomStatus.Success));
+    }
+
+    // Diagnostic: dump EVERY tag of a dataset (recursively through sequences) so we can
+    // see exactly what an SCU sends — including the tags we don't yet read. Logged at
+    // Debug; useful to discover where SonoVision places patient identity.
+    private void LogDatasetTags(DicomDataset dataset, string label, DicomTag? parent = null)
+    {
+        if (dataset == null) return;
+        var sb = new StringBuilder(512);
+        sb.Append($"DATASET[{label}]");
+        if (parent != null) sb.Append($" seq={parent}");
+        sb.Append(":");
+        foreach (var item in dataset)
+        {
+            var keyword = item.Tag.DictionaryEntry.Keyword ?? item.Tag.ToString();
+            sb.Append(' ').Append(keyword).Append('=');
+            switch (item)
+            {
+                case DicomSequence seq:
+                    sb.Append($"{seq.Items.Count}items[");
+                    foreach (var nested in seq.Items)
+                    {
+                        sb.Append(DatasetSummary(nested, 32)).Append(';');
+                    }
+                    sb.Append(']');
+                    break;
+                case DicomElement el when el.Tag == DicomTag.PixelData:
+                    sb.Append("<pixels>");
+                    break;
+                case DicomElement el:
+                    try { sb.Append(el.Get<string>()?.Trim().Replace('\r', ' ').Replace('\n', ' ')); }
+                    catch { sb.Append("(unreadable)"); }
+                    break;
+            }
+        }
+        _logger.LogInformation("{Tags}", sb.ToString());
+    }
+
+    private static string DatasetSummary(DicomDataset ds, int maxLen)
+    {
+        var parts = new List<string>();
+        foreach (var item in ds)
+        {
+            var keyword = item.Tag.DictionaryEntry.Keyword ?? item.Tag.ToString();
+            if (item is DicomElement el && el.Tag != DicomTag.PixelData)
+            {
+                string val;
+                try { val = el.Get<string>()?.Trim() ?? ""; }
+                catch { val = "?"; }
+                if (val.Length > maxLen) val = val[..maxLen] + "…";
+                parts.Add($"{keyword}={val}");
+            }
+        }
+        return string.Join(" ", parts.Take(20));
     }
 
     private static int ParseImageBoxCount(string imageDisplayFormat)

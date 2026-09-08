@@ -96,7 +96,7 @@ else
                     {
                         var modalities = study.Series.Select(s => s.Modality).Distinct().ToList();
                         var modalityDisplay = modalities.Any() ? string.Join(", ", modalities) : "N/A";
-                        var patientName = string.IsNullOrWhiteSpace(study.Patient?.PatientName) ? "Inconnu" : study.Patient.PatientName.Replace("^", " ");
+                        var patientName = DicomHelpers.FormatPatientName(study.Patient?.PatientName);
                         var daysLeft = Math.Max(0, 30 - (int)(DateTime.UtcNow - study.LastUpdatedAt).TotalDays);
 
                         <tr class="hover:bg-slate-50/80 transition-colors">

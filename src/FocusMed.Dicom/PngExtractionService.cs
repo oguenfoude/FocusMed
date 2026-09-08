@@ -108,7 +108,8 @@ public class PngExtractionService
                     f.FrameIndex,
                     f.PngPath,
                     f.PngPath != null && File.Exists(f.PngPath),
-                    currentImage.Series?.Modality))
+                    currentImage.Series?.Modality,
+                    currentImage.Source))
                 .ToList();
 
             results.AddRange(frames);
@@ -129,6 +130,41 @@ public class PngExtractionService
                 _studyRefCount.TryRemove(studyUid, out _);
                 _studyLocks.TryRemove(studyUid, out _);
             }
+        }
+    }
+
+    // Warmed at study completion by StudyCompletionService so the Dashboard opens
+    // instantly (PNG rendering is the expensive part of a first open). GetOrExtractFramesAsync
+    // increments the per-study refcount; we release it here so the semaphore can be retired.
+    // PNGs persist on disk permanently once extracted. Failures are non-fatal.
+    public async Task PreExtractStudyAsync(int studyId, CancellationToken ct = default)
+    {
+        try
+        {
+            var frames = await GetOrExtractFramesAsync(studyId, ct);
+            if (frames.Count == 0)
+                return;
+
+            string? studyUid;
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
+                studyUid = await db.Studies
+                    .Where(s => s.Id == studyId)
+                    .Select(s => s.StudyInstanceUid)
+                    .FirstOrDefaultAsync(ct);
+            }
+
+            if (!string.IsNullOrEmpty(studyUid))
+                ReleaseStudyPng(studyUid);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Pre-extraction cancelled during shutdown for study {StudyId}", studyId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Pre-extraction failed for study {StudyId} (non-fatal)", studyId);
         }
     }
 
@@ -214,4 +250,4 @@ public class PngExtractionService
     }
 }
 
-public record FrameResult(string SopInstanceUid, int FrameIndex, string? PngPath, bool FileExists, string? Modality);
+public record FrameResult(string SopInstanceUid, int FrameIndex, string? PngPath, bool FileExists, string? Modality, string Source);

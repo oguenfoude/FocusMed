@@ -266,7 +266,7 @@ public class BootstrapService
             var printer = _services.GetRequiredService<PrinterSetupService>();
             await printer.EnsurePrinterExistsAsync().WaitAsync(ct);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { _logger.LogDebug("Virtual printer setup cancelled during shutdown"); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Virtual printer setup failed (continuing)");
@@ -280,7 +280,7 @@ public class BootstrapService
             var db = _services.GetRequiredService<DatabaseService>();
             await db.RunMigrationAsync().WaitAsync(ct);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { _logger.LogDebug("Migration cancelled during shutdown"); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Database migration failed (continuing)");

@@ -159,7 +159,7 @@ else
                     {
                         var modalities = study.Series.Select(s => s.Modality).Distinct().ToList();
                         var modalityDisplay = modalities.Any() ? string.Join(", ", modalities) : "N/A";
-                        var patientName = string.IsNullOrWhiteSpace(study.Patient?.PatientName) ? "Inconnu" : study.Patient.PatientName.Replace("^", " ");
+                        var patientName = DicomHelpers.FormatPatientName(study.Patient?.PatientName);
                         var imageCount = _imageCounts.GetValueOrDefault(study.Id, 0);
                         <tr class="hover:bg-slate-50/80 transition-colors group">
                             <td class="px-4 sm:px-6 py-3.5 text-slate-500">

@@ -317,7 +317,7 @@ public partial class App : System.Windows.Application
 
         Dispatcher.BeginInvoke(() =>
         {
-            var window = new Windows.ResumePickerWindow(_databaseService!, pdfPath, _resumesFolder);
+            var window = new Windows.ResumePickerWindow(_databaseService!, _serviceProvider!.GetRequiredService<ILogger<FocusMed.Launcher.Windows.ResumePickerWindow>>(), pdfPath, _resumesFolder);
             window.Show();
             window.Activate();
         });

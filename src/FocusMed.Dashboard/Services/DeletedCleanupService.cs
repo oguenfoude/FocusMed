@@ -1,5 +1,6 @@
 using FocusMed.Data;
 using FocusMed.Data.Entities;
+using FocusMed.Dicom;
 using Microsoft.EntityFrameworkCore;
 
 namespace FocusMed.Dashboard.Services;
@@ -32,6 +33,10 @@ public class DeletedCleanupService : BackgroundService
                 if (oldDeleted.Count > 0)
                 {
                     _logger.LogInformation("Auto-deleting {Count} studies older than 30 days", oldDeleted.Count);
+                    var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+                    var archiveRoot = Path.Combine(dataDir, "archive");
+                    var imagesRoot = Path.Combine(dataDir, "images");
                     foreach (var study in oldDeleted)
                     {
                         try
@@ -44,27 +49,44 @@ public class DeletedCleanupService : BackgroundService
                                 .ToListAsync(stoppingToken);
 
                             var archiveDirs = new HashSet<string>();
+                            var pngDirs = new HashSet<string>();
                             foreach (var img in images)
                             {
                                 if (!string.IsNullOrEmpty(img.FilePath))
                                 {
-                                    var dir = Path.GetDirectoryName(img.FilePath);
-                                    if (dir != null)
-                                    {
-                                        var seriesDir = Directory.GetParent(dir)?.FullName;
-                                        if (seriesDir != null)
-                                        {
-                                            var studyDir = Directory.GetParent(seriesDir)?.FullName;
-                                            if (studyDir != null) archiveDirs.Add(studyDir);
-                                        }
-                                    }
+                                    // FilePath = archive/<study>/<series>/<file>.dcm, so the
+                                    // study dir is exactly ONE level above the series dir.
+                                    var studyDir = Directory.GetParent(Path.GetDirectoryName(img.FilePath) ?? "")?.FullName;
+                                    if (studyDir != null && DicomHelpers.IsSubdirectoryOf(studyDir, archiveRoot))
+                                        archiveDirs.Add(studyDir);
+                                }
+                                if (!string.IsNullOrEmpty(img.PngPath))
+                                {
+                                    var pngDir = Path.GetDirectoryName(img.PngPath);
+                                    if (pngDir != null && DicomHelpers.IsSubdirectoryOf(pngDir, imagesRoot))
+                                        pngDirs.Add(pngDir);
                                 }
                             }
+                            var resumeToDelete = study.ResumePdfPath;
 
                             foreach (var dir in archiveDirs)
                             {
                                 try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
                                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete archive dir {Dir}", dir); }
+                            }
+                            foreach (var dir in pngDirs)
+                            {
+                                try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+                                catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete PNG dir {Dir}", dir); }
+                            }
+                            if (!string.IsNullOrEmpty(resumeToDelete))
+                            {
+                                var resumeFull = Path.GetFullPath(Path.Combine(dataDir, resumeToDelete));
+                                if (resumeFull.StartsWith(dataDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    try { if (File.Exists(resumeFull)) File.Delete(resumeFull); }
+                                    catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete resume PDF {Path}", resumeFull); }
+                                }
                             }
 
                             foreach (var img in images)

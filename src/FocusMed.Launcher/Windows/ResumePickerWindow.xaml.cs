@@ -1,23 +1,26 @@
 using System.IO;
 using System.Windows;
 using FocusMed.Launcher.Services;
+using Microsoft.Extensions.Logging;
 
 namespace FocusMed.Launcher.Windows;
 
 public partial class ResumePickerWindow : Window
 {
     private readonly DatabaseService _databaseService;
+    private readonly ILogger<ResumePickerWindow> _logger;
     private readonly string _pdfPath = "";
     private readonly string _resumesFolder;
     private List<StudyItem> _studies = new();
 
-    public ResumePickerWindow(DatabaseService databaseService, string pdfPath, string resumesFolder = "resumes")
+    public ResumePickerWindow(DatabaseService databaseService, ILogger<ResumePickerWindow> logger, string pdfPath, string resumesFolder = "resumes")
     {
         _databaseService = databaseService;
+        _logger = logger;
         _pdfPath = pdfPath;
         _resumesFolder = resumesFolder;
         InitializeComponent();
-        Closed += (_, _) => { try { if (!string.IsNullOrEmpty(_pdfPath) && File.Exists(_pdfPath)) File.Delete(_pdfPath); } catch { } };
+        Closed += (_, _) => { try { if (!string.IsNullOrEmpty(_pdfPath) && File.Exists(_pdfPath)) File.Delete(_pdfPath); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete temp PDF on window close"); } };
         _ = LoadStudiesAsync();
     }
 
@@ -123,14 +126,15 @@ public partial class ResumePickerWindow : Window
             }
             else
             {
-                try { File.Delete(destPath); } catch { }
+                try { File.Delete(destPath); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to cleanup PDF after failed assign"); }
                 StatusText.Text = "Erreur lors de l'association.";
             }
         }
-        catch
+        catch (Exception ex)
         {
-            try { File.Delete(destPath); } catch { }
+            try { File.Delete(destPath); } catch (Exception ex2) { _logger.LogWarning(ex2, "Failed to cleanup PDF after exception"); }
             StatusText.Text = "Erreur lors de l'association.";
+            _logger.LogWarning(ex, "Failed to assign resume to study {StudyId}", selected.Id);
         }
     }
 

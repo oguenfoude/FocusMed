@@ -34,7 +34,7 @@ SourceDir=..\deploy
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 
 [Files]
-Source: "*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "BuildHost-*;*.pdb;package.json;package-lock.json;appsettings.Development.json;web.config"
+Source: "*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "BuildHost-*,*.pdb,package.json,package-lock.json,appsettings.json,appsettings.Development.json,web.config,runtimes\linux*,runtimes\osx*,runtimes\maccatalyst*,runtimes\win-arm64*,runtimes\win-x86*,FocusMedSetup-*.exe"
 
 [Icons]
 Name: "{group}\FocusMed"; Filename: "{app}\{#MyAppExeName}"

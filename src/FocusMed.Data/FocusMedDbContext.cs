@@ -115,6 +115,12 @@ public class FocusMedDbContext : DbContext
         modelBuilder.Entity<PrintJob>()
             .HasIndex(p => new { p.CallingAeTitle, p.CreatedAt });
 
+        modelBuilder.Entity<Study>()
+            .HasIndex(s => s.RemoteIp);
+
+        modelBuilder.Entity<PrintJob>()
+            .HasIndex(p => p.RemoteIp);
+
         modelBuilder.Entity<FilmBox>()
             .HasIndex(f => f.PrintJobId);
 
