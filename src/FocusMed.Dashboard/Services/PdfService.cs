@@ -308,7 +308,7 @@ public class PdfService
             return;
         }
 
-        GenerateCoverPdfUncached(patientDisplay, studyDate, outputPath, pageSize);
+        GenerateCoverPdfCore(patientDisplay, studyDate, outputPath, pageSize);
 
         try
         {
@@ -321,15 +321,10 @@ public class PdfService
         }
     }
 
-    private void GenerateCoverPdfUncached(string patientDisplay, string studyDate, string outputPath, string pageSize)
-    {
-        // Single clean path: QuestPDF renders the cover directly (~100ms, no external
-        // processes, no COM). The old Word COM chain (WINWORD.EXE spawn, 1-3s, Word
-        // install required) was removed — it was slower and strictly more fragile.
-        GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
-    }
-
-    private void GenerateCoverPdfFallback(string patientName, string studyDate, string outputPath, string pageSize = "A4")
+    // Single clean path: QuestPDF renders the cover directly (~100ms, no external
+    // processes, no COM). The old Word COM chain (WINWORD.EXE spawn, 1-3s, Word
+    // install required) was removed — it was slower and strictly more fragile.
+    private void GenerateCoverPdfCore(string patientName, string studyDate, string outputPath, string pageSize = "A4")
     {
         var logoBytes = File.Exists(_coverLogoPath) ? File.ReadAllBytes(_coverLogoPath) : null;
         var isA3 = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase);
