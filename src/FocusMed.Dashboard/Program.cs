@@ -116,7 +116,7 @@ var imagesPath = Path.Combine(dataDir, "images");
 Directory.CreateDirectory(imagesPath);
 
 var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
-foreach (var asset in new[] { "cover.docx", "cover-logo.jpg" })
+foreach (var asset in new[] { "cover-logo.jpg" })
 {
     var src = Path.Combine(wwwroot, asset);
     var dst = Path.Combine(dataDir, asset);

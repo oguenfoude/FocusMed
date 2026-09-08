@@ -85,8 +85,11 @@ public partial class ResumePickerWindow : Window
         ConfirmButton.IsEnabled = StudiesGrid.SelectedItem != null;
     }
 
+    private bool _confirming;
+
     private async void ConfirmButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_confirming) return;
         if (StudiesGrid.SelectedItem is not StudyItem selected) return;
 
         if (string.IsNullOrEmpty(_pdfPath) || !File.Exists(_pdfPath))
@@ -94,6 +97,9 @@ public partial class ResumePickerWindow : Window
             System.Windows.MessageBox.Show("Aucun document a associer.", "FocusMed", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+
+        _confirming = true;
+        ConfirmButton.IsEnabled = false;
 
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
@@ -110,6 +116,8 @@ public partial class ResumePickerWindow : Window
         catch (Exception ex)
         {
             System.Windows.MessageBox.Show($"Erreur de copie: {ex.Message}", "FocusMed", MessageBoxButton.OK, MessageBoxImage.Error);
+            _confirming = false;
+            ConfirmButton.IsEnabled = StudiesGrid.SelectedItem != null;
             return;
         }
 
@@ -128,6 +136,8 @@ public partial class ResumePickerWindow : Window
             {
                 try { File.Delete(destPath); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to cleanup PDF after failed assign"); }
                 StatusText.Text = "Erreur lors de l'association.";
+                _confirming = false;
+                ConfirmButton.IsEnabled = StudiesGrid.SelectedItem != null;
             }
         }
         catch (Exception ex)
@@ -135,6 +145,8 @@ public partial class ResumePickerWindow : Window
             try { File.Delete(destPath); } catch (Exception ex2) { _logger.LogWarning(ex2, "Failed to cleanup PDF after exception"); }
             StatusText.Text = "Erreur lors de l'association.";
             _logger.LogWarning(ex, "Failed to assign resume to study {StudyId}", selected.Id);
+            _confirming = false;
+            ConfirmButton.IsEnabled = StudiesGrid.SelectedItem != null;
         }
     }
 

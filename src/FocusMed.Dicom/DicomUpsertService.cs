@@ -193,7 +193,7 @@ study = new Study
                     Status = StudyStatus.Receiving
                 };
                 db.Studies.Add(study);
-                db.SaveChanges();
+                await db.SaveChangesAsync();
 
                 // CT arrived — immediately absorb any recent print studies within the merge window.
                 await MergeRecentAnonymousStudiesAsync(db, study);

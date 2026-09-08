@@ -60,8 +60,7 @@ internal sealed class PrintExecutionService(
             }
             finally
             {
-                if (pdfPath != request.PdfPath && File.Exists(pdfPath))
-                    try { File.Delete(pdfPath); } catch { }
+                DeleteTempPdf(request.PdfPath, pdfPath);
             }
         }
 
@@ -85,12 +84,12 @@ internal sealed class PrintExecutionService(
                 return new PrintJobResult { Success = false, ErrorMessage = "Raw print failed" };
             }
             catch (Exception ex) { return new PrintJobResult { Success = false, ErrorMessage = ex.Message }; }
-            finally { if (pdfPath != request.PdfPath && File.Exists(pdfPath)) try { File.Delete(pdfPath); } catch { } }
+            finally { DeleteTempPdf(request.PdfPath, pdfPath); }
         }
 
         try { return RunInStaThread(() => PrintViaXps(pdfPath, request)); }
         catch (Exception ex) { return new PrintJobResult { Success = false, ErrorMessage = ex.Message }; }
-        finally { if (pdfPath != request.PdfPath && File.Exists(pdfPath)) try { File.Delete(pdfPath); } catch { } }
+        finally { DeleteTempPdf(request.PdfPath, pdfPath); }
     }
 
     private static int CountPdfPages(string pdfPath)
@@ -293,9 +292,16 @@ internal sealed class PrintExecutionService(
         return new PrintTicket(outMs);
     }
 
+    private void DeleteTempPdf(string originalPath, string actualPath)
+    {
+        if (actualPath == originalPath || !File.Exists(actualPath)) return;
+        try { File.Delete(actualPath); }
+        catch (Exception ex) { logger.LogWarning(ex, "Temp print PDF not deleted (will linger in pdf-cache): {Path}", actualPath); }
+    }
+
     private const int StaPrintTimeoutSeconds = 180;
 
-    private static T RunInStaThread<T>(Func<T> action)
+    private T RunInStaThread<T>(Func<T> action)
     {
         T result = default!;
         Exception? ex = null;
@@ -311,9 +317,18 @@ internal sealed class PrintExecutionService(
         t.Start();
 
         if (!t.Join(TimeSpan.FromSeconds(StaPrintTimeoutSeconds)))
+        {
+            // The hung thread cannot be aborted (Thread.Abort is obsolete and unsafe with
+            // COM/XPS). It is background, so it dies with the process. Log at Error so a
+            // hung spooler is visible in diagnostics instead of a silent slow print.
+            logger.LogError(
+                "Print STA thread timed out after {Timeout}s and was abandoned (printer '{Request}' may be offline). " +
+                "The background thread keeps running until the process exits.",
+                StaPrintTimeoutSeconds, typeof(T).Name);
             throw new TimeoutException(
                 $"Print did not complete within {StaPrintTimeoutSeconds}s (spooler hung or printer offline?). " +
                 "Background STA thread left running.");
+        }
 
         completed.Wait();
         if (ex != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex).Throw();

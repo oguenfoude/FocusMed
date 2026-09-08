@@ -12,7 +12,6 @@ public class PdfService
     private readonly string _pdfCacheDir;
     private readonly string _coverCacheDir;
     private readonly string _coverLogoPath;
-    private readonly string _coverDocxPath;
     private readonly ILogger<PdfService> _logger;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _pdfLocks = new();
     private static readonly ConcurrentDictionary<string, int> _pdfLockCounts = new();
@@ -31,7 +30,6 @@ public class PdfService
         _coverCacheDir = Path.Combine(_pdfCacheDir, "covers");
         Directory.CreateDirectory(_coverCacheDir);
 
-        _coverDocxPath = Path.Combine(dataDir, "cover.docx");
         _coverLogoPath = Path.Combine(dataDir, "cover-logo.jpg");
     }
 
@@ -118,7 +116,7 @@ public class PdfService
             {
                 foreach (var f in tempFiles)
                 {
-                    try { if (File.Exists(f)) File.Delete(f); } catch { }
+                    try { if (File.Exists(f)) File.Delete(f); } catch (Exception ex) { _logger.LogDebug(ex, "Temp PDF cleanup failed (non-fatal): {Path}", f); }
                 }
             }
         }
@@ -230,7 +228,7 @@ public class PdfService
         {
             foreach (var f in tempFiles)
             {
-                try { if (File.Exists(f)) File.Delete(f); } catch { }
+                try { if (File.Exists(f)) File.Delete(f); } catch (Exception ex) { _logger.LogDebug(ex, "Booklet temp cleanup failed (non-fatal): {Path}", f); }
             }
         }
     }
@@ -288,7 +286,7 @@ public class PdfService
         {
             foreach (var f in tempFiles)
             {
-                try { if (File.Exists(f)) File.Delete(f); } catch { }
+                try { if (File.Exists(f)) File.Delete(f); } catch (Exception ex) { _logger.LogDebug(ex, "Flat temp cleanup failed (non-fatal): {Path}", f); }
             }
         }
     }
@@ -298,7 +296,7 @@ public class PdfService
         var patientDisplay = patientName.Replace("^", " ");
 
         // Cover depends only on (patient, date, size). Frame-selection changes would otherwise
-        // rebuild it on every toggle — and A4 covers cost a full WINWORD.EXE spawn (~1-3s).
+        // rebuild it on every toggle.
         var coverKeyBytes = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes($"{patientDisplay}|{studyDate}|{pageSize}"));
         var coverCachePath = Path.Combine(
@@ -325,88 +323,10 @@ public class PdfService
 
     private void GenerateCoverPdfUncached(string patientDisplay, string studyDate, string outputPath, string pageSize)
     {
-        if (!File.Exists(_coverDocxPath))
-        {
-            _logger.LogWarning("cover.docx not found at {Path}, using QuestPDF fallback", _coverDocxPath);
-            GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
-            return;
-        }
-
-        if (pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase))
-        {
-            GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
-            return;
-        }
-
-        try
-        {
-            var tempDocx = Path.Combine(Path.GetTempPath(), $"cover_{Guid.NewGuid():N}.docx");
-            try
-            {
-                File.Copy(_coverDocxPath, tempDocx, true);
-                ConvertDocxToPdfViaWord(tempDocx, outputPath, patientDisplay, studyDate);
-
-                if (!File.Exists(outputPath) || new FileInfo(outputPath).Length < 1000)
-                {
-                    _logger.LogWarning("Word COM produced empty PDF, using QuestPDF fallback");
-                    GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
-                }
-            }
-            finally
-            {
-                try { if (File.Exists(tempDocx)) File.Delete(tempDocx); } catch { }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Word COM failed, using QuestPDF fallback");
-            GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
-        }
-    }
-
-    private void ConvertDocxToPdfViaWord(string docxPath, string outputPath, string patientName, string studyDate)
-    {
-        var wordType = Type.GetTypeFromProgID("Word.Application")
-            ?? throw new InvalidOperationException("Word.Application COM not available");
-
-        dynamic? word = null;
-        try
-        {
-            word = Activator.CreateInstance(wordType);
-            if (word is null) throw new InvalidOperationException("Failed to create Word instance");
-            word.Visible = false;
-            word.DisplayAlerts = 0;
-
-            var doc = word.Documents.Open(docxPath, ReadOnly: true, AddToRecentFiles: false);
-            try
-            {
-                var find = doc.Content.Find;
-                find.ClearFormatting();
-                find.Text = "{{PatientName}}";
-                find.Replacement.Text = patientName;
-                find.Execute(Replace: 2);
-
-                find.ClearFormatting();
-                find.Text = "{{StudyDate}}";
-                find.Replacement.Text = studyDate;
-                find.Execute(Replace: 2);
-
-                doc.SaveAs2(outputPath, FileFormat: 17);
-            }
-            finally
-            {
-                doc.Close(SaveChanges: 0);
-                System.Runtime.InteropServices.Marshal.ReleaseComObject(doc);
-            }
-        }
-        finally
-        {
-            if (word is not null)
-            {
-                word.Quit();
-                System.Runtime.InteropServices.Marshal.ReleaseComObject(word);
-            }
-        }
+        // Single clean path: QuestPDF renders the cover directly (~100ms, no external
+        // processes, no COM). The old Word COM chain (WINWORD.EXE spawn, 1-3s, Word
+        // install required) was removed — it was slower and strictly more fragile.
+        GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
     }
 
     private void GenerateCoverPdfFallback(string patientName, string studyDate, string outputPath, string pageSize = "A4")
@@ -565,7 +485,7 @@ public class PdfService
     /// Estimates the median pixel aspect ratio (width/height) of the given PNG files
     /// by reading each file's IHDR chunk (bytes 16-23, big-endian). Falls back to 4:3.
     /// </summary>
-    private static double EstimateImageAspect(IReadOnlyList<string> imagePaths)
+    private double EstimateImageAspect(IReadOnlyList<string> imagePaths)
     {
         var aspects = new List<double>();
         var sample = imagePaths.Take(8).ToList();
@@ -582,7 +502,7 @@ public class PdfService
                 if (w > 0 && h > 0 && w <= 65536 && h <= 65536)
                     aspects.Add(w / (double)h);
             }
-            catch { }
+            catch (Exception ex) { _logger.LogDebug(ex, "PNG aspect probe failed for one file (skipped)"); }
         }
         if (aspects.Count == 0) return 4.0 / 3.0;
         aspects.Sort();
@@ -729,14 +649,14 @@ public class PdfService
         await CleanDirectoryAsync(_pdfCacheDir, "*.pdf", TimeSpan.FromMinutes(maxAgeMinutes));
     }
 
-    private static void DeleteExpired(string dir, string pattern, TimeSpan maxAge)
+    private void DeleteExpired(string dir, string pattern, TimeSpan maxAge)
     {
         if (!Directory.Exists(dir)) return;
         var cutoff = DateTime.UtcNow - maxAge;
         foreach (var file in Directory.GetFiles(dir, pattern))
         {
             try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); }
-            catch { }
+            catch (Exception ex) { _logger.LogDebug(ex, "TTL sweep delete failed (non-fatal): {Path}", file); }
         }
     }
 

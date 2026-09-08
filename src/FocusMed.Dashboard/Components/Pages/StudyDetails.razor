@@ -573,18 +573,28 @@ else
 
     private async Task LoadStudyAsync()
     {
-        using var db = await DbFactory.CreateDbContextAsync();
-        Study = await db.Studies
-            .Include(s => s.Patient)
-            .Include(s => s.Series).ThenInclude(s => s.Images)
-            .AsSplitQuery()
-            .FirstOrDefaultAsync(s => s.Id == Id);
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+            Study = await db.Studies
+                .Include(s => s.Patient)
+                .Include(s => s.Series).ThenInclude(s => s.Images)
+                .AsSplitQuery()
+                .FirstOrDefaultAsync(s => s.Id == Id);
 
-        if (Study != null)
-            ImagesPerPageInput = DefaultImagesPerPage(Study);
-
-        IsLoading = false;
-        await InvokeAsync(StateHasChanged);
+            if (Study != null)
+                ImagesPerPageInput = DefaultImagesPerPage(Study);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load Study {StudyId}", Id);
+            ImageError = "Impossible de charger l'étude. Rechargez la page pour réessayer.";
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     // SonoVision films (Source "PRINT", modality SC or OT) always default to ONE image
@@ -698,7 +708,11 @@ else
 
 
 
-            if (ct.IsCancellationRequested) return;
+            if (ct.IsCancellationRequested)
+            {
+                IsRegeneratingPdf = false;
+                return;
+            }
 
             if (!string.IsNullOrEmpty(newUrl))
             {
@@ -718,7 +732,12 @@ else
                 await InvokeAsync(StateHasChanged);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // Navigation-away or superseded regen: always reset the flag so the
+            // print button and layout inputs don't stay disabled forever.
+            IsRegeneratingPdf = false;
+        }
         catch (Exception ex)
         {
             Logger.LogError(ex, "PDF preview generation failed for Study {StudyId}", Study?.Id);

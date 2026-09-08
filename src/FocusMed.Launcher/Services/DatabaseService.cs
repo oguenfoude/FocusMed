@@ -24,14 +24,14 @@ public class DatabaseService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
-        // Show only TODAY's studies that do NOT already have an assigned resume, so the
-        // picker after a print is short and fast. "Today" is resolved in local time then
-        // converted to UTC (CreatedAt is stored as UTC, see AGENTS.md gotcha #17).
-        var localNow = DateTime.Now;
-        var todayStartUtc = localNow.Date.ToUniversalTime();
-        var todayEndUtc = todayStartUtc.AddDays(1);
+        // Show recent studies that do NOT already have an assigned resume, so the
+        // picker after a print is short and fast. Window covers today + yesterday
+        // (midnight-boundary prints would otherwise show an empty list). CreatedAt
+        // is stored as UTC (see AGENTS.md gotcha #17) — compute the window in UTC.
+        var windowStartUtc = DateTime.UtcNow.Date.AddDays(-1);
 
         var studies = await db.Studies
+            .AsNoTracking()
             .Include(s => s.Patient)
             .Include(s => s.Series)
                 .ThenInclude(ss => ss.Images)
@@ -39,8 +39,7 @@ public class DatabaseService
             .Where(s => s.Status != StudyStatus.Deleted
                 && s.Status != StudyStatus.Archived
                 && string.IsNullOrEmpty(s.ResumePdfPath)
-                && s.CreatedAt >= todayStartUtc
-                && s.CreatedAt < todayEndUtc)
+                && s.CreatedAt >= windowStartUtc)
             .OrderByDescending(s => s.CreatedAt)
             .ToListAsync();
 
@@ -55,6 +54,7 @@ public class DatabaseService
         var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
         var studies = await db.Studies
+            .AsNoTracking()
             .Include(s => s.Patient)
             .Include(s => s.Series)
                 .ThenInclude(ss => ss.Images)
@@ -78,6 +78,14 @@ public class DatabaseService
         if (study == null)
         {
             _logger.LogWarning("Study {StudyId} not found", studyId);
+            return false;
+        }
+
+        // Re-validate state at assign time: the study may have been deleted or
+        // archived between the picker list load and the confirm click.
+        if (study.Status == StudyStatus.Deleted || study.Status == StudyStatus.Archived)
+        {
+            _logger.LogWarning("Refusing resume assign to {Status} Study {StudyId}", study.Status, studyId);
             return false;
         }
 
