@@ -644,13 +644,14 @@ else
     private async Task RegeneratePdfPreviewAsync()
     {
         if (_disposed) return;
+        CancellationTokenSource regenCts;
         lock (_regenLock)
         {
             _regenCts?.Cancel();
             _regenCts?.Dispose();
-            _regenCts = new CancellationTokenSource();
+            regenCts = _regenCts = new CancellationTokenSource();
         }
-        var ct = _regenCts.Token;
+        var ct = regenCts.Token;
 
         try
         {

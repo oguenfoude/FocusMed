@@ -99,7 +99,7 @@
     private System.Threading.Timer? _healthTimer;
     private int _dicomPort = 11112;
 
-    // Arrival chime: polls MAX(DicomImages.Id) every 4s. Every C-STORE and every
+    // Arrival chime: polls MAX(DicomImages.Id) every 2s. Every C-STORE and every
     // print N-SET inserts image rows (merges/completions/deletes do not), so a
     // jump means new DICOM arrived. Cross-process by design: the Worker's
     // in-memory StudyNotificationService never reaches this Dashboard process.
@@ -109,16 +109,16 @@
     private bool _soundMuted;
     private IJSObjectReference? _soundModule;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         var port = Config.GetValue<int?>("DicomNetworking:DicomPort");
         if (port is > 0 and <= 65535) _dicomPort = port.Value;
 
-        ServerOnline = CheckServer();
+        ServerOnline = await CheckServerAsync();
         // Real liveness probe: TCP connect to the Worker's DICOM listener.
         // The old badge was hardcoded green even when the Worker was down.
         _healthTimer = new System.Threading.Timer(
-            _ => { var online = CheckServer(); if (online != ServerOnline) _ = InvokeAsync(() => { ServerOnline = online; StateHasChanged(); }); },
+            _ => _ = CheckServerAndRefreshAsync(),
             null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
         _soundTimer = new System.Threading.Timer(
             _ => _ = CheckArrivalsAsync(),
@@ -172,19 +172,27 @@
         }
     }
 
-    private void CheckServerNow()
+    private async Task CheckServerNow()
     {
-        ServerOnline = CheckServer();
-        StateHasChanged();
+        ServerOnline = await CheckServerAsync();
+        await InvokeAsync(StateHasChanged);
     }
 
-    private bool CheckServer()
+    private async Task CheckServerAndRefreshAsync()
+    {
+        var online = await CheckServerAsync();
+        if (online != ServerOnline)
+            await InvokeAsync(() => { ServerOnline = online; StateHasChanged(); });
+    }
+
+    private async Task<bool> CheckServerAsync()
     {
         try
         {
             using var client = new System.Net.Sockets.TcpClient();
-            var task = client.ConnectAsync(System.Net.IPAddress.Loopback, _dicomPort);
-            return task.Wait(1500) && client.Connected;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1.5));
+            await client.ConnectAsync(System.Net.IPAddress.Loopback, _dicomPort, cts.Token);
+            return client.Connected;
         }
         catch (Exception ex)
         {

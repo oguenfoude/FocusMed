@@ -152,7 +152,12 @@ app.UseStaticFiles(new StaticFileOptions
     FileProvider = new PhysicalFileProvider(pdfCachePath),
     RequestPath = "/pdf-cache",
     ServeUnknownFileTypes = true,
-    DefaultContentType = "application/pdf"
+    DefaultContentType = "application/pdf",
+    // Never let browsers cache these: a preview URL is content-hash stable, so a
+    // cached 404 (file regenerated, TTL sweep, old tab) would poison the preview
+    // permanently for that tab. Local serving makes re-downloads free.
+    OnPrepareResponse = ctx =>
+        ctx.Context.Response.Headers.CacheControl = "no-store"
 });
 
 using (var scope = app.Services.CreateScope())
