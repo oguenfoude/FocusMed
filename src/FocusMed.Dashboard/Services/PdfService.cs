@@ -12,6 +12,7 @@ public class PdfService
     private readonly string _pdfCacheDir;
     private readonly string _coverCacheDir;
     private readonly string _coverLogoPath;
+    private readonly string _coverDocxPath;
     private readonly ILogger<PdfService> _logger;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _pdfLocks = new();
     private static readonly ConcurrentDictionary<string, int> _pdfLockCounts = new();
@@ -30,6 +31,7 @@ public class PdfService
         _coverCacheDir = Path.Combine(_pdfCacheDir, "covers");
         Directory.CreateDirectory(_coverCacheDir);
 
+        _coverDocxPath = Path.Combine(dataDir, "cover.docx");
         _coverLogoPath = Path.Combine(dataDir, "cover-logo.jpg");
     }
 
@@ -188,33 +190,33 @@ public class PdfService
         var validPaths = imagePaths.Where(File.Exists).ToList();
         if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
 
-        var tempFiles = new List<string>();
-        try
-        {
-            var coverPdfPath = Path.Combine(Path.GetTempPath(), $"bcover_{Guid.NewGuid():N}.pdf");
-            GenerateCoverPdf(patientName, studyDate, coverPdfPath, "A4");
-            tempFiles.Add(coverPdfPath);
-
-            string? resumeFullPath = null;
-            if (!string.IsNullOrEmpty(resumePdfPath))
+            var tempFiles = new List<string>();
+            try
             {
-                var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
-                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
-                resumeFullPath = Path.Combine(dataDir, resumePdfPath);
-                if (!File.Exists(resumeFullPath)) resumeFullPath = null;
-            }
+                var coverPdfPath = Path.Combine(Path.GetTempPath(), $"bcover_{Guid.NewGuid():N}.pdf");
+                GenerateCoverPdf(patientName, studyDate, coverPdfPath, "A4");
+                tempFiles.Add(coverPdfPath);
 
-            string? imagesPdfPath = null;
-            if (validPaths.Count > 0)
-            {
-                imagesPdfPath = Path.Combine(Path.GetTempPath(), $"bimages_{Guid.NewGuid():N}.pdf");
-                GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx, "A4");
-                tempFiles.Add(imagesPdfPath);
-            }
+                string? resumeFullPath = null;
+                if (!string.IsNullOrEmpty(resumePdfPath))
+                {
+                    var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+                    resumeFullPath = Path.Combine(dataDir, resumePdfPath);
+                    if (!File.Exists(resumeFullPath)) resumeFullPath = null;
+                }
 
-            var tempMerged = Path.Combine(Path.GetTempPath(), $"bmerged_{Guid.NewGuid():N}.pdf");
-            tempFiles.Add(tempMerged);
-            MergePdfs(tempMerged, coverPdfPath, resumeFullPath, imagesPdfPath, "A4", padToMultipleOf4: true);
+                string? imagesPdfPath = null;
+                if (validPaths.Count > 0)
+                {
+                        imagesPdfPath = Path.Combine(Path.GetTempPath(), $"bimages_{Guid.NewGuid():N}.pdf");
+                        GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx, "A4");
+                    tempFiles.Add(imagesPdfPath);
+                }
+
+                var tempMerged = Path.Combine(Path.GetTempPath(), $"bmerged_{Guid.NewGuid():N}.pdf");
+                tempFiles.Add(tempMerged);
+                MergePdfs(tempMerged, coverPdfPath, resumeFullPath, imagesPdfPath, "A4", padToMultipleOf4: true);
 
             var dataDirOut = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
@@ -246,33 +248,33 @@ public class PdfService
         var validPaths = imagePaths.Where(File.Exists).ToList();
         if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
 
-        var tempFiles = new List<string>();
-        try
-        {
-            var coverPdfPath = Path.Combine(Path.GetTempPath(), $"fcover_{Guid.NewGuid():N}.pdf");
-            GenerateCoverPdf(patientName, studyDate, coverPdfPath, "A3");
-            tempFiles.Add(coverPdfPath);
-
-            string? resumeFullPath = null;
-            if (!string.IsNullOrEmpty(resumePdfPath))
+            var tempFiles = new List<string>();
+            try
             {
-                var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
-                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
-                resumeFullPath = Path.Combine(dataDir, resumePdfPath);
-                if (!File.Exists(resumeFullPath)) resumeFullPath = null;
-            }
+                var coverPdfPath = Path.Combine(Path.GetTempPath(), $"fcover_{Guid.NewGuid():N}.pdf");
+                GenerateCoverPdf(patientName, studyDate, coverPdfPath, "A3");
+                tempFiles.Add(coverPdfPath);
 
-            string? imagesPdfPath = null;
-            if (validPaths.Count > 0)
-            {
-                imagesPdfPath = Path.Combine(Path.GetTempPath(), $"fimages_{Guid.NewGuid():N}.pdf");
-                GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx, "A3");
-                tempFiles.Add(imagesPdfPath);
-            }
+                string? resumeFullPath = null;
+                if (!string.IsNullOrEmpty(resumePdfPath))
+                {
+                    var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+                    resumeFullPath = Path.Combine(dataDir, resumePdfPath);
+                    if (!File.Exists(resumeFullPath)) resumeFullPath = null;
+                }
 
-            var tempMerged = Path.Combine(Path.GetTempPath(), $"fmerged_{Guid.NewGuid():N}.pdf");
-            tempFiles.Add(tempMerged);
-            MergePdfs(tempMerged, coverPdfPath, resumeFullPath, imagesPdfPath, "A3");
+                string? imagesPdfPath = null;
+                if (validPaths.Count > 0)
+                {
+                        imagesPdfPath = Path.Combine(Path.GetTempPath(), $"fimages_{Guid.NewGuid():N}.pdf");
+                        GenerateImagesPdf(validPaths, imagesPdfPath, imagesPerPage, gapPx, marginPx, "A3");
+                    tempFiles.Add(imagesPdfPath);
+                }
+
+                var tempMerged = Path.Combine(Path.GetTempPath(), $"fmerged_{Guid.NewGuid():N}.pdf");
+                tempFiles.Add(tempMerged);
+                MergePdfs(tempMerged, coverPdfPath, resumeFullPath, imagesPdfPath, "A3");
 
             var dataDirOut = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
@@ -296,7 +298,7 @@ public class PdfService
         var patientDisplay = patientName.Replace("^", " ");
 
         // Cover depends only on (patient, date, size). Frame-selection changes would otherwise
-        // rebuild it on every toggle.
+        // rebuild it on every toggle — and A4 covers cost a full WINWORD.EXE spawn (~1-3s).
         var coverKeyBytes = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes($"{patientDisplay}|{studyDate}|{pageSize}"));
         var coverCachePath = Path.Combine(
@@ -308,7 +310,7 @@ public class PdfService
             return;
         }
 
-        GenerateCoverPdfCore(patientDisplay, studyDate, outputPath, pageSize);
+        GenerateCoverPdfUncached(patientDisplay, studyDate, outputPath, pageSize);
 
         try
         {
@@ -321,10 +323,93 @@ public class PdfService
         }
     }
 
-    // Single clean path: QuestPDF renders the cover directly (~100ms, no external
-    // processes, no COM). The old Word COM chain (WINWORD.EXE spawn, 1-3s, Word
-    // install required) was removed — it was slower and strictly more fragile.
-    private void GenerateCoverPdfCore(string patientName, string studyDate, string outputPath, string pageSize = "A4")
+    private void GenerateCoverPdfUncached(string patientDisplay, string studyDate, string outputPath, string pageSize)
+    {
+        if (!File.Exists(_coverDocxPath))
+        {
+            _logger.LogWarning("cover.docx not found at {Path}, using QuestPDF fallback", _coverDocxPath);
+            GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
+            return;
+        }
+
+        if (pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase))
+        {
+            GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
+            return;
+        }
+
+        try
+        {
+            var tempDocx = Path.Combine(Path.GetTempPath(), $"cover_{Guid.NewGuid():N}.docx");
+            try
+            {
+                File.Copy(_coverDocxPath, tempDocx, true);
+                ConvertDocxToPdfViaWord(tempDocx, outputPath, patientDisplay, studyDate);
+
+                if (!File.Exists(outputPath) || new FileInfo(outputPath).Length < 1000)
+                {
+                    _logger.LogWarning("Word COM produced empty PDF, using QuestPDF fallback");
+                    GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
+                }
+            }
+            finally
+            {
+                try { if (File.Exists(tempDocx)) File.Delete(tempDocx); } catch (Exception ex) { _logger.LogDebug(ex, "Cover docx temp cleanup failed (non-fatal)"); }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Word COM failed, using QuestPDF fallback");
+            GenerateCoverPdfFallback(patientDisplay, studyDate, outputPath, pageSize);
+        }
+    }
+
+    private void ConvertDocxToPdfViaWord(string docxPath, string outputPath, string patientName, string studyDate)
+    {
+        var wordType = Type.GetTypeFromProgID("Word.Application")
+            ?? throw new InvalidOperationException("Word.Application COM not available");
+
+        dynamic? word = null;
+        try
+        {
+            word = Activator.CreateInstance(wordType);
+            if (word is null) throw new InvalidOperationException("Failed to create Word instance");
+            word.Visible = false;
+            word.DisplayAlerts = 0;
+
+            var doc = word.Documents.Open(docxPath, ReadOnly: true, AddToRecentFiles: false);
+            try
+            {
+                var find = doc.Content.Find;
+                find.ClearFormatting();
+                find.Text = "{{PatientName}}";
+                find.Replacement.Text = patientName;
+                find.Execute(Replace: 2);
+
+                find.ClearFormatting();
+                find.Text = "{{StudyDate}}";
+                find.Replacement.Text = studyDate;
+                find.Execute(Replace: 2);
+
+                doc.SaveAs2(outputPath, FileFormat: 17);
+            }
+            finally
+            {
+                doc.Close(SaveChanges: 0);
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(doc);
+            }
+        }
+        finally
+        {
+            if (word is not null)
+            {
+                word.Quit();
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(word);
+            }
+        }
+    }
+
+    private void GenerateCoverPdfFallback(string patientName, string studyDate, string outputPath, string pageSize = "A4")
     {
         var logoBytes = File.Exists(_coverLogoPath) ? File.ReadAllBytes(_coverLogoPath) : null;
         var isA3 = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase);
@@ -381,10 +466,10 @@ public class PdfService
         // Images-layer cache: covers + merge are cheap; QuestPDF rendering is the slow part.
         // Keying on (paths + layout + size + algo version) means frame toggles that only
         // change the selection reuse a previously rendered images PDF instead of re-running
-        // QuestPDF from scratch. "images_v2" busts cache after the balanced-split change.
+        // QuestPDF from scratch. "images_v4" busts cache after the header experiment was reverted.
         var imagesKeyBytes = System.Security.Cryptography.MD5.HashData(
             System.Text.Encoding.UTF8.GetBytes(
-                $"images_v2|{pageSize}|{perPage}|{gapPx}|{marginPx}|{string.Join(";", imagePaths)}"));
+                $"images_v4|{pageSize}|{perPage}|{gapPx}|{marginPx}|{string.Join(";", imagePaths)}"));
         var imagesHash = Convert.ToHexString(imagesKeyBytes).ToLowerInvariant();
         var imagesCachePath = Path.Combine(_pdfCacheDir, $"images_{imagesHash}.pdf");
 
@@ -536,14 +621,17 @@ public class PdfService
         return bestCols;
     }
 
-    private void MergePdfs(string outputPath, string coverPdfPath, string? resumePdfPath, string? imagesPdfPath, string pageSize = "A4", bool padToMultipleOf4 = false)
+    private void MergePdfs(string outputPath, string? coverPdfPath, string? resumePdfPath, string? imagesPdfPath, string pageSize = "A4", bool padToMultipleOf4 = false)
     {
         using var outputDocument = new PdfDocument();
 
-        using (var doc = PdfReader.Open(coverPdfPath, PdfDocumentOpenMode.Import))
+        if (!string.IsNullOrEmpty(coverPdfPath) && File.Exists(coverPdfPath))
         {
-            foreach (var page in doc.Pages)
-                outputDocument.AddPage(page);
+            using (var doc = PdfReader.Open(coverPdfPath, PdfDocumentOpenMode.Import))
+            {
+                foreach (var page in doc.Pages)
+                    outputDocument.AddPage(page);
+            }
         }
 
         if (!string.IsNullOrEmpty(resumePdfPath) && File.Exists(resumePdfPath))
@@ -639,20 +727,7 @@ public class PdfService
         if (now - _lastCleanupUtc < CleanupInterval) return;
         _lastCleanupUtc = now;
 
-        // Covers are reused across sessions — 24h TTL, separate from the 60-min merged-PDF TTL.
-        DeleteExpired(_coverCacheDir, "*.pdf", TimeSpan.FromHours(24));
         await CleanDirectoryAsync(_pdfCacheDir, "*.pdf", TimeSpan.FromMinutes(maxAgeMinutes));
-    }
-
-    private void DeleteExpired(string dir, string pattern, TimeSpan maxAge)
-    {
-        if (!Directory.Exists(dir)) return;
-        var cutoff = DateTime.UtcNow - maxAge;
-        foreach (var file in Directory.GetFiles(dir, pattern))
-        {
-            try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); }
-            catch (Exception ex) { _logger.LogDebug(ex, "TTL sweep delete failed (non-fatal): {Path}", file); }
-        }
     }
 
     private async Task CleanDirectoryAsync(string dir, string pattern, TimeSpan maxAge)
