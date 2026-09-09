@@ -19,7 +19,7 @@ public class PdfService
     private static DateTime _lastCleanupUtc = DateTime.MinValue;
     private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(5);
 
-    public PdfService(ILogger<PdfService> logger, IWebHostEnvironment env)
+    public PdfService(ILogger<PdfService> logger)
     {
         _logger = logger;
 
