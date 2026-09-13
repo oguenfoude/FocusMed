@@ -144,14 +144,22 @@ public DicomUpsertService(
             // Group by StudyInstanceUID: same UID → same study (images from one
             // exam stay together). If the study is Complete/Archived, create a
             // new study (re-send after completion = new exam, not a reopen).
-            var existingStudy = db.Studies
+            // AsNoTracking forces a DB read so we always get the real Id, even
+            // when the SQLite connection pool shares a connection between scopes.
+            var existingStudy = db.Studies.AsNoTracking()
                 .FirstOrDefault(s => s.StudyInstanceUid == studyUid && s.Status != StudyStatus.Deleted);
+
+            _logger.LogDebug("C-STORE study lookup uid=...{StudyTail} found={Found} status={Status}",
+                studyUid[^Math.Min(8, studyUid.Length)..],
+                existingStudy?.Id.ToString() ?? "null",
+                existingStudy?.Status.ToString() ?? "-");
 
             Study study;
             bool isNewStudy;
             if (existingStudy != null && existingStudy.Status != StudyStatus.Complete && existingStudy.Status != StudyStatus.Archived)
             {
-                study = existingStudy;
+                // Re-query with tracking so modifications (LastUpdatedAt) are saved.
+                study = db.Studies.First(s => s.Id == existingStudy.Id);
                 study.LastUpdatedAt = DateTime.UtcNow;
                 if (string.IsNullOrWhiteSpace(study.CallingAeTitle))
                     study.CallingAeTitle = callingAeTitle;
@@ -185,19 +193,14 @@ public DicomUpsertService(
             // entity with temporary Id=0.
             await db.SaveChangesAsync();
             if (isNewStudy)
-            {
-                db.Entry(study).State = EntityState.Detached;
                 _logger.LogInformation("C-STORE study Created Id={StudyId} uid=...{StudyTail} AE={Ae}",
                     study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
-            }
 
             // Series: same UID within the same study → same series.
-            // Re-query the study with tracking so the FK is correct.
-            var trackedStudy = db.Studies.FirstOrDefault(s => s.Id == study.Id) ?? study;
-            var series = db.Series.FirstOrDefault(s => s.SeriesInstanceUid == seriesUid && s.StudyId == trackedStudy.Id);
+            var series = db.Series.FirstOrDefault(s => s.SeriesInstanceUid == seriesUid && s.StudyId == study.Id);
             if (series == null)
             {
-                series = new Series { Study = trackedStudy, SeriesInstanceUid = seriesUid, Modality = modality };
+                series = new Series { Study = study, SeriesInstanceUid = seriesUid, Modality = modality };
                 db.Series.Add(series);
             }
 
