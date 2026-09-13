@@ -31,6 +31,12 @@ public class FocusMedScp : DicomService,
     // fo-dicom instantiates the SCP once per association: this field scopes the
     // implicit FilmSession fallback to THIS connection only (never a global guess).
     private string? _fallbackPrintJobSopUid;
+    // Per-association C-STORE accounting (instance = per-association, never static):
+    // lets a re-send produce "4 stored, 4 deduped" instead of silence.
+    private int _cstoreStored;
+    private int _cstoreDeduped;
+    private int _cstoreFailed;
+    private bool _cstoreSummaryLogged;
 
     // Identity captured at FilmSession N-CREATE time (from Proposed Study Sequence 2130,00A0)
     // and reused during N-SET, so a SonoVision print that sends demographics at session level
@@ -181,6 +187,7 @@ public class FocusMedScp : DicomService,
 
     public Task OnReceiveAssociationReleaseRequestAsync()
     {
+        LogCStoreSummary();
         return SendAssociationReleaseResponseAsync();
     }
 
@@ -218,9 +225,26 @@ public class FocusMedScp : DicomService,
 
     public void OnConnectionClosed(Exception? exception)
     {
+        LogCStoreSummary();
         if (exception != null)
         {
             _logger.LogWarning(exception, "DICOM Connection closed with exception.");
+        }
+    }
+
+    private void LogCStoreSummary()
+    {
+        if (_cstoreSummaryLogged) return;
+        _cstoreSummaryLogged = true;
+        if (_cstoreStored + _cstoreDeduped + _cstoreFailed == 0) return;
+        try
+        {
+            _logger.LogInformation("Association C-STORE summary AE={Ae}: {Stored} stored, {Deduped} deduped, {Failed} failed",
+                Association.CallingAE, _cstoreStored, _cstoreDeduped, _cstoreFailed);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "C-STORE summary skipped (association already disposed)");
         }
     }
 
@@ -228,11 +252,16 @@ public class FocusMedScp : DicomService,
     {
         try
         {
-            await _upsertService.StoreFileOnlyAsync(request.File, Association.CallingAE, Association.RemoteHost);
+            var outcome = await _upsertService.StoreFileOnlyAsync(request.File, Association.CallingAE, Association.RemoteHost);
+            if (outcome == StoreOutcome.DedupedSameStudy)
+                _cstoreDeduped++;
+            else
+                _cstoreStored++;
             return new DicomCStoreResponse(request, DicomStatus.Success);
         }
         catch (Exception ex)
         {
+            _cstoreFailed++;
             var sopUid = request.File.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
             _logger.LogError(ex, "C-STORE failed for {SopUid}", sopUid);
             return new DicomCStoreResponse(request, DicomStatus.ProcessingFailure);

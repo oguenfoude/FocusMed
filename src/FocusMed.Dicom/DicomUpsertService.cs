@@ -10,6 +10,17 @@ using Microsoft.Extensions.Options;
 
 namespace FocusMed.Dicom;
 
+/// <summary>Outcome of a single C-STORE file ingest.</summary>
+public enum StoreOutcome
+{
+    /// <summary>New DicomImage row persisted.</summary>
+    Stored,
+    /// <summary>Identical SOP already in the same study: no row, timestamp bumped.</summary>
+    DedupedSameStudy,
+    /// <summary>SOP collided with a different study: UID forked, row persisted.</summary>
+    SopCollisionForked
+}
+
 public class DicomUpsertService
 {
     private readonly IServiceScopeFactory _scopeFactory;
@@ -67,7 +78,7 @@ public DicomUpsertService(
     }
 
 
-public async Task StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle = null, string? remoteIp = null)
+public async Task<StoreOutcome> StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle = null, string? remoteIp = null)
     {
         var dataset = dicomFile.Dataset;
         var patientId = dataset.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
@@ -189,16 +200,13 @@ public async Task StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle
                 };
                 db.Studies.Add(study);
                 await db.SaveChangesAsync();
+                _logger.LogInformation("C-STORE study Created Id={StudyId} uid=...{StudyTail} AE={Ae}",
+                    study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
             }
             else
             {
                 study.Patient = patient;
                 study.LastUpdatedAt = DateTime.UtcNow;
-                // Same UID arriving after Complete/Archived (late pieces, re-send):
-                // append to the same study and reopen it; the completion loop
-                // will re-complete it after stabilization.
-                if (study.Status == StudyStatus.Complete || study.Status == StudyStatus.Archived)
-                    study.Status = StudyStatus.Receiving;
                 if (string.IsNullOrWhiteSpace(study.CallingAeTitle))
                     study.CallingAeTitle = string.IsNullOrWhiteSpace(callingAeTitle) ? null : callingAeTitle;
                 if (string.IsNullOrWhiteSpace(study.RemoteIp))
@@ -218,13 +226,36 @@ public async Task StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle
             }
 
             var existingImage = db.DicomImages.Include(d => d.Series).FirstOrDefault(d => d.SopInstanceUid == sopUid);
+            var outcome = StoreOutcome.Stored;
             if (existingImage != null)
             {
                 if (existingImage.Series?.StudyId == study.Id)
                 {
-                    return;
+                    // Identical re-send (operator retry): no new row, but bump
+                    // LastUpdatedAt so the row surfaces in the Dashboard (sort +
+                    // "Dernière réception") as proof of receipt. Status is NOT
+                    // reopened — no new data arrived.
+                    study.LastUpdatedAt = DateTime.UtcNow;
+                    await db.SaveChangesAsync();
+                    _logger.LogInformation("C-STORE deduped SOP=...{SopTail} already in Study={StudyId} (...{StudyTail}) AE={Ae} — no new row",
+                        sopUid[^Math.Min(8, sopUid.Length)..], study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
+                    return StoreOutcome.DedupedSameStudy;
                 }
+                _logger.LogWarning("C-STORE SOP collision {SopUid} already in Study={OtherStudyId}, forked for Study={StudyId} AE={Ae}",
+                    sopUid, existingImage.Series?.StudyId, study.Id, callingAeTitle ?? "(null)");
                 sopUid = $"{sopUid}.{Guid.NewGuid():N}";
+                outcome = StoreOutcome.SopCollisionForked;
+            }
+
+            // New data for this study arriving after Complete/Archived (late pieces):
+            // append to the same study and reopen it; the completion loop will
+            // re-complete it after stabilization. Pure retries returned above and
+            // never reopen — no new data arrived.
+            if (study.Status == StudyStatus.Complete || study.Status == StudyStatus.Archived)
+            {
+                study.Status = StudyStatus.Receiving;
+                _logger.LogInformation("C-STORE study Reopened Id={StudyId} uid=...{StudyTail} AE={Ae}",
+                    study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
             }
 
 
@@ -288,6 +319,8 @@ public async Task StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle
             db.DicomImages.Add(dicomImage);
 
             await db.SaveChangesAsync();
+            _logger.LogDebug("C-STORE stored SOP=...{SopTail} Study={StudyId} AE={Ae}",
+                sopUid[^Math.Min(8, sopUid.Length)..], study.Id, callingAeTitle ?? "(null)");
             _notificationService.NotifyStudyChanged();
 
 
@@ -299,6 +332,7 @@ public async Task StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle
             {
                 _logger.LogWarning(ex, "Forward queue failed for {SopUid}", sopUid);
             }
+            return outcome;
         }
         catch (Exception ex)
         {

@@ -69,6 +69,8 @@
                     <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
             </button>
+            <span title="Dernière activité DICOM reçue (tout envoi, même un renvoi identique)"
+                  class="text-xs text-slate-400 font-medium whitespace-nowrap">Dernière réception @(_lastReceiveLocal?.ToString("HH:mm:ss") ?? "—")</span>
             <div @onclick="CheckServerNow" role="status" aria-live="polite" title="État du récepteur DICOM (Worker) — cliquer pour revérifier"
                  class="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border cursor-pointer transition-colors @(ServerOnline
                      ? "text-emerald-700 bg-emerald-50 border-emerald-200"
@@ -105,6 +107,7 @@
     // in-memory StudyNotificationService never reaches this Dashboard process.
     private System.Threading.Timer? _soundTimer;
     private int _lastImageId;
+    private DateTime? _lastReceiveLocal;
     private bool _soundBaselineSet;
     private bool _soundMuted;
     private IJSObjectReference? _soundModule;
@@ -148,6 +151,18 @@
             var maxId = await db.DicomImages.MaxAsync(i => (int?)i.Id) ?? 0;
             var prev = _lastImageId;
             _lastImageId = maxId;
+            // Last DICOM activity (any send, even a fully-deduped retry that bans
+            // LastUpdatedAt without inserting rows). Drives the "Dernière réception"
+            // header label so a retry is visible without new images or sound.
+            var lastActivity = await db.Studies
+                .Where(s => s.Status != StudyStatus.Deleted)
+                .MaxAsync(s => (DateTime?)s.LastUpdatedAt);
+            var lastLocal = lastActivity?.ToLocalTime();
+            if (lastLocal != _lastReceiveLocal)
+            {
+                _lastReceiveLocal = lastLocal;
+                await InvokeAsync(StateHasChanged);
+            }
             if (!_soundBaselineSet) { _soundBaselineSet = true; return; } // silent baseline on load
             if (maxId <= prev || _soundModule is null) return;
             if (_soundMuted) return;
