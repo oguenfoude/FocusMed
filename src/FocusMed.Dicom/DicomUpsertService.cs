@@ -141,26 +141,26 @@ public DicomUpsertService(
                 if (!string.IsNullOrWhiteSpace(patientSex)) patient.Sex = patientSex;
             }
 
-            // Group by StudyInstanceUID: same UID → same study (images from one exam
-            // stay together). If the study is already Complete/Archived, create a new
-            // study (re-send after completion = new exam, not a reopen).
+            // Group by StudyInstanceUID: same UID → same study (images from one
+            // exam stay together). If the study is Complete/Archived, create a
+            // new study (re-send after completion = new exam, not a reopen).
             var existingStudy = db.Studies
                 .FirstOrDefault(s => s.StudyInstanceUid == studyUid && s.Status != StudyStatus.Deleted);
 
             Study study;
+            bool isNewStudy;
             if (existingStudy != null && existingStudy.Status != StudyStatus.Complete && existingStudy.Status != StudyStatus.Archived)
             {
-                // Receiving/Failed — append images to this study.
                 study = existingStudy;
                 study.LastUpdatedAt = DateTime.UtcNow;
                 if (string.IsNullOrWhiteSpace(study.CallingAeTitle))
                     study.CallingAeTitle = callingAeTitle;
                 if (string.IsNullOrWhiteSpace(study.RemoteIp))
                     study.RemoteIp = remoteIp;
+                isNewStudy = false;
             }
             else
             {
-                // New study: either no match, or the previous one is Complete/Archived.
                 study = new Study
                 {
                     Patient = patient,
@@ -176,19 +176,30 @@ public DicomUpsertService(
                     Status = StudyStatus.Receiving
                 };
                 db.Studies.Add(study);
+                isNewStudy = true;
+            }
+
+            // Save the study first to get its real auto-generated Id (needed
+            // for the series FK). Detach it afterward so concurrent C-STOREs
+            // for the same StudyInstanceUID see the DB row, not this cached
+            // entity with temporary Id=0.
+            await db.SaveChangesAsync();
+            if (isNewStudy)
+            {
+                db.Entry(study).State = EntityState.Detached;
                 _logger.LogInformation("C-STORE study Created Id={StudyId} uid=...{StudyTail} AE={Ae}",
                     study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
             }
 
             // Series: same UID within the same study → same series.
-            var series = db.Series.FirstOrDefault(s => s.SeriesInstanceUid == seriesUid && s.StudyId == study.Id);
+            // Re-query the study with tracking so the FK is correct.
+            var trackedStudy = db.Studies.FirstOrDefault(s => s.Id == study.Id) ?? study;
+            var series = db.Series.FirstOrDefault(s => s.SeriesInstanceUid == seriesUid && s.StudyId == trackedStudy.Id);
             if (series == null)
             {
-                series = new Series { Study = study, SeriesInstanceUid = seriesUid, Modality = modality };
+                series = new Series { Study = trackedStudy, SeriesInstanceUid = seriesUid, Modality = modality };
                 db.Series.Add(series);
             }
-
-            await db.SaveChangesAsync();
 
             var studyHash = DicomHelpers.GetFnv1aHash(studyUid);
             var safePatientName = DicomHelpers.SanitizeFileName(patientName);
