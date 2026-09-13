@@ -14,11 +14,7 @@ namespace FocusMed.Dicom;
 public enum StoreOutcome
 {
     /// <summary>New DicomImage row persisted.</summary>
-    Stored,
-    /// <summary>Identical SOP already in the same study: no row, timestamp bumped.</summary>
-    DedupedSameStudy,
-    /// <summary>SOP collided with a different study: UID forked, row persisted.</summary>
-    SopCollisionForked
+    Stored
 }
 
 public class DicomUpsertService

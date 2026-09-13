@@ -31,10 +31,8 @@ public class FocusMedScp : DicomService,
     // fo-dicom instantiates the SCP once per association: this field scopes the
     // implicit FilmSession fallback to THIS connection only (never a global guess).
     private string? _fallbackPrintJobSopUid;
-    // Per-association C-STORE accounting (instance = per-association, never static):
-    // lets a re-send produce "4 stored, 4 deduped" instead of silence.
+    // Per-association C-STORE accounting (instance = per-association, never static).
     private int _cstoreStored;
-    private int _cstoreDeduped;
     private int _cstoreFailed;
     private bool _cstoreSummaryLogged;
 
@@ -236,11 +234,11 @@ public class FocusMedScp : DicomService,
     {
         if (_cstoreSummaryLogged) return;
         _cstoreSummaryLogged = true;
-        if (_cstoreStored + _cstoreDeduped + _cstoreFailed == 0) return;
+        if (_cstoreStored + _cstoreFailed == 0) return;
         try
         {
-            _logger.LogInformation("Association C-STORE summary AE={Ae}: {Stored} stored, {Deduped} deduped, {Failed} failed",
-                Association.CallingAE, _cstoreStored, _cstoreDeduped, _cstoreFailed);
+            _logger.LogInformation("Association C-STORE summary AE={Ae}: {Stored} stored, {Failed} failed",
+                Association.CallingAE, _cstoreStored, _cstoreFailed);
         }
         catch (Exception ex)
         {
@@ -252,11 +250,8 @@ public class FocusMedScp : DicomService,
     {
         try
         {
-            var outcome = await _upsertService.StoreFileOnlyAsync(request.File, Association.CallingAE, Association.RemoteHost);
-            if (outcome == StoreOutcome.DedupedSameStudy)
-                _cstoreDeduped++;
-            else
-                _cstoreStored++;
+            await _upsertService.StoreFileOnlyAsync(request.File, Association.CallingAE, Association.RemoteHost);
+            _cstoreStored++;
             return new DicomCStoreResponse(request, DicomStatus.Success);
         }
         catch (Exception ex)
