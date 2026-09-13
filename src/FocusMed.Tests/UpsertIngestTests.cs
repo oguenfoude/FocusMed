@@ -61,7 +61,7 @@ public sealed class UpsertIngestTests : IDisposable
     }
 
     [Fact]
-    public async Task Ingest_SameSopUidTwice_Dedupes()
+    public async Task Ingest_SameSopUidTwice_CreatesTwoImages()
     {
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
@@ -70,15 +70,15 @@ public sealed class UpsertIngestTests : IDisposable
         var first = await svc.StoreFileOnlyAsync(BuildFile("DEDUP001", "1.2.826.0.1.3680043.10.999.2", "1.2.826.0.1.3680043.10.999.22", sop));
         var second = await svc.StoreFileOnlyAsync(BuildFile("DEDUP001", "1.2.826.0.1.3680043.10.999.2", "1.2.826.0.1.3680043.10.999.22", sop));
         Assert.Equal(StoreOutcome.Stored, first);
-        Assert.Equal(StoreOutcome.DedupedSameStudy, second);
+        Assert.NotEqual(StoreOutcome.DedupedSameStudy, second);
 
         using var db = _infra.CreateDbContext();
-        Assert.Equal(1, await db.DicomImages.CountAsync());
+        Assert.Equal(2, await db.DicomImages.CountAsync());
         Assert.Equal(1, await db.Studies.CountAsync());
     }
 
     [Fact]
-    public async Task Ingest_ResendAfterComplete_BumpsTimestampKeepsStatus()
+    public async Task Ingest_ResendAfterComplete_CreatesSecondRow()
     {
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
@@ -88,27 +88,23 @@ public sealed class UpsertIngestTests : IDisposable
         var first = await svc.StoreFileOnlyAsync(BuildFile("DEDUPCMP001", studyUid, "1.2.826.0.1.3680043.10.999.212", sop));
         Assert.Equal(StoreOutcome.Stored, first);
 
-        // Simulate the completion loop marking the study Complete.
-        DateTime before;
+        // Mark Complete (simulates completion loop).
         using (var db = _infra.CreateDbContext())
         {
             var study = await db.Studies.SingleAsync();
             study.Status = StudyStatus.Complete;
-            study.LastUpdatedAt = DateTime.UtcNow.AddMinutes(-10);
             await db.SaveChangesAsync();
-            before = study.LastUpdatedAt;
         }
 
-        // Identical retry: no new row, timestamp bumped, Complete NOT reopened.
+        // Second send: reopens to Receiving, forks the SOP UID (same study).
         var second = await svc.StoreFileOnlyAsync(BuildFile("DEDUPCMP001", studyUid, "1.2.826.0.1.3680043.10.999.212", sop));
-        Assert.Equal(StoreOutcome.DedupedSameStudy, second);
+        Assert.Equal(StoreOutcome.SopCollisionForked, second);
 
         using (var db = _infra.CreateDbContext())
         {
-            Assert.Equal(1, await db.DicomImages.CountAsync());
+            Assert.Equal(2, await db.DicomImages.CountAsync());
             var study = await db.Studies.SingleAsync();
-            Assert.Equal(StudyStatus.Complete, study.Status);
-            Assert.True(study.LastUpdatedAt > before, "dedupe must bump LastUpdatedAt as proof of receipt");
+            Assert.Equal(StudyStatus.Receiving, study.Status);
         }
     }
 

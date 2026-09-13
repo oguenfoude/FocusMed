@@ -225,26 +225,29 @@ public async Task<StoreOutcome> StoreFileOnlyAsync(DicomFile dicomFile, string? 
                 db.Series.Add(series);
             }
 
-            var existingImage = db.DicomImages.Include(d => d.Series).FirstOrDefault(d => d.SopInstanceUid == sopUid);
+            var existingImage = db.DicomImages.Include(d => d.Series).FirstOrDefault(d => d.SopInstanceUid == sopUid && d.Series != null && d.Series.StudyId == study.Id);
             var outcome = StoreOutcome.Stored;
             if (existingImage != null)
             {
-                if (existingImage.Series?.StudyId == study.Id)
-                {
-                    // Identical re-send (operator retry): no new row, but bump
-                    // LastUpdatedAt so the row surfaces in the Dashboard (sort +
-                    // "Dernière réception") as proof of receipt. Status is NOT
-                    // reopened — no new data arrived.
-                    study.LastUpdatedAt = DateTime.UtcNow;
-                    await db.SaveChangesAsync();
-                    _logger.LogInformation("C-STORE deduped SOP=...{SopTail} already in Study={StudyId} (...{StudyTail}) AE={Ae} — no new row",
-                        sopUid[^Math.Min(8, sopUid.Length)..], study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
-                    return StoreOutcome.DedupedSameStudy;
-                }
-                _logger.LogWarning("C-STORE SOP collision {SopUid} already in Study={OtherStudyId}, forked for Study={StudyId} AE={Ae}",
-                    sopUid, existingImage.Series?.StudyId, study.Id, callingAeTitle ?? "(null)");
+                // Same SOP already in this study — fork the UID so both copies
+                // coexist. Every C-STORE produces a visible row; the operator
+                // always sees proof of receipt.
+                _logger.LogInformation("C-STORE same-SOP re-send SOP=...{SopTail} already in Study={StudyId} (...{StudyTail}) AE={Ae} — forked",
+                    sopUid[^Math.Min(8, sopUid.Length)..], study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
                 sopUid = $"{sopUid}.{Guid.NewGuid():N}";
                 outcome = StoreOutcome.SopCollisionForked;
+            }
+            else
+            {
+                // Check cross-study collision (rare: same SOP sent with different StudyInstanceUIDs).
+                var crossStudy = db.DicomImages.Include(d => d.Series).FirstOrDefault(d => d.SopInstanceUid == sopUid);
+                if (crossStudy != null)
+                {
+                    _logger.LogWarning("C-STORE SOP collision {SopUid} already in Study={OtherStudyId}, forked for Study={StudyId} AE={Ae}",
+                        sopUid, crossStudy.Series?.StudyId, study.Id, callingAeTitle ?? "(null)");
+                    sopUid = $"{sopUid}.{Guid.NewGuid():N}";
+                    outcome = StoreOutcome.SopCollisionForked;
+                }
             }
 
             // New data for this study arriving after Complete/Archived (late pieces):
