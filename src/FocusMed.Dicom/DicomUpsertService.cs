@@ -78,7 +78,7 @@ public DicomUpsertService(
     }
 
 
-public async Task<StoreOutcome> StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle = null, string? remoteIp = null)
+    public async Task<StoreOutcome> StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle = null, string? remoteIp = null)
     {
         var dataset = dicomFile.Dataset;
         var patientId = dataset.GetSingleValueOrDefault(DicomTag.PatientID, string.Empty);
@@ -88,13 +88,11 @@ public async Task<StoreOutcome> StoreFileOnlyAsync(DicomFile dicomFile, string? 
             dataset.AddOrUpdate(DicomTag.PatientID, patientId);
         }
 
-        var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
-        // One study row per distinct StudyInstanceUID: two different exams for the same
-        // patient must NEVER merge, even on the same day. Same UID in pieces/retries
-        // lands in the same study (matched in-lock below, any non-Deleted status).
-        var incomingUidWasEmpty = string.IsNullOrWhiteSpace(studyUid);
-        if (incomingUidWasEmpty)
-            studyUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+        // ALWAYS generate a fresh StudyInstanceUID — each C-STORE creates its
+        // own study row. Same modality, same patient, same study UID from the
+        // sender → doesn't matter. Each send is a new study.
+        var incomingStudyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
+        var studyUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
         studyUid = TruncateUid(studyUid);
         dataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
 
@@ -110,9 +108,7 @@ public async Task<StoreOutcome> StoreFileOnlyAsync(DicomFile dicomFile, string? 
         sopUid = TruncateUid(sopUid);
         dataset.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
 
-        // The per-study lock is keyed on the incoming UID, which is also the final UID
-        // (no patient-based consolidation). Same-UID concurrent sends serialize on one
-        // semaphore; different UIDs proceed in parallel into their own studies.
+        // Per-UID lock serializes concurrent sends for the same generated UID.
         var studyLock = AcquireStudyLockRef(studyUid);
         await studyLock.WaitAsync();
         string filePath = "";
@@ -151,140 +147,41 @@ public async Task<StoreOutcome> StoreFileOnlyAsync(DicomFile dicomFile, string? 
                 if (!string.IsNullOrWhiteSpace(patientSex)) patient.Sex = patientSex;
             }
 
-            // UID-keyed lookup: same StudyInstanceUID -> same study, any non-Deleted
-            // status (Receiving/Complete/Failed/Archived). A re-send after Complete
-            // appends to the same study and reopens it below. Different UIDs always
-            // create separate studies — never merge across exams.
-            var study = db.Studies
-                .Include(s => s.Patient)
-                .FirstOrDefault(s => s.StudyInstanceUid == studyUid && s.Status != StudyStatus.Deleted);
+            // ALWAYS create a new study — never look up or append to existing.
+            var study = new Study
+            {
+                Patient = patient,
+                StudyInstanceUid = studyUid,
+                StudyDate = studyDate,
+                Description = string.IsNullOrWhiteSpace(studyDescription) ? null : studyDescription,
+                AccessionNumber = string.IsNullOrWhiteSpace(accessionNumber) ? null : accessionNumber,
+                InstitutionName = string.IsNullOrWhiteSpace(institutionName) ? null : institutionName,
+                Manufacturer = string.IsNullOrWhiteSpace(manufacturer) ? null : manufacturer,
+                ReferringPhysicianName = string.IsNullOrWhiteSpace(referringPhysician) ? null : referringPhysician,
+                CallingAeTitle = string.IsNullOrWhiteSpace(callingAeTitle) ? null : callingAeTitle,
+                RemoteIp = string.IsNullOrWhiteSpace(remoteIp) ? null : remoteIp,
+                Status = StudyStatus.Receiving
+            };
+            db.Studies.Add(study);
+            await db.SaveChangesAsync();
+            _logger.LogInformation("C-STORE study Created Id={StudyId} uid=...{StudyTail} incoming=...{IncomingTail} AE={Ae}",
+                study.Id, studyUid[^Math.Min(8, studyUid.Length)..],
+                incomingStudyUid.Length > 8 ? incomingStudyUid[^8..] : incomingStudyUid,
+                callingAeTitle ?? "(null)");
 
-            // Degenerate case: modality sent no Study UID. Group into the patient's most
-            // recent Receiving study that was itself minted-empty (same AE, 5 min window),
-            // so one exam's pieces stay together without merging distinct exams.
-            if (study == null && incomingUidWasEmpty)
-            {
-                var emptyCandidate = await db.Studies
-                    .Where(s => s.Status == StudyStatus.Receiving
-                        && s.LastUpdatedAt >= DateTime.UtcNow.AddMinutes(-5)
-                        && s.CallingAeTitle != null && s.CallingAeTitle == callingAeTitle
-                        && (string.IsNullOrEmpty(patientId) || s.Patient.PatientId == patientId)
-                        && s.Series.Any(sr => sr.SeriesInstanceUid.StartsWith("2.25.")))
-                    .OrderByDescending(s => s.LastUpdatedAt)
-                    .FirstOrDefaultAsync();
-                if (emptyCandidate != null)
-                {
-                    studyUid = emptyCandidate.StudyInstanceUid;
-                    dataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
-                    study = emptyCandidate;
-                    _logger.LogInformation("C-STORE empty-UID grouped into recent study {TargetId} AE={Ae}",
-                        study.Id, callingAeTitle ?? "(null)");
-                }
-            }
+            // Always create new series for this study.
+            var series = new Series { Study = study, SeriesInstanceUid = seriesUid, Modality = modality };
+            db.Series.Add(series);
 
-            if (study == null)
-            {
-                study = new Study
-                {
-                    Patient = patient,
-                    StudyInstanceUid = studyUid,
-                    StudyDate = studyDate,
-                    Description = string.IsNullOrWhiteSpace(studyDescription) ? null : studyDescription,
-                    AccessionNumber = string.IsNullOrWhiteSpace(accessionNumber) ? null : accessionNumber,
-                    InstitutionName = string.IsNullOrWhiteSpace(institutionName) ? null : institutionName,
-                    Manufacturer = string.IsNullOrWhiteSpace(manufacturer) ? null : manufacturer,
-                    ReferringPhysicianName = string.IsNullOrWhiteSpace(referringPhysician) ? null : referringPhysician,
-                    CallingAeTitle = string.IsNullOrWhiteSpace(callingAeTitle) ? null : callingAeTitle,
-                    RemoteIp = string.IsNullOrWhiteSpace(remoteIp) ? null : remoteIp,
-                    Status = StudyStatus.Receiving
-                };
-                db.Studies.Add(study);
-                await db.SaveChangesAsync();
-                _logger.LogInformation("C-STORE study Created Id={StudyId} uid=...{StudyTail} AE={Ae}",
-                    study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
-            }
-            else
-            {
-                study.Patient = patient;
-                study.LastUpdatedAt = DateTime.UtcNow;
-                if (string.IsNullOrWhiteSpace(study.CallingAeTitle))
-                    study.CallingAeTitle = string.IsNullOrWhiteSpace(callingAeTitle) ? null : callingAeTitle;
-                if (string.IsNullOrWhiteSpace(study.RemoteIp))
-                    study.RemoteIp = string.IsNullOrWhiteSpace(remoteIp) ? null : remoteIp;
-                if (!string.IsNullOrWhiteSpace(studyDescription)) study.Description = studyDescription;
-                if (!string.IsNullOrWhiteSpace(accessionNumber)) study.AccessionNumber = accessionNumber;
-                if (!string.IsNullOrWhiteSpace(institutionName)) study.InstitutionName = institutionName;
-                if (!string.IsNullOrWhiteSpace(manufacturer)) study.Manufacturer = manufacturer;
-                if (!string.IsNullOrWhiteSpace(referringPhysician)) study.ReferringPhysicianName = referringPhysician;
-            }
-
-            var series = db.Series.FirstOrDefault(s => s.SeriesInstanceUid == seriesUid && s.StudyId == study.Id);
-            if (series == null)
-            {
-                series = new Series { Study = study, SeriesInstanceUid = seriesUid, Modality = modality };
-                db.Series.Add(series);
-            }
-
-            var existingImage = db.DicomImages.Include(d => d.Series).FirstOrDefault(d => d.SopInstanceUid == sopUid && d.Series != null && d.Series.StudyId == study.Id);
-            var outcome = StoreOutcome.Stored;
-            if (existingImage != null)
-            {
-                // Same SOP already in this study — fork the UID so both copies
-                // coexist. Every C-STORE produces a visible row; the operator
-                // always sees proof of receipt.
-                _logger.LogInformation("C-STORE same-SOP re-send SOP=...{SopTail} already in Study={StudyId} (...{StudyTail}) AE={Ae} — forked",
-                    sopUid[^Math.Min(8, sopUid.Length)..], study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
-                sopUid = $"{sopUid}.{Guid.NewGuid():N}";
-                outcome = StoreOutcome.SopCollisionForked;
-            }
-            else
-            {
-                // Check cross-study collision (rare: same SOP sent with different StudyInstanceUIDs).
-                var crossStudy = db.DicomImages.Include(d => d.Series).FirstOrDefault(d => d.SopInstanceUid == sopUid);
-                if (crossStudy != null)
-                {
-                    _logger.LogWarning("C-STORE SOP collision {SopUid} already in Study={OtherStudyId}, forked for Study={StudyId} AE={Ae}",
-                        sopUid, crossStudy.Series?.StudyId, study.Id, callingAeTitle ?? "(null)");
-                    sopUid = $"{sopUid}.{Guid.NewGuid():N}";
-                    outcome = StoreOutcome.SopCollisionForked;
-                }
-            }
-
-            // New data for this study arriving after Complete/Archived (late pieces):
-            // append to the same study and reopen it; the completion loop will
-            // re-complete it after stabilization. Pure retries returned above and
-            // never reopen — no new data arrived.
-            if (study.Status == StudyStatus.Complete || study.Status == StudyStatus.Archived)
-            {
-                study.Status = StudyStatus.Receiving;
-                _logger.LogInformation("C-STORE study Reopened Id={StudyId} uid=...{StudyTail} AE={Ae}",
-                    study.Id, studyUid[^Math.Min(8, studyUid.Length)..], callingAeTitle ?? "(null)");
-            }
-
+            // No SOP collision check — each study is independent. Same SOP UID
+            // across different studies is fine (different rows, different files).
 
             var studyHash = DicomHelpers.GetFnv1aHash(studyUid);
             var safePatientName = DicomHelpers.SanitizeFileName(patientName);
             var safeModality = DicomHelpers.SanitizeFileName(modality);
             var datePart = studyDate?.ToString("yyyyMMdd") ?? "nodate";
             var studyDirName = $"{safePatientName}_{safeModality}_{datePart}_{studyHash}";
-            // Reuse the existing study's folder when consolidating (CT/OT/SC into the same
-            // study) so a merged modality does NOT create a parallel folder.
-            var existingStudyImagePath = await db.DicomImages
-                .Where(i => i.Series.StudyId == study.Id)
-                .Select(i => i.FilePath)
-                .FirstOrDefaultAsync();
-            string studyDir;
-            if (!string.IsNullOrWhiteSpace(existingStudyImagePath))
-            {
-                var existingSeriesDir = Path.GetDirectoryName(existingStudyImagePath);
-                studyDir = string.IsNullOrWhiteSpace(existingSeriesDir)
-                    ? Path.Combine(_archivePath, studyDirName)
-                    : (Path.GetDirectoryName(existingSeriesDir) ?? Path.Combine(_archivePath, studyDirName));
-            }
-            else
-            {
-                studyDir = Path.Combine(_archivePath, studyDirName);
-            }
+            var studyDir = Path.Combine(_archivePath, studyDirName);
             Directory.CreateDirectory(studyDir);
 
             var infoPath = Path.Combine(studyDir, "study-info.json");
@@ -335,7 +232,7 @@ public async Task<StoreOutcome> StoreFileOnlyAsync(DicomFile dicomFile, string? 
             {
                 _logger.LogWarning(ex, "Forward queue failed for {SopUid}", sopUid);
             }
-            return outcome;
+            return StoreOutcome.Stored;
         }
         catch (Exception ex)
         {
