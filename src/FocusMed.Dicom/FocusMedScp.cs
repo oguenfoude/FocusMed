@@ -926,8 +926,7 @@ public class FocusMedScp : DicomService,
                 patientName ??= string.Empty;
 
                 if (imageSeq != null)
-                {
-                    var innerDataset = imageSeq.Items[0];
+                {                    var innerDataset = imageSeq.Items[0];
 
                     // If the association's FilmSession N-CREATE carried a StudyInstanceUID
                     // (Proposed Study Sequence), surface it into the image dataset so the
@@ -944,7 +943,10 @@ public class FocusMedScp : DicomService,
                     if (!innerDataset.Contains(DicomTag.PatientSex) && !string.IsNullOrWhiteSpace(sex))
                         innerDataset.AddOrUpdate(DicomTag.PatientSex, sex);
 
-                    var storedFile = await _upsertService.IngestPrintImageAsync(innerDataset, patientId, patientName, Association.CallingAE, Association.RemoteHost);
+                    // Pass the PrintJob ID so all N-SETs of this film session rejoin the
+                    // same study (linked below after ingest). No patient/AE heuristics —
+                    // different exams stay separate studies.
+                    var storedFile = await _upsertService.IngestPrintImageAsync(innerDataset, patientId, patientName, Association.CallingAE, Association.RemoteHost, imageBox.FilmBox?.PrintJob?.Id);
                     if (storedFile != null)
                     {
                         var newSopUid = storedFile.Dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
@@ -958,6 +960,10 @@ public class FocusMedScp : DicomService,
                             imageBox.FilmBox.PrintJob.StudyId = printStudy.Id;
                         }
                     }
+                }
+                else
+                {
+                    _logger.LogWarning("N-SET {SopUid}: no image sequence present, image not ingested (layout-only N-SET?)", sopUid);
                 }
 
                 await db.SaveChangesAsync();

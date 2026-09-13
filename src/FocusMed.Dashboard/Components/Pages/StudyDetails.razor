@@ -671,7 +671,7 @@ else
             if (SelectedFrameIds.Count == 0)
             {
                 if (!string.IsNullOrEmpty(PdfPreviewUrl))
-                    try { PdfService.DeletePdf(PdfPreviewUrl); } catch { }
+                    try { PdfService.DeletePdf(PdfPreviewUrl); } catch (Exception ex) { Logger.LogDebug(ex, "Preview cleanup DeletePdf failed (non-fatal)"); }
                 PdfPreviewUrl = null;
                 PageCount = 0;
                 await InvokeAsync(StateHasChanged);
@@ -722,7 +722,7 @@ else
                 IsRegeneratingPdf = false;
                 await InvokeAsync(StateHasChanged);
                 if (!string.IsNullOrEmpty(oldUrl) && oldUrl != newUrl)
-                    try { PdfService.DeletePdf(oldUrl); } catch { }
+                    try { PdfService.DeletePdf(oldUrl); } catch (Exception ex) { Logger.LogDebug(ex, "Old preview DeletePdf failed (non-fatal)"); }
             }
             else
             {
@@ -953,11 +953,11 @@ else
         _extractCts?.Dispose();
         if (!string.IsNullOrEmpty(Study?.StudyInstanceUid))
         {
-            try { PngExtractionService.ReleaseStudyPng(Study.StudyInstanceUid); } catch { }
+            try { PngExtractionService.ReleaseStudyPng(Study.StudyInstanceUid); } catch (Exception ex) { Logger.LogDebug(ex, "ReleaseStudyPng failed on dispose (non-fatal)"); }
         }
         if (!string.IsNullOrEmpty(PdfPreviewUrl))
         {
-            try { PdfService.DeletePdf(PdfPreviewUrl); } catch { }
+            try { PdfService.DeletePdf(PdfPreviewUrl); } catch (Exception ex) { Logger.LogDebug(ex, "Preview DeletePdf failed on dispose (non-fatal)"); }
         }
     }
 

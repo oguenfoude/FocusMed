@@ -16,7 +16,6 @@ public class DicomUpsertService
     private readonly ILogger<DicomUpsertService> _logger;
     private readonly IStorageForwardQueue _forwardQueue;
     private readonly IStudyNotificationService _notificationService;
-    private readonly int _printMergeWindowSeconds;
     private readonly string _archivePath;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _studyLocks = new();
     private static readonly ConcurrentDictionary<string, int> _studyLockCounts = new();
@@ -62,7 +61,6 @@ public DicomUpsertService(
         _logger = logger;
         _forwardQueue = forwardQueue;
         _notificationService = notificationService;
-        _printMergeWindowSeconds = networkingOptions.Value.PrintMergeWindowSeconds;
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
         _archivePath = Path.Combine(dataDir, "archive");
         Directory.CreateDirectory(_archivePath);
@@ -79,8 +77,12 @@ public async Task StoreFileOnlyAsync(DicomFile dicomFile, string? callingAeTitle
             dataset.AddOrUpdate(DicomTag.PatientID, patientId);
         }
 
-var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
-        if (string.IsNullOrWhiteSpace(studyUid))
+        var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
+        // One study row per distinct StudyInstanceUID: two different exams for the same
+        // patient must NEVER merge, even on the same day. Same UID in pieces/retries
+        // lands in the same study (matched in-lock below, any non-Deleted status).
+        var incomingUidWasEmpty = string.IsNullOrWhiteSpace(studyUid);
+        if (incomingUidWasEmpty)
             studyUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
         studyUid = TruncateUid(studyUid);
         dataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
@@ -97,18 +99,9 @@ var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string
         sopUid = TruncateUid(sopUid);
         dataset.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
 
-        // Resolve the final study UID up front so the per-study lock is keyed on the true
-        // target: either the same UID (existing dedup) or the patient's existing active study
-        // (CT/OT/SC consolidation). Without this, a lock taken on the incoming UID would not
-        // serialize concurrent inserts into the consolidated target study.
-        using (var resolveScope = _scopeFactory.CreateScope())
-        {
-            var resolveDb = resolveScope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-            var existingPatient = resolveDb.Patients.FirstOrDefault(p => p.PatientId == patientId);
-            studyUid = await ResolveStoreTargetUidAsync(resolveDb, studyUid, existingPatient?.Id ?? 0);
-        }
-        dataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
-
+        // The per-study lock is keyed on the incoming UID, which is also the final UID
+        // (no patient-based consolidation). Same-UID concurrent sends serialize on one
+        // semaphore; different UIDs proceed in parallel into their own studies.
         var studyLock = AcquireStudyLockRef(studyUid);
         await studyLock.WaitAsync();
         string filePath = "";
@@ -147,41 +140,43 @@ var studyUid = dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string
                 if (!string.IsNullOrWhiteSpace(patientSex)) patient.Sex = patientSex;
             }
 
-            var study = db.Studies.FirstOrDefault(s => s.StudyInstanceUid == studyUid && s.Status == StudyStatus.Receiving && s.LastUpdatedAt >= DateTime.UtcNow.AddSeconds(-15));
+            // UID-keyed lookup: same StudyInstanceUID -> same study, any non-Deleted
+            // status (Receiving/Complete/Failed/Archived). A re-send after Complete
+            // appends to the same study and reopens it below. Different UIDs always
+            // create separate studies — never merge across exams.
+            var study = db.Studies
+                .Include(s => s.Patient)
+                .FirstOrDefault(s => s.StudyInstanceUid == studyUid && s.Status != StudyStatus.Deleted);
 
-            // CT/OT/SC consolidation: if the same-UID lookup missed (target is Complete, or UID
-            // differed before resolution), reuse the patient's most recent active study instead
-            // of creating a parallel one. This guarantees two incomplete CTs, or a CT + OT for
-            // the same patient, land in ONE study.
-            if (study == null && patient.Id != 0)
+            // Degenerate case: modality sent no Study UID. Group into the patient's most
+            // recent Receiving study that was itself minted-empty (same AE, 5 min window),
+            // so one exam's pieces stay together without merging distinct exams.
+            if (study == null && incomingUidWasEmpty)
             {
-                study = await db.Studies
-                    .Include(s => s.Patient)
-                    .Where(s => s.PatientId == patient.Id
-                        && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete))
+                var emptyCandidate = await db.Studies
+                    .Where(s => s.Status == StudyStatus.Receiving
+                        && s.LastUpdatedAt >= DateTime.UtcNow.AddMinutes(-5)
+                        && s.CallingAeTitle != null && s.CallingAeTitle == callingAeTitle
+                        && (string.IsNullOrEmpty(patientId) || s.Patient.PatientId == patientId)
+                        && s.Series.Any(sr => sr.SeriesInstanceUid.StartsWith("2.25.")))
                     .OrderByDescending(s => s.LastUpdatedAt)
                     .FirstOrDefaultAsync();
-                if (study != null)
+                if (emptyCandidate != null)
                 {
-                    studyUid = study.StudyInstanceUid;
+                    studyUid = emptyCandidate.StudyInstanceUid;
                     dataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
-                    _logger.LogInformation("C-STORE consolidated into existing patient study {TargetId} (uid={Uid}) AE={Ae}",
-                        study.Id, studyUid, callingAeTitle ?? "(null)");
+                    study = emptyCandidate;
+                    _logger.LogInformation("C-STORE empty-UID grouped into recent study {TargetId} AE={Ae}",
+                        study.Id, callingAeTitle ?? "(null)");
                 }
             }
 
             if (study == null)
             {
-                var activeUid = studyUid;
-                if (db.Studies.Any(s => s.StudyInstanceUid == activeUid))
-                {
-                    activeUid = $"{studyUid}.{Guid.NewGuid():N}";
-                }
-
-study = new Study
+                study = new Study
                 {
                     Patient = patient,
-                    StudyInstanceUid = activeUid,
+                    StudyInstanceUid = studyUid,
                     StudyDate = studyDate,
                     Description = string.IsNullOrWhiteSpace(studyDescription) ? null : studyDescription,
                     AccessionNumber = string.IsNullOrWhiteSpace(accessionNumber) ? null : accessionNumber,
@@ -194,14 +189,16 @@ study = new Study
                 };
                 db.Studies.Add(study);
                 await db.SaveChangesAsync();
-
-                // CT arrived — immediately absorb any recent print studies within the merge window.
-                await MergeRecentAnonymousStudiesAsync(db, study);
             }
-else
+            else
             {
                 study.Patient = patient;
                 study.LastUpdatedAt = DateTime.UtcNow;
+                // Same UID arriving after Complete/Archived (late pieces, re-send):
+                // append to the same study and reopen it; the completion loop
+                // will re-complete it after stabilization.
+                if (study.Status == StudyStatus.Complete || study.Status == StudyStatus.Archived)
+                    study.Status = StudyStatus.Receiving;
                 if (string.IsNullOrWhiteSpace(study.CallingAeTitle))
                     study.CallingAeTitle = string.IsNullOrWhiteSpace(callingAeTitle) ? null : callingAeTitle;
                 if (string.IsNullOrWhiteSpace(study.RemoteIp))
@@ -315,36 +312,6 @@ else
         }
     }
 
-    /// <summary>
-    /// Resolves the study UID that a C-STORE image should be locked on and written into.
-    /// Returns the incoming UID unchanged when no consolidation applies, or the patient's
-    /// most recent active (Receiving/Complete) study UID when one exists. This is the
-    /// pre-lock twin of the in-lock patient-based lookup so the per-study semaphore is
-    /// keyed on the true write target.
-    /// </summary>
-    private static async Task<string> ResolveStoreTargetUidAsync(FocusMedDbContext db, string studyUid, int patientDbId)
-    {
-        var sameUid = await db.Studies
-            .FirstOrDefaultAsync(s => s.StudyInstanceUid == studyUid
-                && s.Status == StudyStatus.Receiving
-                && s.LastUpdatedAt >= DateTime.UtcNow.AddSeconds(-15));
-        if (sameUid != null)
-            return sameUid.StudyInstanceUid;
-
-        if (patientDbId != 0)
-        {
-            var byPatient = await db.Studies
-                .Where(s => s.PatientId == patientDbId
-                    && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete))
-                .OrderByDescending(s => s.LastUpdatedAt)
-                .FirstOrDefaultAsync();
-            if (byPatient != null)
-                return byPatient.StudyInstanceUid;
-        }
-
-        return studyUid;
-    }
-
     public async Task BackfillMetadataAsync(CancellationToken cancellationToken = default)
     {
         const int batchSize = 200;
@@ -436,7 +403,7 @@ else
             _logger.LogInformation("Backfilled metadata from {Count} DICOM files", backfilled);
     }
 
-public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, string patientId, string patientName, string? callingAeTitle = null, string? remoteIp = null)
+    public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, string patientId, string patientName, string? callingAeTitle = null, string? remoteIp = null, int? printJobId = null)
     {
         var sopUid = TruncateUid(DicomUIDGenerator.GenerateDerivedFromUUID().UID);
         var studyUid = TruncateUid(DicomUIDGenerator.GenerateDerivedFromUUID().UID);
@@ -502,17 +469,20 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
 
         // Merge target resolution must happen against a stable target UID, so resolve it
         // (and the study lock) up front instead of generating a fresh UID then discarding it.
-        (Study? target, string? targetStudyUid) = await ResolvePrintMergeTargetAsync(patientId, callingAeTitle, imageDataset);
+        // Grouping is by PrintJob linkage (all N-SETs of one film session land together),
+        // then by explicit StudyInstanceUID. No patient/AE heuristics — different exams
+        // must never merge, even for the same patient on the same day.
+        (Study? target, string? targetStudyUid) = await ResolvePrintMergeTargetAsync(patientId, callingAeTitle, imageDataset, printJobId);
         if (target != null)
         {
             studyUid = TruncateUid(target.StudyInstanceUid);
             newDataset.AddOrUpdate(DicomTag.StudyInstanceUID, studyUid);
-            _logger.LogInformation("Print merge resolved: source patient='{PatientId}' ae='{Ae}' -> target study {TargetId} (uid={TargetUid})",
-                patientId, callingAeTitle ?? "(null)", target.Id, studyUid);
+            _logger.LogInformation("Print merge resolved: printJob={PrintJobId} patient='{PatientId}' ae='{Ae}' -> target study {TargetId} (uid={TargetUid})",
+                printJobId, patientId, callingAeTitle ?? "(null)", target.Id, studyUid);
         }
         else
         {
-            _logger.LogInformation("Print merge: no match found for patient='{PatientId}' ae='{Ae}', creating new study", patientId, callingAeTitle ?? "(null)");
+            _logger.LogInformation("Print merge: no match found for printJob={PrintJobId} patient='{PatientId}' ae='{Ae}', creating new study", printJobId, patientId, callingAeTitle ?? "(null)");
         }
 
         var dicomFile = new DicomFile(newDataset);
@@ -657,50 +627,38 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
     }
 
     private async Task<(Study? study, string? studyUid)> ResolvePrintMergeTargetAsync(
-        string patientId, string? callingAeTitle, DicomDataset imageDataset)
+        string patientId, string? callingAeTitle, DicomDataset imageDataset, int? printJobId)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-        var windowStart = DateTime.UtcNow.AddSeconds(-_printMergeWindowSeconds);
 
-        // 1) Explicit source StudyInstanceUID inside the image dataset (e.g. a print of an
-        //    existing CT/OT study). Most reliable link — merge into that study directly.
-        var sourceStudyUid = imageDataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
-        if (!string.IsNullOrWhiteSpace(sourceStudyUid))
+        // (a) PrintJob linkage wins: N-SET #2..N of the same film session rejoin the
+        // study created by N-SET #1 (linked in the N-SET handler after ingest).
+        if (printJobId.HasValue)
         {
-            var byUid = await db.Studies.FirstOrDefaultAsync(s => s.StudyInstanceUid == sourceStudyUid);
-            if (byUid != null) return (byUid, byUid.StudyInstanceUid);
-        }
-
-        // 2) Same patient, Receiving or Complete. No time window — CT/OT/SC for the same
-        //    patient always consolidate into ONE active study, regardless of timing.
-        if (!string.IsNullOrWhiteSpace(patientId))
-        {
-            var patient = db.Patients.FirstOrDefault(p => p.PatientId == patientId);
-            if (patient != null)
+            var linkedStudyId = await db.PrintJobs
+                .Where(p => p.Id == printJobId.Value && p.StudyId != null)
+                .Select(p => p.StudyId!.Value)
+                .FirstOrDefaultAsync();
+            if (linkedStudyId != 0)
             {
-                var byPatient = await db.Studies
-                    .Where(s => s.PatientId == patient.Id
-                        && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete))
-                    .OrderByDescending(s => s.LastUpdatedAt)
-                    .FirstOrDefaultAsync();
-                if (byPatient != null) return (byPatient, byPatient.StudyInstanceUid);
+                var linked = await db.Studies.FirstOrDefaultAsync(s => s.Id == linkedStudyId && s.Status != StudyStatus.Deleted);
+                if (linked != null) return (linked, linked.StudyInstanceUid);
             }
         }
 
-        // 3) Anonymous print: same calling AE within the window. Pairs a film with the
-        //    CT/OT study that just arrived from the same device.
-        if (string.IsNullOrWhiteSpace(patientId) && !string.IsNullOrWhiteSpace(callingAeTitle))
+        // (b) Explicit source StudyInstanceUID inside the image dataset (e.g. a print of an
+        // existing CT/OT study via OriginalImageSequence/ProposedStudySequence).
+        var sourceStudyUid = imageDataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
+        if (!string.IsNullOrWhiteSpace(sourceStudyUid))
         {
-            var byAe = await db.Studies
-                .Where(s => s.CallingAeTitle == callingAeTitle
-                    && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete)
-                    && s.LastUpdatedAt >= windowStart)
-                .OrderByDescending(s => s.LastUpdatedAt)
-                .FirstOrDefaultAsync();
-            if (byAe != null) return (byAe, byAe.StudyInstanceUid);
+            var byUid = await db.Studies.FirstOrDefaultAsync(s => s.StudyInstanceUid == sourceStudyUid && s.Status != StudyStatus.Deleted);
+            if (byUid != null) return (byUid, byUid.StudyInstanceUid);
         }
 
+        // (c) No match: the print starts its own new study. Patient/AE-based heuristics
+        // were removed — they merged different exams of the same patient into one study.
+        // Operators can still join studies explicitly via the Dashboard manual merge.
         return (null, null);
     }
 
@@ -710,99 +668,5 @@ public async Task<DicomFile?> IngestPrintImageAsync(DicomDataset imageDataset, s
         if (sanitized.Length == 0) sanitized = "0";
         if (sanitized.Length > 64) sanitized = sanitized[..64];
         return sanitized;
-    }
-
-    /// <summary>
-    /// When a CT/real study is created via C-STORE, find any recent print studies for the same
-    /// patient (named or anonymous, within the merge window) and re-point their series into this
-    /// study. Called from StoreFileOnlyAsync immediately after creating a new study.
-    /// </summary>
-    private async Task MergeRecentAnonymousStudiesAsync(FocusMedDbContext db, Study targetStudy)
-    {
-        var windowStart = DateTime.UtcNow.AddSeconds(-_printMergeWindowSeconds);
-
-        // Absorb PRINT studies for the same patient (named or anonymous). Also absorb
-        // STUDIES THAT ALREADY COMPLETED when they are PRINT studies from the same
-        // CallingAeTitle within the window — a print that arrived before the CT (and
-        // completed its 60s stabilization) would otherwise be stranded forever as an
-        // anonymous orphan with no way to link it to the real study.
-        var toMerge = await db.Studies
-            .Include(s => s.Patient)
-            .Include(s => s.Series).ThenInclude(s => s.Images)
-            .AsSplitQuery()
-            .Where(s => s.Id != targetStudy.Id
-                && (s.Status == StudyStatus.Receiving || s.Status == StudyStatus.Complete)
-                && s.LastUpdatedAt >= windowStart
-                && s.Patient != null
-                && (s.Patient.PatientId == ""
-                    || s.Patient.PatientId == targetStudy.Patient.PatientId
-                    || (s.CallingAeTitle != null
-                        && s.CallingAeTitle == targetStudy.CallingAeTitle
-                        && s.Series.Any(sr => sr.Images.Any(i => i.Source == "PRINT")))))
-            .ToListAsync();
-
-        foreach (var printStudy in toMerge)
-        {
-            foreach (var series in printStudy.Series)
-                series.StudyId = targetStudy.Id;
-
-            var printJobs = await db.PrintJobs.Where(p => p.StudyId == printStudy.Id).ToListAsync();
-            foreach (var pj in printJobs)
-            {
-                pj.StudyId = targetStudy.Id;
-                pj.PatientId = targetStudy.PatientId;
-            }
-
-            var printImage = printStudy.Series.SelectMany(s => s.Images).FirstOrDefault();
-            var targetImage = targetStudy.Series.SelectMany(s => s.Images).FirstOrDefault();
-            if (printImage != null && targetImage != null)
-            {
-                var printStudyDir = Directory.GetParent(Path.GetDirectoryName(printImage.FilePath) ?? "")?.FullName;
-                var targetStudyDir = Directory.GetParent(Path.GetDirectoryName(targetImage.FilePath) ?? "")?.FullName;
-                if (!string.IsNullOrEmpty(printStudyDir) && !string.IsNullOrEmpty(targetStudyDir)
-                    && Directory.Exists(printStudyDir) && Directory.Exists(targetStudyDir))
-                {
-                    try
-                    {
-                        var dirName = Path.GetFileName(printStudyDir);
-                        var newDir = Path.Combine(targetStudyDir, dirName);
-                        if (Directory.Exists(newDir))
-                            newDir = Path.Combine(targetStudyDir, dirName + "_merged_" + DateTime.UtcNow.ToString("HHmmss"));
-                        Directory.Move(printStudyDir, newDir);
-                        foreach (var img in printStudy.Series.SelectMany(s => s.Images))
-                        {
-                            if (!string.IsNullOrEmpty(img.FilePath) && img.FilePath.StartsWith(printStudyDir, StringComparison.OrdinalIgnoreCase))
-                                img.FilePath = newDir + img.FilePath.Substring(printStudyDir.Length);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to move print archive dir into new CT study {TargetId}", targetStudy.Id);
-                    }
-                }
-            }
-
-            var printPatientId = printStudy.PatientId;
-            db.Studies.Remove(printStudy);
-
-            // Clean up the now-orphaned Patient row (e.g. anonymous PatientId="")
-            // if no other study still references it — prevents phantom patient records.
-            if (printPatientId != targetStudy.PatientId && printPatientId != 0)
-            {
-                var stillUsed = await db.Studies.AnyAsync(s => s.PatientId == printPatientId && s.Id != printStudy.Id);
-                if (!stillUsed)
-                {
-                    var orphanPatient = await db.Patients.FindAsync([printPatientId]);
-                    if (orphanPatient != null)
-                        db.Patients.Remove(orphanPatient);
-                }
-            }
-
-            _logger.LogInformation("C-STORE absorbed print study {PrintStudyId} (patient='{Patient}') into new CT study {TargetId}",
-                printStudy.Id, printPatientId, targetStudy.Id);
-        }
-
-        if (toMerge.Count > 0)
-            await db.SaveChangesAsync();
     }
 }

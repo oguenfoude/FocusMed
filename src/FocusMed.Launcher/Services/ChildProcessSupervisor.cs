@@ -24,8 +24,8 @@ public sealed class ChildProcessSupervisor : IDisposable
     private readonly string _dbConnection;
     private readonly int _webPort;
 
-    private Process? _worker;
-    private Process? _dashboard;
+    private volatile Process? _worker;
+    private volatile Process? _dashboard;
     private volatile bool _shuttingDown;
     private int _workerFastExits;
     private int _dashboardFastExits;
@@ -190,6 +190,7 @@ public sealed class ChildProcessSupervisor : IDisposable
                 {
                     if (ReferenceEquals(process, _dashboard)) _dashboard = null;
                 }
+                process.Dispose();
             }, CancellationToken.None);
 
             _logger.LogInformation("{Role} started: {Exe}", role, exePath);
@@ -251,7 +252,8 @@ public sealed class ChildProcessSupervisor : IDisposable
         await StopProcessAsync(_dashboard, "Dashboard");
 
         // Give the loop a moment to observe the shutdown flag and exit.
-        try { await Task.Delay(CheckIntervalMs + 100, new CancellationTokenSource(grace).Token); }
+        using var cts = new CancellationTokenSource(grace);
+        try { await Task.Delay(CheckIntervalMs + 100, cts.Token); }
         catch (OperationCanceledException) { _logger.LogDebug("Supervisor loop delay cancelled during shutdown"); }
         catch (Exception ex) { _logger.LogDebug(ex, "Supervisor loop delay error"); }
     }

@@ -11,7 +11,8 @@ namespace FocusMed.Tests;
 /// <summary>
 /// End-to-end ingest: minimal DICOM dataset -> StoreFileOnlyAsync ->
 /// Study/Series/DicomImage rows + .dcm file on disk. Covers the receive path
-/// (dedup on re-send, cross-modality merge for the same patient).
+/// (dedup on re-send, one study per distinct StudyInstanceUID even for the same
+/// patient, same-UID multi-series stays in one study).
 /// </summary>
 public sealed class UpsertIngestTests : IDisposable
 {
@@ -75,18 +76,130 @@ public sealed class UpsertIngestTests : IDisposable
     }
 
     [Fact]
-    public async Task Ingest_SecondModalitySamePatient_MergesIntoOneStudy()
+    public async Task Ingest_DifferentStudyUidSamePatient_CreatesTwoStudies()
     {
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
 
-        await svc.StoreFileOnlyAsync(BuildFile("MERGE001", "1.2.826.0.1.3680043.10.999.3", "1.2.826.0.1.3680043.10.999.33", "1.2.826.0.1.3680043.10.999.333", "CT"));
-        await svc.StoreFileOnlyAsync(BuildFile("MERGE001", "1.2.826.0.1.3680043.10.999.4", "1.2.826.0.1.3680043.10.999.44", "1.2.826.0.1.3680043.10.999.444", "MR"));
+        // Two different exams (different StudyInstanceUIDs) for the same patient on the
+        // same day must NEVER merge — each keeps its own study row.
+        await svc.StoreFileOnlyAsync(BuildFile("SEPARATE001", "1.2.826.0.1.3680043.10.999.3", "1.2.826.0.1.3680043.10.999.33", "1.2.826.0.1.3680043.10.999.333", "CT"));
+        await svc.StoreFileOnlyAsync(BuildFile("SEPARATE001", "1.2.826.0.1.3680043.10.999.4", "1.2.826.0.1.3680043.10.999.44", "1.2.826.0.1.3680043.10.999.444", "MR"));
+
+        using var db = _infra.CreateDbContext();
+        Assert.Equal(2, await db.Studies.CountAsync());
+        var uids = await db.Studies.Select(s => s.StudyInstanceUid).OrderBy(u => u).ToListAsync();
+        Assert.Contains("1.2.826.0.1.3680043.10.999.3", uids);
+        Assert.Contains("1.2.826.0.1.3680043.10.999.4", uids);
+        Assert.Equal(2, await db.Series.CountAsync());
+    }
+
+    [Fact]
+    public async Task Ingest_SameStudyUidTwoSeries_OneStudy()
+    {
+        var scopes = _infra.CreateScopeFactory();
+        var svc = BuildService(scopes);
+
+        // Same exam arriving in pieces (two series, e.g. two associations) stays one study.
+        await svc.StoreFileOnlyAsync(BuildFile("PIECES001", "1.2.826.0.1.3680043.10.999.5", "1.2.826.0.1.3680043.10.999.55", "1.2.826.0.1.3680043.10.999.555", "CT"));
+        await svc.StoreFileOnlyAsync(BuildFile("PIECES001", "1.2.826.0.1.3680043.10.999.5", "1.2.826.0.1.3680043.10.999.56", "1.2.826.0.1.3680043.10.999.556", "CT"));
 
         using var db = _infra.CreateDbContext();
         Assert.Equal(1, await db.Studies.CountAsync());
         var study = await db.Studies.Include(s => s.Series).SingleAsync();
         Assert.Equal(2, study.Series.Count);
+    }
+
+    [Fact]
+    public async Task Print_TwoNSetsSameJob_OneStudy()
+    {
+        var scopes = _infra.CreateScopeFactory();
+        var svc = BuildService(scopes);
+
+        // Simulate the N-SET handler: first N-SET creates the study and links the
+        // PrintJob; the second N-SET of the same job must rejoin it, not split.
+        int printJobId;
+        using (var db = _infra.CreateDbContext())
+        {
+            var job = new PrintJob { SopInstanceUid = "1.2.826.0.1.3680043.10.999.900", Status = PrintStatus.Pending };
+            db.PrintJobs.Add(job);
+            await db.SaveChangesAsync();
+            printJobId = job.Id;
+        }
+
+        var first = await svc.IngestPrintImageAsync(BuildPrintDataset("PRINTJOB001"), "PRINTJOB001", "PRINT^JOB", "PRINTAE", "127.0.0.1", printJobId);
+        Assert.NotNull(first);
+        var firstStudyUid = first.Dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty);
+
+        // Link the job like the N-SET handler does after ingest.
+        using (var db = _infra.CreateDbContext())
+        {
+            var study = await db.Studies.SingleAsync(s => s.StudyInstanceUid == firstStudyUid);
+            var job = await db.PrintJobs.SingleAsync(p => p.Id == printJobId);
+            job.StudyId = study.Id;
+            job.PatientId = study.PatientId;
+            await db.SaveChangesAsync();
+        }
+
+        var second = await svc.IngestPrintImageAsync(BuildPrintDataset("PRINTJOB001"), "PRINTJOB001", "PRINT^JOB", "PRINTAE", "127.0.0.1", printJobId);
+        Assert.NotNull(second);
+        Assert.Equal(firstStudyUid, second.Dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty));
+
+        using (var db = _infra.CreateDbContext())
+        {
+            Assert.Equal(1, await db.Studies.CountAsync());
+            Assert.Equal(2, await db.Series.CountAsync());
+            Assert.Equal(2, await db.DicomImages.CountAsync(i => i.Source == "PRINT"));
+        }
+    }
+
+    [Fact]
+    public async Task Print_ExplicitStudyUid_MergesIntoCStoreStudy()
+    {
+        var scopes = _infra.CreateScopeFactory();
+        var svc = BuildService(scopes);
+
+        const string cstoreUid = "1.2.826.0.1.3680043.10.999.6";
+        await svc.StoreFileOnlyAsync(BuildFile("PRINTLINK001", cstoreUid, "1.2.826.0.1.3680043.10.999.66", "1.2.826.0.1.3680043.10.999.666", "CT"));
+
+        // Print carrying the C-STORE study's UID (OriginalImageSequence) joins it.
+        var printDs = BuildPrintDataset("PRINTLINK001");
+        printDs.AddOrUpdate(DicomTag.StudyInstanceUID, cstoreUid);
+        var stored = await svc.IngestPrintImageAsync(printDs, "PRINTLINK001", "PRINT^LINK", "PRINTAE", "127.0.0.1");
+        Assert.NotNull(stored);
+        Assert.Equal(cstoreUid, stored.Dataset.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty));
+
+        using var db = _infra.CreateDbContext();
+        Assert.Equal(1, await db.Studies.CountAsync());
+    }
+
+    [Fact]
+    public async Task Print_NoUidNoJob_CreatesOwnStudy()
+    {
+        var scopes = _infra.CreateScopeFactory();
+        var svc = BuildService(scopes);
+
+        // A print with no UID link and no job must NOT merge into the patient's C-STORE study.
+        await svc.StoreFileOnlyAsync(BuildFile("PRINTSEP001", "1.2.826.0.1.3680043.10.999.7", "1.2.826.0.1.3680043.10.999.77", "1.2.826.0.1.3680043.10.999.777", "CT"));
+        var stored = await svc.IngestPrintImageAsync(BuildPrintDataset("PRINTSEP001"), "PRINTSEP001", "PRINT^SEP", "PRINTAE", "127.0.0.1");
+        Assert.NotNull(stored);
+
+        using var db = _infra.CreateDbContext();
+        Assert.Equal(2, await db.Studies.CountAsync());
+    }
+
+    private static DicomDataset BuildPrintDataset(string patientId)
+    {
+        return new DicomDataset
+        {
+            { DicomTag.PatientID, patientId },
+            { DicomTag.PatientName, "PRINT^TEST" },
+            { DicomTag.SamplesPerPixel, (ushort)1 },
+            { DicomTag.PhotometricInterpretation, "MONOCHROME2" },
+            { DicomTag.Rows, (ushort)8 },
+            { DicomTag.Columns, (ushort)8 },
+            { DicomTag.BitsAllocated, (ushort)8 }
+        };
     }
 
     public void Dispose() => _infra.Dispose();

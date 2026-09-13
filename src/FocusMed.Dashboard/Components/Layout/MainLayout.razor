@@ -150,6 +150,7 @@
             _lastImageId = maxId;
             if (!_soundBaselineSet) { _soundBaselineSet = true; return; } // silent baseline on load
             if (maxId <= prev || _soundModule is null) return;
+            if (_soundMuted) return;
             await InvokeAsync(() => _soundModule.InvokeVoidAsync("playNotificationSound").AsTask());
         }
         catch (Exception ex)

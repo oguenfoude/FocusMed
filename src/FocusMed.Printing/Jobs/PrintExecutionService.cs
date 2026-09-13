@@ -51,7 +51,7 @@ internal sealed class PrintExecutionService(
                 resolvedPrinterName, rawPreset.Name, request.Profile.IsBooklet);
             try
             {
-                return RunInStaThread(() => PrintViaXps(pdfPath, request with { PrinterName = resolvedPrinterName }));
+                return RunInStaThread(() => PrintViaXps(pdfPath, request with { PrinterName = resolvedPrinterName }), resolvedPrinterName);
             }
             catch (Exception ex)
             {
@@ -87,15 +87,15 @@ internal sealed class PrintExecutionService(
             finally { DeleteTempPdf(request.PdfPath, pdfPath); }
         }
 
-        try { return RunInStaThread(() => PrintViaXps(pdfPath, request)); }
+        try { return RunInStaThread(() => PrintViaXps(pdfPath, request), request.PrinterName); }
         catch (Exception ex) { return new PrintJobResult { Success = false, ErrorMessage = ex.Message }; }
         finally { DeleteTempPdf(request.PdfPath, pdfPath); }
     }
 
-    private static int CountPdfPages(string pdfPath)
+    private int CountPdfPages(string pdfPath)
     {
         try { using var d = PdfReader.Open(pdfPath, PdfDocumentOpenMode.Import); return d.Pages.Count; }
-        catch { return 0; }
+        catch (Exception ex) { logger.LogWarning(ex, "Could not count pages in {Pdf} (reporting 0)", pdfPath); return 0; }
     }
 
     private PrintJobResult PrintViaXps(string pdfPath, PrintJobRequest request)
@@ -301,7 +301,7 @@ internal sealed class PrintExecutionService(
 
     private const int StaPrintTimeoutSeconds = 180;
 
-    private T RunInStaThread<T>(Func<T> action)
+    private T RunInStaThread<T>(Func<T> action, string? printerName = null)
     {
         T result = default!;
         Exception? ex = null;
@@ -322,9 +322,9 @@ internal sealed class PrintExecutionService(
             // COM/XPS). It is background, so it dies with the process. Log at Error so a
             // hung spooler is visible in diagnostics instead of a silent slow print.
             logger.LogError(
-                "Print STA thread timed out after {Timeout}s and was abandoned (printer '{Request}' may be offline). " +
+                "Print STA thread timed out after {Timeout}s and was abandoned (printer '{Printer}' may be offline). " +
                 "The background thread keeps running until the process exits.",
-                StaPrintTimeoutSeconds, typeof(T).Name);
+                StaPrintTimeoutSeconds, printerName ?? typeof(T).Name);
             throw new TimeoutException(
                 $"Print did not complete within {StaPrintTimeoutSeconds}s (spooler hung or printer offline?). " +
                 "Background STA thread left running.");

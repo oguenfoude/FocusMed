@@ -121,19 +121,28 @@ internal sealed class BookletImpositionService(ILogger<BookletImpositionService>
         double srcW = form.PointWidth;
         double srcH = form.PointHeight;
 
-        // Auto-rotate: if source is landscape, swap dimensions
-        double drawW, drawH;
+        // Auto-rotate: if source is landscape, rotate 90 degrees to fit portrait slot.
         if (srcW > srcH)
         {
-            // Source is landscape -> rotate 90 degrees to fit portrait slot
-            drawW = srcH;
-            drawH = srcW;
+            // Rotated dimensions (90° swap), scaled to fit the slot.
+            double rotW = srcH;
+            double rotH = srcW;
+            double rotScale = Math.Min(slotW / rotW, slotH / rotH);
+            double srcScaledW = srcW * rotScale;
+            double srcScaledH = srcH * rotScale;
+
+            // Rotate about the slot center, then draw the unrotated source
+            // centered at the origin so it lands un-squished in the slot.
+            gfx.Save();
+            gfx.TranslateTransform(x + slotW / 2.0, y + slotH / 2.0);
+            gfx.RotateTransform(90);
+            gfx.DrawImage(form, new XRect(-srcScaledW / 2.0, -srcScaledH / 2.0, srcScaledW, srcScaledH));
+            gfx.Restore();
+            return;
         }
-        else
-        {
-            drawW = srcW;
-            drawH = srcH;
-        }
+
+        double drawW = srcW;
+        double drawH = srcH;
 
         // Scale to fit slot (maintain aspect ratio)
         double scaleX = slotW / drawW;

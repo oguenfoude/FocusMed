@@ -162,8 +162,8 @@ public class BootstrapService
                 WriteIndented = true
             });
             System.IO.File.WriteAllText(tmp, json);
-            System.IO.File.Copy(tmp, target, overwrite: true);
-            System.IO.File.Delete(tmp);
+            try { System.IO.File.Move(tmp, target, overwrite: true); }
+            catch { try { System.IO.File.Delete(tmp); } catch { } throw; }
 
             _logger.LogInformation("Shared appsettings.json regenerated ({Target})", target);
         }

@@ -374,6 +374,10 @@ else
                 StateHasChanged();
             });
         }
+        catch (InvalidOperationException ex)
+        {
+            Logger.LogDebug(ex, "Study change notification during circuit disconnect (non-fatal)");
+        }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error handling study change notification");

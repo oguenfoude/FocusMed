@@ -38,25 +38,35 @@ internal sealed class PrinterCapabilityService(
             DiscoverySource = "None"
         };
 
-        // If Modern provider returned 0 paper sizes, enrich from Legacy (GDI+ has PaperSizes)
-        // Also copy duplex/color flags — Modern (System.Printing) often reports false for v4 drivers
-        if (snapshot.PaperSizes.Count == 0 && snapshot.DiscoverySource == "System.Printing")
+        // If Modern provider is the source, enrich from Legacy (GDI+ has PaperSizes,
+        // and Modern/System.Printing often reports false duplex/color flags for v4 drivers).
+        // Paper sizes are enriched only when Modern returned none; duplex/color flags are
+        // always copied from Legacy regardless of paper-size count.
+        if (snapshot.DiscoverySource == "System.Printing")
         {
             var legacySnap = legacy.TryGet(printerName);
-            if (legacySnap is not null && legacySnap.PaperSizes.Count > 0)
+            if (legacySnap is not null)
             {
+                if (snapshot.PaperSizes.Count == 0 && legacySnap.PaperSizes.Count > 0)
+                {
+                    snapshot = snapshot with
+                    {
+                        PaperSizes = legacySnap.PaperSizes,
+                        PaperTrays = legacySnap.PaperTrays,
+                        Resolutions = legacySnap.Resolutions,
+                        PaperToTrayMap = legacySnap.PaperToTrayMap
+                    };
+                    logger.LogInformation("Enriched '{PrinterName}' from Legacy: {PaperCount} papers",
+                        printerName, legacySnap.PaperSizes.Count);
+                }
                 snapshot = snapshot with
                 {
-                    PaperSizes = legacySnap.PaperSizes,
-                    PaperTrays = legacySnap.PaperTrays,
-                    Resolutions = legacySnap.Resolutions,
                     SupportsDuplex = legacySnap.SupportsDuplex,
                     SupportsColor = legacySnap.SupportsColor,
-                    SupportsCollation = legacySnap.SupportsCollation,
-                    PaperToTrayMap = legacySnap.PaperToTrayMap
+                    SupportsCollation = legacySnap.SupportsCollation
                 };
-                logger.LogInformation("Enriched '{PrinterName}' from Legacy: {PaperCount} papers, Duplex={Duplex}, Color={Color}",
-                    printerName, legacySnap.PaperSizes.Count, legacySnap.SupportsDuplex, legacySnap.SupportsColor);
+                logger.LogInformation("Enriched '{PrinterName}' flags from Legacy: Duplex={Duplex}, Color={Color}",
+                    printerName, legacySnap.SupportsDuplex, legacySnap.SupportsColor);
             }
         }
 

@@ -78,6 +78,17 @@ public class SiteConfig
 
             ForceJsonBackedProperties(logger, defaults, loaded);
 
+            if (loaded.DicomPort < 1 || loaded.DicomPort > 65535)
+            {
+                logger.LogWarning("config.json has invalid DicomPort {Port}; reverting to default", loaded.DicomPort);
+                loaded.DicomPort = defaults.DicomPort;
+            }
+            if (loaded.WebPort < 1 || loaded.WebPort > 65535)
+            {
+                logger.LogWarning("config.json has invalid WebPort {Port}; reverting to default", loaded.WebPort);
+                loaded.WebPort = defaults.WebPort;
+            }
+
             if (string.IsNullOrWhiteSpace(loaded.RawPrinterIp) || loaded.RawPrinterIp == "192.168.1.160")
             {
                 logger.LogInformation("Config has default printer IP; attempting auto-detection");
@@ -182,7 +193,7 @@ public class SiteConfig
     {
         try
         {
-            var backup = Path.Combine(appDir, $"config.errored-{DateTime.Now:yyyyMMdd_HHmmss}.json");
+            var backup = Path.Combine(appDir, $"config.errored-{DateTime.UtcNow:yyyyMMdd_HHmmss}.json");
             File.Move(configPath, backup, overwrite: true);
             logger.LogWarning("Backed up corrupt config to {Backup}", backup);
         }
@@ -205,7 +216,10 @@ public class SiteConfig
     private static void WriteDefaults(string configPath, SiteConfig defaults)
     {
         var json = JsonSerializer.Serialize(defaults, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(configPath, json);
+        var tmp = configPath + ".tmp";
+        File.WriteAllText(tmp, json);
+        try { File.Move(tmp, configPath, overwrite: true); }
+        catch { try { File.Delete(tmp); } catch { } throw; }
     }
 
     /// <summary>

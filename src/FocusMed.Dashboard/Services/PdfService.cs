@@ -109,6 +109,7 @@ public class PdfService
 
                 return $"/pdf-cache/{fileName}";
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to generate PDF");
@@ -694,6 +695,7 @@ public class PdfService
             catch (UnauthorizedAccessException) { await Task.Delay(200); }
             catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete PDF {Path}", pdfUrl); return; }
         }
+        _logger.LogWarning("DeletePdf gave up after 3 attempts (file locked, will be caught by TTL sweep): {Url}", pdfUrl);
     }
 
     public void DeletePdf(string pdfUrl)

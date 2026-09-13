@@ -189,8 +189,9 @@ public class PrintJobMonitorService : IDisposable
             }
             catch (IOException) { await Task.Delay(200); }
             catch (UnauthorizedAccessException) { await Task.Delay(200); }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogDebug(ex, "Unexpected error zeroing file (non-fatal)");
                 return;
             }
         }
@@ -231,9 +232,9 @@ public class PrintJobMonitorService : IDisposable
             var tailText = System.Text.Encoding.ASCII.GetString(tail);
             return tailText.Contains("%%EOF", StringComparison.Ordinal);
         }
-        catch
-        {
-            return false;
-        }
+            catch
+            {
+                return false;
+            }
     }
 }

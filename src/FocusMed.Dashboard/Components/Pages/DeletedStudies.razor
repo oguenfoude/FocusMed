@@ -256,6 +256,7 @@ else
         StateHasChanged();
         await LoadDataAsync();
         IsRefreshing = false;
+        StateHasChanged();
     }
 
     private void RefreshData() => _ = RefreshDataAsync();
