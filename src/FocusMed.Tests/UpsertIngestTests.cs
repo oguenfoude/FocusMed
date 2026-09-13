@@ -65,10 +65,10 @@ public sealed class UpsertIngestTests : IDisposable
     {
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
-        const string sop = "1.2.826.0.1.3680043.10.999.222";
 
-        var first = await svc.StoreFileOnlyAsync(BuildFile("TWOSTUDIES001", "1.2.826.0.1.3680043.10.999.2", "1.2.826.0.1.3680043.10.999.22", sop));
-        var second = await svc.StoreFileOnlyAsync(BuildFile("TWOSTUDIES001", "1.2.826.0.1.3680043.10.999.2", "1.2.826.0.1.3680043.10.999.22", sop));
+        // Same SOP UID but different StudyInstanceUIDs → two studies.
+        var first = await svc.StoreFileOnlyAsync(BuildFile("TWOSTUDIES001", "1.2.826.0.1.3680043.10.999.2", "1.2.826.0.1.3680043.10.999.22", "1.2.826.0.1.3680043.10.999.222"));
+        var second = await svc.StoreFileOnlyAsync(BuildFile("TWOSTUDIES001", "1.2.826.0.1.3680043.10.999.9", "1.2.826.0.1.3680043.10.999.92", "1.2.826.0.1.3680043.10.999.222"));
         Assert.Equal(StoreOutcome.Stored, first);
         Assert.Equal(StoreOutcome.Stored, second);
 
@@ -82,9 +82,10 @@ public sealed class UpsertIngestTests : IDisposable
     {
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
+        const string studyUid = "1.2.826.0.1.3680043.10.999.21";
         const string sop = "1.2.826.0.1.3680043.10.999.211";
 
-        var first = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", "1.2.826.0.1.3680043.10.999.21", "1.2.826.0.1.3680043.10.999.212", sop));
+        var first = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", studyUid, "1.2.826.0.1.3680043.10.999.212", sop));
         Assert.Equal(StoreOutcome.Stored, first);
 
         // Mark Complete (simulates completion loop).
@@ -95,8 +96,8 @@ public sealed class UpsertIngestTests : IDisposable
             await db.SaveChangesAsync();
         }
 
-        // Second send: creates a BRAND NEW study (not appended to the first).
-        var second = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", "1.2.826.0.1.3680043.10.999.21", "1.2.826.0.1.3680043.10.999.212", sop));
+        // Same UID re-sent after Complete → creates a NEW study (not appended).
+        var second = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", studyUid, "1.2.826.0.1.3680043.10.999.212", sop));
         Assert.Equal(StoreOutcome.Stored, second);
 
         using (var db = _infra.CreateDbContext())
@@ -112,7 +113,7 @@ public sealed class UpsertIngestTests : IDisposable
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
 
-        // Two sends from same patient → each produces its own study row.
+        // Two different exams (different StudyInstanceUIDs) for the same patient → separate studies.
         await svc.StoreFileOnlyAsync(BuildFile("SEPARATE001", "1.2.826.0.1.3680043.10.999.3", "1.2.826.0.1.3680043.10.999.33", "1.2.826.0.1.3680043.10.999.333", "CT"));
         await svc.StoreFileOnlyAsync(BuildFile("SEPARATE001", "1.2.826.0.1.3680043.10.999.4", "1.2.826.0.1.3680043.10.999.44", "1.2.826.0.1.3680043.10.999.444", "MR"));
 
@@ -127,13 +128,14 @@ public sealed class UpsertIngestTests : IDisposable
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
 
-        // Two sends from same exam — each creates its own study row.
+        // Same exam arriving in pieces (two series, e.g. two associations) stays one study.
         await svc.StoreFileOnlyAsync(BuildFile("PIECES001", "1.2.826.0.1.3680043.10.999.5", "1.2.826.0.1.3680043.10.999.55", "1.2.826.0.1.3680043.10.999.555", "CT"));
         await svc.StoreFileOnlyAsync(BuildFile("PIECES001", "1.2.826.0.1.3680043.10.999.5", "1.2.826.0.1.3680043.10.999.56", "1.2.826.0.1.3680043.10.999.556", "CT"));
 
         using var db = _infra.CreateDbContext();
-        Assert.Equal(2, await db.Studies.CountAsync());
-        Assert.Equal(2, await db.Series.CountAsync());
+        Assert.Equal(1, await db.Studies.CountAsync());
+        var study = await db.Studies.Include(s => s.Series).SingleAsync();
+        Assert.Equal(2, study.Series.Count);
     }
 
     [Fact]
@@ -185,12 +187,12 @@ public sealed class UpsertIngestTests : IDisposable
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
 
-        const string cstoreUid = "1.2.826.0.1.3680043.10.999.6";
-        await svc.StoreFileOnlyAsync(BuildFile("PRINTLINK001", cstoreUid, "1.2.826.0.1.3680043.10.999.66", "1.2.826.0.1.3680043.10.999.666", "CT"));
+        // C-STORE creates its own study.
+        await svc.StoreFileOnlyAsync(BuildFile("PRINTLINK001", "1.2.826.0.1.3680043.10.999.6", "1.2.826.0.1.3680043.10.999.66", "1.2.826.0.1.3680043.10.999.666", "CT"));
 
-        // Print carries an explicit StudyInstanceUID — creates its own study.
+        // Print with a different StudyInstanceUID → creates its own study.
         var printDs = BuildPrintDataset("PRINTLINK001");
-        printDs.AddOrUpdate(DicomTag.StudyInstanceUID, cstoreUid);
+        printDs.AddOrUpdate(DicomTag.StudyInstanceUID, "1.2.826.0.1.3680043.10.999.88");
         var stored = await svc.IngestPrintImageAsync(printDs, "PRINTLINK001", "PRINT^LINK", "PRINTAE", "127.0.0.1");
         Assert.NotNull(stored);
 
