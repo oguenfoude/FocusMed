@@ -152,7 +152,10 @@ public DicomUpsertService(
             StudyStatus? existingStudyStatus = null;
             using (var cmd = db.Database.GetDbConnection().CreateCommand())
             {
-                cmd.CommandText = "SELECT Id, Status FROM Studies WHERE StudyInstanceUid = $uid AND Status != $deleted LIMIT 1";
+                // ORDER BY Id DESC: get the NEWEST study with this UID. Without
+                // this, LIMIT 1 returns the oldest (Complete) study and every
+                // image creates a new study instead of appending.
+                cmd.CommandText = "SELECT Id, Status FROM Studies WHERE StudyInstanceUid = $uid AND Status != $deleted ORDER BY Id DESC LIMIT 1";
                 cmd.Parameters.Add(new SqliteParameter("$uid", studyUid));
                 cmd.Parameters.Add(new SqliteParameter("$deleted", (int)StudyStatus.Deleted));
                 if (db.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
