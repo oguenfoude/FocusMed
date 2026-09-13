@@ -218,6 +218,31 @@ public DicomUpsertService(
                 db.Series.Add(series);
             }
 
+            // Same SOP already in THIS study (operator re-sent the same images
+            // while the study is open): skip the duplicate row + file, but bump
+            // LastUpdatedAt + log so the re-send is visible, not silent.
+            // Raw SQL: same SQLite pool visibility reason as the study lookup.
+            bool sopAlreadyInStudy;
+            using (var sopCmd = db.Database.GetDbConnection().CreateCommand())
+            {
+                sopCmd.CommandText = "SELECT 1 FROM DicomImages d JOIN Series se ON se.Id = d.SeriesId WHERE d.SopInstanceUid = $sop AND se.StudyId = $studyId LIMIT 1";
+                sopCmd.Parameters.Add(new SqliteParameter("$sop", sopUid));
+                sopCmd.Parameters.Add(new SqliteParameter("$studyId", study.Id));
+                if (db.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
+                    await db.Database.OpenConnectionAsync();
+                using var sopReader = await sopCmd.ExecuteReaderAsync();
+                sopAlreadyInStudy = await sopReader.ReadAsync();
+            }
+            if (sopAlreadyInStudy)
+            {
+                study.LastUpdatedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync();
+                _logger.LogInformation("C-STORE duplicate SOP=...{SopTail} already in Study={StudyId} AE={Ae} — skipped, timestamp bumped",
+                    sopUid[^Math.Min(8, sopUid.Length)..], study.Id, callingAeTitle ?? "(null)");
+                _notificationService.NotifyStudyChanged();
+                return StoreOutcome.Stored;
+            }
+
             var studyHash = DicomHelpers.GetFnv1aHash(studyUid);
             var safePatientName = DicomHelpers.SanitizeFileName(patientName);
             var safeModality = DicomHelpers.SanitizeFileName(modality);

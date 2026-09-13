@@ -61,20 +61,24 @@ public sealed class UpsertIngestTests : IDisposable
     }
 
     [Fact]
-    public async Task Ingest_SameSopUidTwice_CreatesTwoStudies()
+    public async Task Ingest_SameSopResentToOpenStudy_NoDuplicateImage()
     {
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
+        const string studyUid = "1.2.826.0.1.3680043.10.999.31";
+        const string sop = "1.2.826.0.1.3680043.10.999.311";
 
-        // Same SOP UID but different StudyInstanceUIDs → two studies.
-        var first = await svc.StoreFileOnlyAsync(BuildFile("TWOSTUDIES001", "1.2.826.0.1.3680043.10.999.2", "1.2.826.0.1.3680043.10.999.22", "1.2.826.0.1.3680043.10.999.222"));
-        var second = await svc.StoreFileOnlyAsync(BuildFile("TWOSTUDIES001", "1.2.826.0.1.3680043.10.999.9", "1.2.826.0.1.3680043.10.999.92", "1.2.826.0.1.3680043.10.999.222"));
+        // First send: 1 image in the open study.
+        var first = await svc.StoreFileOnlyAsync(BuildFile("NODUP001", studyUid, "1.2.826.0.1.3680043.10.999.312", sop));
         Assert.Equal(StoreOutcome.Stored, first);
+
+        // Same SOP re-sent while study is still open: no new image row.
+        var second = await svc.StoreFileOnlyAsync(BuildFile("NODUP001", studyUid, "1.2.826.0.1.3680043.10.999.312", sop));
         Assert.Equal(StoreOutcome.Stored, second);
 
         using var db = _infra.CreateDbContext();
-        Assert.Equal(2, await db.Studies.CountAsync());
-        Assert.Equal(2, await db.DicomImages.CountAsync());
+        Assert.Equal(1, await db.Studies.CountAsync());
+        Assert.Equal(1, await db.DicomImages.CountAsync());
     }
 
     [Fact]
