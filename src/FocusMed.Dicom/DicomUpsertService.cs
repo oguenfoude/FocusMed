@@ -3,6 +3,7 @@ using FellowOakDicom;
 using FocusMed.Data;
 using FocusMed.Data.Entities;
 using FocusMed.Dicom.Options;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -144,22 +145,32 @@ public DicomUpsertService(
             // Group by StudyInstanceUID: same UID → same study (images from one
             // exam stay together). If the study is Complete/Archived, create a
             // new study (re-send after completion = new exam, not a reopen).
-            // AsNoTracking forces a DB read so we always get the real Id, even
-            // when the SQLite connection pool shares a connection between scopes.
-            var existingStudy = db.Studies.AsNoTracking()
-                .FirstOrDefault(s => s.StudyInstanceUid == studyUid && s.Status != StudyStatus.Deleted);
-
-            _logger.LogDebug("C-STORE study lookup uid=...{StudyTail} found={Found} status={Status}",
-                studyUid[^Math.Min(8, studyUid.Length)..],
-                existingStudy?.Id.ToString() ?? "null",
-                existingStudy?.Status.ToString() ?? "-");
+            // Raw SQL bypasses EF Core change tracker + SQLite connection pool
+            // visibility issues that cause concurrent C-STOREs to miss each
+            // other's committed rows.
+            int? existingStudyId = null;
+            StudyStatus? existingStudyStatus = null;
+            using (var cmd = db.Database.GetDbConnection().CreateCommand())
+            {
+                cmd.CommandText = "SELECT Id, Status FROM Studies WHERE StudyInstanceUid = $uid AND Status != $deleted LIMIT 1";
+                cmd.Parameters.Add(new SqliteParameter("$uid", studyUid));
+                cmd.Parameters.Add(new SqliteParameter("$deleted", (int)StudyStatus.Deleted));
+                if (db.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
+                    await db.Database.OpenConnectionAsync();
+                using var reader = await cmd.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    existingStudyId = reader.GetInt32(0);
+                    existingStudyStatus = (StudyStatus)reader.GetInt32(1);
+                }
+            }
 
             Study study;
             bool isNewStudy;
-            if (existingStudy != null && existingStudy.Status != StudyStatus.Complete && existingStudy.Status != StudyStatus.Archived)
+            if (existingStudyId.HasValue && existingStudyStatus != StudyStatus.Complete && existingStudyStatus != StudyStatus.Archived)
             {
                 // Re-query with tracking so modifications (LastUpdatedAt) are saved.
-                study = db.Studies.First(s => s.Id == existingStudy.Id);
+                study = db.Studies.First(s => s.Id == existingStudyId.Value);
                 study.LastUpdatedAt = DateTime.UtcNow;
                 if (string.IsNullOrWhiteSpace(study.CallingAeTitle))
                     study.CallingAeTitle = callingAeTitle;
