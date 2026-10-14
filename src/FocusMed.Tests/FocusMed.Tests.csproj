@@ -6,8 +6,9 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <!-- NU1903: SQLitePCLRaw native lib advisory. Same native SQLite the production
-         Data project ships (EFCore.Sqlite 10.0.0) — no fixed version exists in this line. -->
-    <NoWarn>NU1903</NoWarn>
+         Data project ships (EFCore.Sqlite 10.0.0) — no fixed version exists in this line.
+         NU1902 (+NU1903): SixLabors.ImageSharp advisories, see AGENTS.md. -->
+    <NoWarn>$(NoWarn);NU1902;NU1903</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

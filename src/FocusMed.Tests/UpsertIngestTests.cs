@@ -82,32 +82,60 @@ public sealed class UpsertIngestTests : IDisposable
     }
 
     [Fact]
-    public async Task Ingest_ResendAfterComplete_CreatesNewStudy()
+    public async Task Ingest_ResendSameDay_Appends_NextDayOrComplete_Forks()
     {
         var scopes = _infra.CreateScopeFactory();
         var svc = BuildService(scopes);
         const string studyUid = "1.2.826.0.1.3680043.10.999.21";
-        const string sop = "1.2.826.0.1.3680043.10.999.211";
+        const string seriesUid = "1.2.826.0.1.3680043.10.999.212";
 
-        var first = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", studyUid, "1.2.826.0.1.3680043.10.999.212", sop));
+        // Day 1, first send: 1 study, 1 image.
+        var first = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", studyUid, seriesUid, "1.2.826.0.1.3680043.10.999.211"));
         Assert.Equal(StoreOutcome.Stored, first);
 
-        // Mark Complete (simulates completion loop).
-        using (var db = _infra.CreateDbContext())
-        {
-            var study = await db.Studies.SingleAsync();
-            study.Status = StudyStatus.Complete;
-            await db.SaveChangesAsync();
-        }
-
-        // Same UID re-sent after Complete → creates a NEW study (not appended).
-        var second = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", studyUid, "1.2.826.0.1.3680043.10.999.212", sop));
+        // Same UTC day, open study, new SOP → appends (no fork).
+        var second = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", studyUid, seriesUid, "1.2.826.0.1.3680043.10.999.212"));
         Assert.Equal(StoreOutcome.Stored, second);
 
         using (var db = _infra.CreateDbContext())
         {
-            Assert.Equal(2, await db.Studies.CountAsync());
+            Assert.Equal(1, await db.Studies.CountAsync());
             Assert.Equal(2, await db.DicomImages.CountAsync());
+        }
+
+        // Next UTC day (backdate the seeded row) → forks a new study.
+        using (var db = _infra.CreateDbContext())
+        {
+            var study = await db.Studies.SingleAsync();
+            study.CreatedAt = DateTime.UtcNow.AddDays(-1);
+            study.LastUpdatedAt = DateTime.UtcNow.AddDays(-1);
+            await db.SaveChangesAsync();
+        }
+
+        var third = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", studyUid, seriesUid, "1.2.826.0.1.3680043.10.999.213"));
+        Assert.Equal(StoreOutcome.Stored, third);
+
+        using (var db = _infra.CreateDbContext())
+        {
+            Assert.Equal(2, await db.Studies.CountAsync());
+            Assert.Equal(3, await db.DicomImages.CountAsync());
+        }
+
+        // Same-day re-send onto a Complete study → still forks (never reopens).
+        using (var db = _infra.CreateDbContext())
+        {
+            var newest = await db.Studies.OrderByDescending(s => s.Id).FirstAsync();
+            newest.Status = StudyStatus.Complete;
+            await db.SaveChangesAsync();
+        }
+
+        var fourth = await svc.StoreFileOnlyAsync(BuildFile("RESEND001", studyUid, seriesUid, "1.2.826.0.1.3680043.10.999.214"));
+        Assert.Equal(StoreOutcome.Stored, fourth);
+
+        using (var db = _infra.CreateDbContext())
+        {
+            Assert.Equal(3, await db.Studies.CountAsync());
+            Assert.Equal(4, await db.DicomImages.CountAsync());
         }
     }
 
@@ -213,6 +241,62 @@ public sealed class UpsertIngestTests : IDisposable
         // A print with no UID link and no job must NOT merge into the patient's C-STORE study.
         await svc.StoreFileOnlyAsync(BuildFile("PRINTSEP001", "1.2.826.0.1.3680043.10.999.7", "1.2.826.0.1.3680043.10.999.77", "1.2.826.0.1.3680043.10.999.777", "CT"));
         var stored = await svc.IngestPrintImageAsync(BuildPrintDataset("PRINTSEP001"), "PRINTSEP001", "PRINT^SEP", "PRINTAE", "127.0.0.1");
+        Assert.NotNull(stored);
+
+        using var db = _infra.CreateDbContext();
+        Assert.Equal(2, await db.Studies.CountAsync());
+    }
+
+    [Fact]
+    public async Task Print_EmptyPrintAttachesToNamedSameAe_OneStudy()
+    {
+        var scopes = _infra.CreateScopeFactory();
+        var svc = BuildService(scopes);
+
+        // C-STORE first (named, same AE), then the SonoVision-style empty print:
+        // it must land in the named study, keeping the patient identity.
+        await svc.StoreFileOnlyAsync(
+            BuildFile("ATTACH001", "1.2.826.0.1.3680043.10.999.9", "1.2.826.0.1.3680043.10.999.99", "1.2.826.0.1.3680043.10.999.999", "CT"),
+            callingAeTitle: "SVAE", remoteIp: "127.0.0.1");
+        var stored = await svc.IngestPrintImageAsync(BuildPrintDataset(string.Empty), string.Empty, string.Empty, "SVAE", "127.0.0.1");
+        Assert.NotNull(stored);
+
+        using var db = _infra.CreateDbContext();
+        Assert.Equal(1, await db.Studies.CountAsync());
+        var study = await db.Studies.Include(s => s.Patient).Include(s => s.Series).ThenInclude(s => s.Images).AsSplitQuery().SingleAsync();
+        Assert.Equal("ATTACH001", study.Patient.PatientId);
+        Assert.Equal(2, study.Series.SelectMany(s => s.Images).Count());
+    }
+
+    [Fact]
+    public async Task Print_EmptyPrintsChainAnonymous_OneStudy()
+    {
+        var scopes = _infra.CreateScopeFactory();
+        var svc = BuildService(scopes);
+
+        // Two empty prints from separate film sessions (different jobs) but the same
+        // AE within the window must chain into one anonymous SC study (10-print case).
+        var first = await svc.IngestPrintImageAsync(BuildPrintDataset(string.Empty), string.Empty, string.Empty, "SVAE", "127.0.0.1", printJobId: 101);
+        var second = await svc.IngestPrintImageAsync(BuildPrintDataset(string.Empty), string.Empty, string.Empty, "SVAE", "127.0.0.1", printJobId: 102);
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+
+        using var db = _infra.CreateDbContext();
+        Assert.Equal(1, await db.Studies.CountAsync());
+        Assert.Equal(2, await db.DicomImages.CountAsync(i => i.Source == "PRINT"));
+    }
+
+    [Fact]
+    public async Task Print_EmptyPrintDifferentAe_StaysSeparate()
+    {
+        var scopes = _infra.CreateScopeFactory();
+        var svc = BuildService(scopes);
+
+        // Empty print from a different AE must NOT join the named study (no cross-AE bleed).
+        await svc.StoreFileOnlyAsync(
+            BuildFile("SEPAE001", "1.2.826.0.1.3680043.10.999.10", "1.2.826.0.1.3680043.10.999.100", "1.2.826.0.1.3680043.10.999.1000", "CT"),
+            callingAeTitle: "SVAE", remoteIp: "127.0.0.1");
+        var stored = await svc.IngestPrintImageAsync(BuildPrintDataset(string.Empty), string.Empty, string.Empty, "OTHERAE", "127.0.0.1");
         Assert.NotNull(stored);
 
         using var db = _infra.CreateDbContext();
