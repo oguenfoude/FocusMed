@@ -12,6 +12,7 @@ public partial class ResumePickerWindow : Window
     private readonly string _pdfPath = "";
     private readonly string _resumesFolder;
     private List<StudyItem> _studies = new();
+    private CancellationTokenSource? _loadCts;
 
     public ResumePickerWindow(DatabaseService databaseService, ILogger<ResumePickerWindow> logger, string pdfPath, string resumesFolder = "resumes")
     {
@@ -20,18 +21,25 @@ public partial class ResumePickerWindow : Window
         _pdfPath = pdfPath;
         _resumesFolder = resumesFolder;
         InitializeComponent();
-        Closed += (_, _) => { try { if (!string.IsNullOrEmpty(_pdfPath) && File.Exists(_pdfPath)) File.Delete(_pdfPath); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete temp PDF on window close"); } };
+        Closed += (_, _) => { try { _loadCts?.Cancel(); } catch { } try { _loadCts?.Dispose(); } catch { } try { if (!string.IsNullOrEmpty(_pdfPath) && File.Exists(_pdfPath)) File.Delete(_pdfPath); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete temp PDF on window close"); } };
         _ = LoadStudiesAsync();
     }
 
     private async Task LoadStudiesAsync()
     {
+        // Cancel any in-flight reload (rapid "show all" toggling) so a slow query
+        // cannot overwrite a newer list.
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = new CancellationTokenSource();
+        var ct = _loadCts.Token;
         try
         {
             StatusText.Text = "Chargement...";
             var studies = ShowAllCheckbox?.IsChecked == true
                 ? await _databaseService.GetAllStudiesAsync()
                 : await _databaseService.GetSelectableStudiesAsync();
+            ct.ThrowIfCancellationRequested();
 
             _studies = studies.Select(s => new StudyItem
             {
@@ -47,9 +55,13 @@ public partial class ResumePickerWindow : Window
 
             ApplyFilter();
         }
+        catch (OperationCanceledException)
+        {
+            // Superseded reload — a newer LoadStudiesAsync owns the list now.
+        }
         catch (Exception ex)
         {
-            StatusText.Text = $"Erreur: {ex.Message}";
+            StatusText.Text = $"Erreur de chargement des études : {ex.Message}";
         }
     }
 
@@ -98,6 +110,16 @@ public partial class ResumePickerWindow : Window
             return;
         }
 
+        // Overwrite warning: the default list hides assigned studies, but "show all"
+        // can select one that already has a resume (which AssignResumeAsync replaces).
+        if (selected.HasResume)
+        {
+            var overwrite = System.Windows.MessageBox.Show(
+                $"L'étude {selected.Id} ({selected.PatientName}) a déjà un résumé associé. Le remplacer par le nouveau document ?",
+                "FocusMed", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (overwrite != MessageBoxResult.Yes) return;
+        }
+
         _confirming = true;
         ConfirmButton.IsEnabled = false;
 
@@ -135,7 +157,7 @@ public partial class ResumePickerWindow : Window
             else
             {
                 try { File.Delete(destPath); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to cleanup PDF after failed assign"); }
-                StatusText.Text = "Erreur lors de l'association.";
+                StatusText.Text = "Association refusée : étude supprimée, archivée ou introuvable.";
                 _confirming = false;
                 ConfirmButton.IsEnabled = StudiesGrid.SelectedItem != null;
             }
@@ -143,7 +165,7 @@ public partial class ResumePickerWindow : Window
         catch (Exception ex)
         {
             try { File.Delete(destPath); } catch (Exception ex2) { _logger.LogWarning(ex2, "Failed to cleanup PDF after exception"); }
-            StatusText.Text = "Erreur lors de l'association.";
+            StatusText.Text = $"Erreur lors de l'association : {ex.Message}";
             _logger.LogWarning(ex, "Failed to assign resume to study {StudyId}", selected.Id);
             _confirming = false;
             ConfirmButton.IsEnabled = StudiesGrid.SelectedItem != null;

@@ -15,7 +15,12 @@ namespace FocusMed.Launcher;
 
 public partial class App : System.Windows.Application
 {
-    private const string MutexName = @"Local\FocusMed.Launcher";
+    // Global\ (not Local\): one launcher per MACHINE, not per session. A Local\ mutex
+    // allowed a second launcher in another RDP/user session, which then fought over
+    // the same ports and locked FocusMed.Launcher.exe across sessions (MSB3027).
+    // Creation is guarded (AcquireSingleInstance try/catches), so non-elevated
+    // contexts that cannot create Global\ objects still boot.
+    private const string MutexName = @"Global\FocusMed.Launcher";
 
     private ServiceProvider? _serviceProvider;
     private PrintJobMonitorService? _monitor;
@@ -61,12 +66,15 @@ public partial class App : System.Windows.Application
             var autostart = e.Args.Any(a => string.Equals(a, "--autostart", StringComparison.OrdinalIgnoreCase));
 
             var appDir = AppDomain.CurrentDomain.BaseDirectory;
-            var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+            // Early logger on the pre-config data dir (env or default). Rebound to the
+            // RESOLVED dir after SiteConfig.Load below: DataDirectory in config.json may
+            // point elsewhere, and logging must follow it (log-dir ordering).
+            var earlyDataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
-            Directory.CreateDirectory(Path.Combine(dataDir, "logs"));
+            Directory.CreateDirectory(Path.Combine(earlyDataDir, "logs"));
 
             Log.Logger = new LoggerConfiguration()
-                .WriteTo.File(Path.Combine(dataDir, "logs", "launcher-.log"),
+                .WriteTo.File(Path.Combine(earlyDataDir, "logs", "launcher-.log"),
                     rollingInterval: RollingInterval.Day,
                     outputTemplate: "{Timestamp:HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
                 .CreateLogger();
@@ -88,9 +96,43 @@ public partial class App : System.Windows.Application
             var resolvedDb = _cfg.ResolvedDbConnection;
             Environment.SetEnvironmentVariable("FOCUSMED_DATA", resolvedDataDir);
             Environment.SetEnvironmentVariable("FOCUSMED_DB_CONNECTION", resolvedDb);
+            // Env snapshot note: children read FOCUSMED_DATA/FOCUSMED_DB_CONNECTION once at
+            // spawn. Changing config.json or env vars needs a Launcher restart — there is
+            // intentionally no live watcher (documented here + in the tray tooltip cycle).
+            Log.Information("Env snapshot: FOCUSMED_DATA={DataDir} (restart required after config/env changes — no live reload)", resolvedDataDir);
+
+            if (!string.Equals(
+                    Path.GetFullPath(Path.Combine(earlyDataDir, "logs")),
+                    Path.GetFullPath(Path.Combine(resolvedDataDir, "logs")),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                Directory.CreateDirectory(Path.Combine(resolvedDataDir, "logs"));
+                Log.CloseAndFlush();
+                Log.Logger = new LoggerConfiguration()
+                    .WriteTo.File(Path.Combine(resolvedDataDir, "logs", "launcher-.log"),
+                        rollingInterval: RollingInterval.Day,
+                        outputTemplate: "{Timestamp:HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+                    .CreateLogger();
+                Log.Information("Logger rebound to resolved data dir: {DataDir}", resolvedDataDir);
+            }
+
+            if (!PreflightCheck(_cfg))
+            {
+                try { Shutdown(1); } catch { }
+                return;
+            }
 
             _resumesFolder = _cfg.ResumesFolder;
-            Directory.CreateDirectory(_cfg.PrintJobsFolder);
+            try
+            {
+                Directory.CreateDirectory(_cfg.PrintJobsFolder);
+            }
+            catch (Exception ex)
+            {
+                // Unwritable-folders degrade: capture is unavailable, but the DICOM
+                // listener + dashboard must still run. Never Shutdown() over this.
+                Log.Warning(ex, "Print-jobs folder '{Folder}' not writable; print capture degraded (continuing)", _cfg.PrintJobsFolder);
+            }
 
             Log.Information("Data dir: {DataDir}", resolvedDataDir);
             Log.Information("Web port: {Port}", _cfg.WebPort);
@@ -133,7 +175,20 @@ public partial class App : System.Windows.Application
                 try
                 {
                     var bootstrap = _serviceProvider.GetRequiredService<BootstrapService>();
-                    await bootstrap.BootstrapAsync(CancellationToken.None);
+                    var issues = await bootstrap.BootstrapAsync(CancellationToken.None);
+                    if (issues.Count > 0)
+                    {
+                        var text = "Attention : " + string.Join(" ; ", issues);
+                        Log.Warning("Bootstrap health: {Issues}", text);
+                        try
+                        {
+                            Dispatcher.BeginInvoke(() => ShowBalloon("FocusMed — vérifiez l'installation", text));
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Debug(ex, "Bootstrap balloon failed (non-fatal)");
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -148,6 +203,7 @@ public partial class App : System.Windows.Application
             _supervisor = new ChildProcessSupervisor(
                 _serviceProvider.GetRequiredService<ILogger<ChildProcessSupervisor>>(),
                 _cfg);
+            _supervisor.ChildStatusChanged += (_, _) => RefreshTooltipSoon();
             var supervisorTask = _supervisor.StartAsync(CancellationToken.None);
             _ = supervisorTask.ContinueWith(t =>
             {
@@ -182,19 +238,16 @@ public partial class App : System.Windows.Application
             {
                 try
                 {
+                    // Second instance: reuse the same never-fail loader (validation +
+                    // autodetect defaults included) instead of a parallel hand-rolled parse.
                     var port = 5000;
                     var host = "127.0.0.1";
                     try
                     {
-                        var cfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
-                        if (File.Exists(cfgPath))
-                        {
-                            var json = File.ReadAllText(cfgPath);
-                            var cfg = System.Text.Json.JsonSerializer.Deserialize<SiteConfig>(json,
-                                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                            if (cfg?.WebPort > 0) port = cfg.WebPort;
-                            if (!string.IsNullOrWhiteSpace(cfg?.LocalIp)) host = cfg.LocalIp;
-                        }
+                        using var qlf = new SerilogLoggerFactory(Log.Logger);
+                        var cfg = SiteConfig.Load(qlf.CreateLogger("FocusMed.Launcher.SecondInstance"), AppDomain.CurrentDomain.BaseDirectory);
+                        if (cfg.WebPort is > 0 and <= 65535) port = cfg.WebPort;
+                        if (!string.IsNullOrWhiteSpace(cfg.LocalIp)) host = cfg.LocalIp;
                     }
                     catch { }
 
@@ -261,22 +314,82 @@ public partial class App : System.Windows.Application
         }
     }
 
+    // Fatal preflight: port collisions and privileged ports refuse to boot with a
+    // balloon + exit code 1 (never a silent crash-loop). DICOM==Web would make the
+    // children fight over one socket; ports <1024 need privileges the app may lack.
+    private bool PreflightCheck(SiteConfig cfg)
+    {
+        string? problem = null;
+        if (cfg.DicomPort == cfg.WebPort)
+            problem = $"DICOM ({cfg.DicomPort}) et Web ({cfg.WebPort}) utilisent le même port. Modifiez config.json (DicomPort/WebPort) puis relancez.";
+        else if (cfg.DicomPort < 1024 || cfg.WebPort < 1024)
+            problem = $"Ports réservés (<1024) refusés : DICOM={cfg.DicomPort}, Web={cfg.WebPort}. Utilisez des ports >= 1024.";
+        if (problem == null) return true;
+        Log.Fatal("Preflight refused: {Problem}", problem);
+        try { ShowBalloon("FocusMed — démarrage impossible", problem); } catch { }
+        return false;
+    }
+
+    private void ShowBalloon(string title, string text)
+    {
+        try
+        {
+            _trayIcon?.ShowBalloonTip(8000, title, text, System.Windows.Forms.ToolTipIcon.Warning);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Balloon failed (non-fatal)");
+            return;
+        }
+        // No tray yet during preflight: fall back to a message box so the operator
+        // still sees the refusal reason.
+        if (_trayIcon == null)
+        {
+            try { System.Windows.MessageBox.Show(text, title, MessageBoxButton.OK, MessageBoxImage.Warning); } catch { }
+        }
+    }
+
+    private void RefreshTooltipSoon()
+    {
+        try { Dispatcher.BeginInvoke((Action)RefreshTooltip); } catch { }
+    }
+
+    private void RefreshTooltip()
+    {
+        try
+        {
+            if (_trayIcon == null || _supervisor == null) return;
+            var text = SmartCut(_supervisor.GetStatusText(), 63);
+            if (text == _lastTooltip) return;
+            _lastTooltip = text;
+            _trayIcon.Text = text;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Tooltip update failed");
+        }
+    }
+
+    // NotifyIcon.Text caps at 63 chars: cut at the last separator/space, never mid-word.
+    private static string SmartCut(string text, int max)
+    {
+        if (text.Length <= max) return text;
+        var cut = text.LastIndexOf('|', max - 1);
+        if (cut < 0) cut = text.LastIndexOf(' ', max - 1);
+        if (cut <= 0) cut = max - 1;
+        return text.Substring(0, cut).TrimEnd() + "...";
+    }
+
     private void StartTooltipUpdater()
     {
+        // Timer thread must not touch the WinForms NotifyIcon directly: marshal to the
+        // WPF dispatcher (UI thread) on every tick.
         _tooltipTimer = new System.Threading.Timer(_ =>
         {
-            try
-            {
-                if (_trayIcon == null || _supervisor == null) return;
-                var text = _supervisor.GetStatusText();
-                if (text.Length > 63) text = text.Substring(0, 63);
-                if (text == _lastTooltip) return;
-                _lastTooltip = text;
-                _trayIcon.Text = text;
-            }
+            try { Dispatcher.BeginInvoke((Action)RefreshTooltip); }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Tooltip update failed");
+                Log.Warning(ex, "Tooltip update marshal failed");
             }
         }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3));
     }

@@ -89,6 +89,17 @@ public class DatabaseService
             return false;
         }
 
+        // Validate the incoming path too: must resolve inside the data dir, otherwise a
+        // crafted picker path could point ResumePdfPath at an arbitrary file.
+        var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+        var newAbsolute = Path.GetFullPath(Path.Combine(dataDir, resumePdfRelativePath));
+        if (!IsSubdirectoryOf(newAbsolute, dataDir))
+        {
+            _logger.LogWarning("Refusing resume assign outside data dir: {Path}", newAbsolute);
+            return false;
+        }
+
         var oldResume = study.ResumePdfPath;
 
         if (!string.IsNullOrEmpty(oldResume) && oldResume != resumePdfRelativePath)
@@ -105,11 +116,33 @@ public class DatabaseService
         return true;
     }
 
+    private static bool IsSubdirectoryOf(string candidate, string root)
+    {
+        try
+        {
+            var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var fullCandidate = Path.GetFullPath(candidate);
+            return fullCandidate.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(fullCandidate.TrimEnd(Path.DirectorySeparatorChar), fullRoot.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task DeleteResumeFileAsync(string relativePath)
     {
         var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
-        var absolutePath = Path.Combine(dataDir, relativePath);
+        // Guard BOTH delete paths (assign-replace here, unlink in Dashboard): refuse any
+        // path that escapes the data dir (e.g. "..\" in a stale ResumePdfPath row).
+        var absolutePath = Path.GetFullPath(Path.Combine(dataDir, relativePath));
+        if (!IsSubdirectoryOf(absolutePath, dataDir) && !string.Equals(Path.GetDirectoryName(absolutePath), Path.GetFullPath(dataDir), StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("Refusing resume delete outside data dir: {Path}", absolutePath);
+            return;
+        }
 
         for (var attempt = 1; attempt <= 3; attempt++)
         {

@@ -77,25 +77,22 @@ public class SiteConfig
             }
 
             ForceJsonBackedProperties(logger, defaults, loaded);
+            ValidateLoaded(logger, defaults, loaded);
 
-            if (loaded.DicomPort < 1 || loaded.DicomPort > 65535)
+            // Auto-detect sentinel: ONLY when the IP was never configured (empty), not
+            // when it explicitly holds the shipped default. An operator who typed the
+            // default back in (or never touched it but has no Konica) must not get
+            // their file rewritten with guessed values on every boot.
+            if (string.IsNullOrWhiteSpace(loaded.RawPrinterIp))
             {
-                logger.LogWarning("config.json has invalid DicomPort {Port}; reverting to default", loaded.DicomPort);
-                loaded.DicomPort = defaults.DicomPort;
-            }
-            if (loaded.WebPort < 1 || loaded.WebPort > 65535)
-            {
-                logger.LogWarning("config.json has invalid WebPort {Port}; reverting to default", loaded.WebPort);
-                loaded.WebPort = defaults.WebPort;
-            }
-
-            if (string.IsNullOrWhiteSpace(loaded.RawPrinterIp) || loaded.RawPrinterIp == "192.168.1.160")
-            {
-                logger.LogInformation("Config has default printer IP; attempting auto-detection");
+                logger.LogInformation("Config has no printer IP; attempting auto-detection");
                 loaded.DetectAndApplyAutoSettings(logger);
+                if (string.IsNullOrWhiteSpace(loaded.RawPrinterIp))
+                    loaded.RawPrinterIp = defaults.RawPrinterIp;
                 try { WriteDefaults(configPath, loaded); } catch { }
             }
 
+            CleanupStaleTempFile(configPath);
             return loaded;
         }
         catch (Exception ex)
@@ -189,6 +186,58 @@ public class SiteConfig
         return match.Success ? match.Groups[1].Value : "";
     }
 
+    /// <summary>
+    /// Range/format validation for operator-editable values. Invalid entries revert to
+    /// typed defaults (never-fail: the launcher always boots); suspicious-but-usable
+    /// values (unparseable/APIPA IP) only warn so a printer on an odd subnet keeps working.
+    /// </summary>
+    private static void ValidateLoaded(ILogger logger, SiteConfig defaults, SiteConfig loaded)
+    {
+        // DICOM AE title: max 16 chars, printable ASCII without backslash/controls.
+        if (loaded.AETitle.Length > 16 || !System.Text.RegularExpressions.Regex.IsMatch(loaded.AETitle, @"^[A-Za-z0-9 ._-]+$"))
+        {
+            logger.LogWarning("config.json has invalid AETitle '{Ae}'; reverting to default", loaded.AETitle);
+            loaded.AETitle = defaults.AETitle;
+        }
+        if (loaded.DicomPort < 1 || loaded.DicomPort > 65535)
+        {
+            logger.LogWarning("config.json has invalid DicomPort {Port}; reverting to default", loaded.DicomPort);
+            loaded.DicomPort = defaults.DicomPort;
+        }
+        if (loaded.WebPort < 1 || loaded.WebPort > 65535)
+        {
+            logger.LogWarning("config.json has invalid WebPort {Port}; reverting to default", loaded.WebPort);
+            loaded.WebPort = defaults.WebPort;
+        }
+        if (loaded.RawPrinterPort < 1 || loaded.RawPrinterPort > 65535)
+        {
+            logger.LogWarning("config.json has invalid RawPrinterPort {Port}; reverting to default", loaded.RawPrinterPort);
+            loaded.RawPrinterPort = defaults.RawPrinterPort;
+        }
+        if (loaded.BackupIntervalHours < 1 || loaded.BackupIntervalHours > 24 * 365)
+        {
+            logger.LogWarning("config.json has invalid BackupIntervalHours {H}; reverting to default", loaded.BackupIntervalHours);
+            loaded.BackupIntervalHours = defaults.BackupIntervalHours;
+        }
+        if (loaded.BackupRetentionDays < 1 || loaded.BackupRetentionDays > 3650)
+        {
+            logger.LogWarning("config.json has invalid BackupRetentionDays {D}; reverting to default", loaded.BackupRetentionDays);
+            loaded.BackupRetentionDays = defaults.BackupRetentionDays;
+        }
+        if (!string.IsNullOrWhiteSpace(loaded.RawPrinterIp))
+        {
+            if (!IPAddress.TryParse(loaded.RawPrinterIp.Trim(), out _))
+                logger.LogWarning("config.json RawPrinterIp '{Ip}' is not a valid IP address; keeping it (printer may use a hostname)", loaded.RawPrinterIp);
+            else if (loaded.RawPrinterIp.Trim().StartsWith("169.254.", StringComparison.Ordinal))
+                logger.LogWarning("config.json RawPrinterIp '{Ip}' is APIPA (link-local): the printer likely lost DHCP — check the network", loaded.RawPrinterIp);
+        }
+    }
+
+    private static void CleanupStaleTempFile(string configPath)
+    {
+        try { if (File.Exists(configPath + ".tmp")) File.Delete(configPath + ".tmp"); } catch { }
+    }
+
     private static SiteConfig RecoverCorruptConfig(ILogger logger, string appDir, string configPath, SiteConfig defaults)
     {
         try
@@ -196,6 +245,19 @@ public class SiteConfig
             var backup = Path.Combine(appDir, $"config.errored-{DateTime.UtcNow:yyyyMMdd_HHmmss}.json");
             File.Move(configPath, backup, overwrite: true);
             logger.LogWarning("Backed up corrupt config to {Backup}", backup);
+            // Cap corrupt backups at 5: a persistently failing writer must not fill the disk.
+            try
+            {
+                var old = Directory.GetFiles(appDir, "config.errored-*.json")
+                    .OrderByDescending(f => f, StringComparer.Ordinal)
+                    .Skip(5)
+                    .ToList();
+                foreach (var f in old) File.Delete(f);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Corrupt-backup pruning failed (non-fatal)");
+            }
         }
         catch (Exception ex)
         {
@@ -235,7 +297,8 @@ public class SiteConfig
             loaded.AETitle = defaults.AETitle;
         }
         if (string.IsNullOrWhiteSpace(loaded.DataDirectory)) loaded.DataDirectory = defaults.DataDirectory;
-        if (string.IsNullOrWhiteSpace(loaded.RawPrinterIp)) loaded.RawPrinterIp = defaults.RawPrinterIp;
+        // RawPrinterIp intentionally NOT defaulted here: empty is the first-boot
+        // auto-detect sentinel (see Load). Defaulting happens after detection.
         if (string.IsNullOrWhiteSpace(loaded.VirtualPrinterName)) loaded.VirtualPrinterName = defaults.VirtualPrinterName;
         if (string.IsNullOrWhiteSpace(loaded.OutputDriverName)) loaded.OutputDriverName = defaults.OutputDriverName;
         if (string.IsNullOrWhiteSpace(loaded.PrintJobsFolder)) loaded.PrintJobsFolder = defaults.PrintJobsFolder;

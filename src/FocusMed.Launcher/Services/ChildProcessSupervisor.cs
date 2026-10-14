@@ -50,72 +50,119 @@ public sealed class ChildProcessSupervisor : IDisposable
         _dashboardExe = Path.Combine(baseDir, "FocusMed.Dashboard.exe");
     }
 
+    // Per-child supervision tasks: Worker and Dashboard each get their own loop so a
+    // crash-loop backoff (up to 30s) on one child can never starve supervision of the
+    // other. The old single loop blocked inside the backoff delay; a fast-crashing
+    // Worker stalled Dashboard restarts for the whole backoff window.
     public Task StartAsync(CancellationToken ct)
     {
         return Task.Run(async () =>
         {
             _logger.LogInformation("Supervisor starting...");
-            while (!ct.IsCancellationRequested)
+            var workerLoop = SuperviseChildAsync(
+                _workerExe, "Worker", "FocusMed.Worker.exe",
+                () => _worker, p => _worker = p,
+                () => _workerFastExits, v => _workerFastExits = v,
+                () => _workerLastExit, v => _workerLastExit = v,
+                () => _workerMissingLogged, v => _workerMissingLogged = v,
+                extraEnv: null, ct: ct);
+            // Bind BOTH IPv4 (0.0.0.0) and IPv6 ([::]) so localhost (::1), 127.0.0.1,
+            // and the LAN IP all reach the Blazor Server SignalR circuit. A single
+            // 0.0.0.0 (IPv4-only) binding leaves Chrome's localhost (IPv6) circuit dead.
+            var dashboardLoop = SuperviseChildAsync(
+                _dashboardExe, "Dashboard", "FocusMed.Dashboard.exe",
+                () => _dashboard, p => _dashboard = p,
+                () => _dashboardFastExits, v => _dashboardFastExits = v,
+                () => _dashboardLastExit, v => _dashboardLastExit = v,
+                () => _dashboardMissingLogged, v => _dashboardMissingLogged = v,
+                extraEnv: $"ASPNETCORE_URLS=http://0.0.0.0:{_webPort};http://[::]:{_webPort}", ct: ct);
+            try
             {
-                try
-                {
-                    if (_shuttingDown) break;
-
-                    _worker ??= EnsureRunning(_workerExe, "Worker", "FocusMed.Worker.exe",
-                        ref _workerFastExits, ref _workerLastExit, ref _workerMissingLogged, ct);
-
-                    // Bind BOTH IPv4 (0.0.0.0) and IPv6 ([::]) so localhost (::1), 127.0.0.1,
-                    // and the LAN IP all reach the Blazor Server SignalR circuit. A single
-                    // 0.0.0.0 (IPv4-only) binding leaves Chrome's localhost (IPv6) circuit dead.
-                    _dashboard ??= EnsureRunning(_dashboardExe, "Dashboard", "FocusMed.Dashboard.exe",
-                        ref _dashboardFastExits, ref _dashboardLastExit, ref _dashboardMissingLogged, ct,
-                        $"ASPNETCORE_URLS=http://0.0.0.0:{_webPort};http://[::]:{_webPort}");
-
-                    await Task.Delay(CheckIntervalMs, ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Supervisor loop error (continuing)");
-                    try { await Task.Delay(CheckIntervalMs, CancellationToken.None); } catch { }
-                }
+                await Task.WhenAll(workerLoop, dashboardLoop);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogDebug("Supervisor loops cancelled during shutdown");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Supervisor loop error (app continues)");
             }
             _logger.LogInformation("Supervisor loop stopped");
         }, CancellationToken.None);
     }
 
-    private Process? EnsureRunning(
+    private async Task SuperviseChildAsync(
         string exePath, string role, string exeName,
-        ref int fastExits, ref DateTime lastExit, ref DateTime lastMissingLogged, CancellationToken ct,
-        string? extraEnv = null)
+        Func<Process?> getCurrent, Action<Process?> setCurrent,
+        Func<int> getFastExits, Action<int> setFastExits,
+        Func<DateTime> getLastExit, Action<DateTime> setLastExit,
+        Func<DateTime> getMissingLogged, Action<DateTime> setMissingLogged,
+        string? extraEnv, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && !_shuttingDown)
+        {
+            try
+            {
+                if (getCurrent() == null)
+                {
+                    var started = await EnsureRunningAsync(
+                        exePath, role, exeName,
+                        getFastExits, setFastExits, getLastExit, setLastExit,
+                        getMissingLogged, setMissingLogged, extraEnv, ct);
+                    setCurrent(started);
+                }
+                await Task.Delay(CheckIntervalMs, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{Role} supervisor loop error (continuing)", role);
+                try { await Task.Delay(CheckIntervalMs, CancellationToken.None); } catch { }
+            }
+        }
+    }
+
+    private async Task<Process?> EnsureRunningAsync(
+        string exePath, string role, string exeName,
+        Func<int> getFastExits, Action<int> setFastExits,
+        Func<DateTime> getLastExit, Action<DateTime> setLastExit,
+        Func<DateTime> getMissingLogged, Action<DateTime> setMissingLogged,
+        string? extraEnv, CancellationToken ct)
     {
         if (!File.Exists(exePath))
         {
-            if (DateTime.UtcNow - lastMissingLogged > TimeSpan.FromSeconds(30))
+            if (DateTime.UtcNow - getMissingLogged() > TimeSpan.FromSeconds(30))
             {
                 _logger.LogCritical("Missing child executable: {Exe}", exePath);
                 SetStatus(role, "Missing");
-                lastMissingLogged = DateTime.UtcNow;
+                setMissingLogged(DateTime.UtcNow);
             }
             return null;
         }
 
-        var delay = ComputeDelay(ref fastExits, ref lastExit);
+        // Crash-loop accounting is pure here (per-child fields via accessors): the
+        // count updates first, then the delay derives from the new count.
+        var fastExits = NextFastExits(getFastExits(), getLastExit());
+        setFastExits(fastExits);
+        var delay = ComputeDelay(fastExits, getLastExit());
         if (delay > TimeSpan.Zero)
         {
             _logger.LogInformation("{Role} backoff: waiting {Delay}s before restart", role, delay.TotalSeconds);
             SetStatus(role, $"Restarting (backoff {delay.TotalSeconds:0}s)");
-            try { Task.Delay(delay, ct).GetAwaiter().GetResult(); }
+            // Cancellable shutdown: the real token flows through the backoff delay so
+            // StopAsync never waits out a 30s backoff.
+            try { await Task.Delay(delay, ct); }
             catch (OperationCanceledException) { _logger.LogDebug("{Role} backoff cancelled during shutdown", role); return null; }
             if (ct.IsCancellationRequested) return null;
         }
 
         try
         {
-            lastExit = DateTime.UtcNow;
+            setLastExit(DateTime.UtcNow);
             var psi = new ProcessStartInfo
             {
                 FileName = exePath,
@@ -204,20 +251,18 @@ public sealed class ChildProcessSupervisor : IDisposable
         }
     }
 
-    private static TimeSpan ComputeDelay(ref int fastExits, ref DateTime lastExit)
+    private static int NextFastExits(int fastExits, DateTime lastExit)
+    {
+        // First start: no history yet.
+        if (lastExit == DateTime.MinValue) return fastExits;
+        var uptime = DateTime.UtcNow - lastExit;
+        return uptime < TimeSpan.FromSeconds(5) ? fastExits + 1 : 0;
+    }
+
+    private static TimeSpan ComputeDelay(int fastExits, DateTime lastExit)
     {
         // First start: no backoff.
         if (lastExit == DateTime.MinValue) return TimeSpan.Zero;
-
-        var uptime = DateTime.UtcNow - lastExit;
-        if (uptime < TimeSpan.FromSeconds(5))
-        {
-            fastExits++;
-        }
-        else
-        {
-            fastExits = 0;
-        }
 
         if (fastExits < BackoffThreshold) return TimeSpan.FromMilliseconds(RestartDelayMs);
 

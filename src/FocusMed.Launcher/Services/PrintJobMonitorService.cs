@@ -14,6 +14,11 @@ public class PrintJobMonitorService : IDisposable
     private System.Threading.Timer? _pollTimer;
     private long _lastSeenSize = -1;
     private DateTime _lastChangeTime = DateTime.MinValue;
+    // Settled-content memory: (size + mtime) of the last fully handled file. Prevents
+    // duplicate popups when zeroing fails AND prevents re-firing on an invalid file
+    // that never gets removed. A new print always changes size and/or mtime.
+    private long _settledSize = -1;
+    private DateTime _settledMtime = DateTime.MinValue;
 
     public event Action<string>? OnNewResumePdf;
 
@@ -38,6 +43,7 @@ public class PrintJobMonitorService : IDisposable
         _logger.LogInformation("Polling: {Folder}\\incoming.pdf (every 200ms, stabilize 300ms)", _watchFolder);
         _logger.LogInformation("Resumes: {Folder}", resumesDir);
         _logger.LogInformation("Ready. Print any document to the FocusMed printer.");
+        _logger.LogInformation("Note: a leftover incoming.pdf from a previous run (orphan) will be captured as a new print on startup.");
     }
 
     private async Task PollAsync()
@@ -56,10 +62,12 @@ public class PrintJobMonitorService : IDisposable
             }
 
             long currentSize;
+            DateTime currentMtime;
             try
             {
                 var fi = new FileInfo(incomingPath);
                 currentSize = fi.Length;
+                currentMtime = fi.LastWriteTimeUtc;
             }
             catch
             {
@@ -69,15 +77,33 @@ public class PrintJobMonitorService : IDisposable
             if (currentSize == 0)
             {
                 _lastSeenSize = -1;
+                _settledSize = -1;
                 return;
             }
+
+            // Already handled this exact content (capture done but zeroing failed, or
+            // invalid file left in place): wait for new data instead of re-firing.
+            if (currentSize == _settledSize && currentMtime == _settledMtime)
+                return;
 
             if (currentSize == _lastSeenSize)
             {
                 if (_lastSeenSize > 0 && (DateTime.UtcNow - _lastChangeTime).TotalMilliseconds >= 300)
                 {
-                    _lastSeenSize = -1;
-                    newPdfPath = await ProcessFileAsync(incomingPath, currentSize);
+                    var (captured, settled) = await TryCaptureAsync(incomingPath, currentSize);
+                    newPdfPath = captured;
+                    if (settled)
+                    {
+                        _settledSize = currentSize;
+                        _settledMtime = currentMtime;
+                        _lastSeenSize = -1;
+                    }
+                    else
+                    {
+                        // Transient (locked copy): back off another stabilization window
+                        // instead of busy-retrying every 200ms. Never destroys data.
+                        _lastChangeTime = DateTime.UtcNow;
+                    }
                 }
             }
             else
@@ -114,70 +140,81 @@ public class PrintJobMonitorService : IDisposable
         }
     }
 
-    private async Task<string?> ProcessFileAsync(string incomingPath, long size)
+    // Returns (capturedPath, settled). settled=false means transient (try again later);
+    // settled=true means the content was fully handled — valid (fired) or invalid
+    // (skipped). Incomplete/invalid files are NEVER zeroed or destroyed (wait-or-skip):
+    // the spooler may still be writing, and deleting evidence hides print failures.
+    private async Task<(string? Captured, bool Settled)> TryCaptureAsync(string incomingPath, long size)
     {
         var sw = Stopwatch.StartNew();
 
-        var retries = 5;
-        while (retries > 0)
+        // Single-file rendezvous: snapshot the spooler file into a per-job temp first,
+        // so a concurrent spooler write cannot tear the bytes we validate and copy.
+        var rendezvousPath = incomingPath + $".{Guid.NewGuid():N}.tmp";
+        var copied = false;
+        for (var i = 0; i < 5; i++)
         {
             try
             {
-                using var fs = File.Open(incomingPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                File.Copy(incomingPath, rendezvousPath, overwrite: false);
+                copied = true;
                 break;
             }
-            catch (IOException)
+            catch (IOException) { await Task.Delay(100); }
+            catch (UnauthorizedAccessException) { await Task.Delay(100); }
+            catch (Exception ex)
             {
-                retries--;
-                await Task.Delay(100);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                retries--;
-                await Task.Delay(100);
+                _logger.LogDebug(ex, "Rendezvous copy failed (non-fatal, will retry)");
+                return (null, false);
             }
         }
-
-        if (!File.Exists(incomingPath)) return null;
-
-        var fileInfo = new FileInfo(incomingPath);
-        if (fileInfo.Length == 0) return null;
-
-        _logger.LogInformation("Print finished: incoming.pdf ({Size:N0} bytes), validating...", fileInfo.Length);
-
-        if (!IsCompletePdfFile(incomingPath))
-        {
-            _logger.LogWarning("Invalid or truncated PDF (bad header or missing %%EOF), skipping: incoming.pdf");
-            await TryZeroFileAsync(incomingPath);
-            return null;
-        }
-
-        var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
-        var resumesDir = Path.Combine(dataDir, _resumesFolder);
-        Directory.CreateDirectory(resumesDir);
-
-        var destFileName = $"{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.pdf";
-        var destPath = Path.Combine(resumesDir, destFileName);
+        if (!copied) return (null, false);
 
         try
         {
-            File.Copy(incomingPath, destPath, true);
+            if (!IsCompletePdfFile(rendezvousPath))
+            {
+                _logger.LogWarning("Invalid or truncated PDF (bad header or missing %%EOF); leaving incoming.pdf untouched, skipping until new data arrives.");
+                return (null, true);
+            }
+
+            var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+            var resumesDir = Path.Combine(dataDir, _resumesFolder);
+            Directory.CreateDirectory(resumesDir);
+
+            var destFileName = $"{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.pdf";
+            var destPath = Path.Combine(resumesDir, destFileName);
+
+            try
+            {
+                File.Copy(rendezvousPath, destPath, true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to copy PDF to {Path}", destPath);
+                return (null, false);
+            }
+
+            sw.Stop();
+            _logger.LogInformation("Captured: {File} ({Size:N0} bytes in {Ms}ms)", destFileName, size, sw.ElapsedMilliseconds);
+
+            if (!await TryZeroFileAsync(incomingPath))
+            {
+                // Zero-fail: keep the settled marker (set by the caller) so this exact
+                // content never fires a duplicate popup. The next print changes
+                // size/mtime and is detected normally.
+                _logger.LogError("Captured {File} but could not reset incoming.pdf (locked); it will be skipped until new data arrives.", destFileName);
+            }
+            return (destPath, true);
         }
-        catch (Exception ex)
+        finally
         {
-            _logger.LogError(ex, "Failed to copy PDF to {Path}", destPath);
-            return null;
+            try { if (File.Exists(rendezvousPath)) File.Delete(rendezvousPath); } catch { }
         }
-
-        sw.Stop();
-        _logger.LogInformation("Captured: {File} ({Size:N0} bytes in {Ms}ms)", destFileName, fileInfo.Length, sw.ElapsedMilliseconds);
-
-        await TryZeroFileAsync(incomingPath);
-        return destPath;
     }
 
-    private async Task TryZeroFileAsync(string path)
+    private async Task<bool> TryZeroFileAsync(string path)
     {
         for (var i = 0; i < 5; i++)
         {
@@ -185,16 +222,17 @@ public class PrintJobMonitorService : IDisposable
             {
                 using var fs = File.Open(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
                 fs.SetLength(0);
-                return;
+                return true;
             }
             catch (IOException) { await Task.Delay(200); }
             catch (UnauthorizedAccessException) { await Task.Delay(200); }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Unexpected error zeroing file (non-fatal)");
-                return;
+                return false;
             }
         }
+        return false;
     }
 
     public void Stop()

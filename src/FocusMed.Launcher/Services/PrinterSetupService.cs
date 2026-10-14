@@ -60,6 +60,11 @@ public class PrinterSetupService
         }
     }
 
+    // PowerShell single-quote escaping: names/paths are embedded in '...' literals,
+    // so a literal ' would break out of the string (or inject). Doubling it is the
+    // PowerShell escape.
+    private static string EscapePs(string value) => value.Replace("'", "''");
+
     private bool IsPrinterInstalled()
     {
         try
@@ -67,7 +72,7 @@ public class PrinterSetupService
             using var process = Process.Start(new ProcessStartInfo
             {
                 FileName = "powershell",
-                Arguments = $"-Command \"Get-Printer -Name '{_printerName}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name\"",
+                Arguments = $"-Command \"Get-Printer -Name '{EscapePs(_printerName)}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name\"",
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
@@ -95,7 +100,7 @@ public class PrinterSetupService
             using var process = Process.Start(new ProcessStartInfo
             {
                 FileName = "powershell",
-                Arguments = $"-Command \"(Get-Printer -Name '{_printerName}').PortName\"",
+                Arguments = $"-Command \"(Get-Printer -Name '{EscapePs(_printerName)}').PortName\"",
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
@@ -118,15 +123,15 @@ public class PrinterSetupService
 
     private async Task SetPrinterPortAsync(string portName)
     {
-        var script = $"Set-Printer -Name '{_printerName}' -PortName '{portName}' -ErrorAction SilentlyContinue";
+        var script = $"Set-Printer -Name '{EscapePs(_printerName)}' -PortName '{EscapePs(portName)}' -ErrorAction SilentlyContinue";
         await RunPowerShell(script);
     }
 
     private async Task InstallPrinterAsync(string portName)
     {
         var installScript = $@"
-            Add-PrinterPort -Name '{portName}' -ErrorAction SilentlyContinue
-            Add-Printer -Name '{_printerName}' -DriverName '{_driverName}' -PortName '{portName}' -ErrorAction SilentlyContinue
+            Add-PrinterPort -Name '{EscapePs(portName)}' -ErrorAction SilentlyContinue
+            Add-Printer -Name '{EscapePs(_printerName)}' -DriverName '{EscapePs(_driverName)}' -PortName '{EscapePs(portName)}' -ErrorAction SilentlyContinue
         ";
 
         _logger.LogInformation("Running printer install script...");
@@ -149,9 +154,14 @@ public class PrinterSetupService
         using var process = Process.Start(psi);
         if (process == null) return;
 
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
+        // Drain BOTH streams concurrently: sequential ReadToEndAsync(stdout) then
+        // ReadToEndAsync(stderr) can deadlock when the child fills the stderr pipe
+        // while we are still blocked reading stdout.
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
 
         _logger.LogDebug("PowerShell output: {Output}", stdout);
 
