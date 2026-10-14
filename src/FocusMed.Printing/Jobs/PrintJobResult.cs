@@ -4,6 +4,9 @@ public record PrintJobResult
 {
     public bool Success { get; init; }
     public string? ErrorMessage { get; init; }
+    // Non-fatal operator warning (e.g. booklet finishing not applied). Set alongside
+    // Success=true; callers should surface it (toast) so silent degrades stay visible.
+    public string? Warning { get; init; }
     public string? PaperSizeUsed { get; init; }
     public bool Landscape { get; init; }
     public bool Duplex { get; init; }

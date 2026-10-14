@@ -31,6 +31,21 @@ internal sealed class PrintExecutionService(
 
         bool useWindowsDriver = rawPreset is not null && !string.IsNullOrEmpty(rawPreset.WindowsPrinterName);
 
+        // Raw-TCP honesty (checked BEFORE imposition so a refused job does no wasted
+        // work): port 9100 carries no staple/fold finishing. A booklet request over a
+        // driverless preset would silently come out flat, so refuse instead of claiming
+        // a booklet print succeeded. Use FlatA3/FlatA4 presets for raw printers.
+        if (request.Profile.IsBooklet && rawPreset is not null && !useWindowsDriver)
+        {
+            logger.LogError("Raw print refused: booklet finishing (staple/fold) is not supported over raw TCP to {Ip}:{Port}. Print flat instead.",
+                rawPreset.Ip, rawPreset.Port);
+            return new PrintJobResult
+            {
+                Success = false,
+                ErrorMessage = "Livret non pris en charge en brut TCP (agrafage/pliage impossible) : le document n'a pas été imprimé. Utilisez une imprimante Windows (KONICA) ou un mode Plat."
+            };
+        }
+
         if (request.Profile.IsBooklet)
         {
             try
@@ -69,7 +84,7 @@ internal sealed class PrintExecutionService(
             try
             {
                 var success = await rawPrintService.PrintPdfAsync(rawPreset.Ip, pdfPath, rawPreset.PaperSize,
-                    request.Profile.RequiresDuplex, request.Profile.UseDuplexShortEdge, rawPreset.Port, 60000, ct);
+                    request.Profile.RequiresDuplex, request.Profile.UseDuplexShortEdge, rawPreset.Port, 60000, request.Copies, ct);
                 string resolvedPaperSize = rawPreset.PaperSize ?? (request.Profile.PaperSizeName ?? "A3");
                 if (success)
                 {
@@ -134,11 +149,22 @@ internal sealed class PrintExecutionService(
         ticket.InputBin = InputBin.AutoSelect;
         ticket.CopyCount = request.Copies;
 
+        string? finishingWarning = null;
         if (request.Profile.IsBooklet)
         {
             ticket.Stapling = Stapling.SaddleStitch;
             ticket.Duplexing = Duplexing.TwoSidedShortEdge;
-            ticket = InjectKonicaBookletFinishing(ticket);
+            var (patched, applied) = InjectKonicaBookletFinishing(ticket);
+            ticket = patched;
+            if (!applied)
+            {
+                // Silent-degrade guard: without the Konica KM node the driver prints
+                // flat sheets with no staple/fold. Error-level log + operator warning
+                // so a flat stack is never mistaken for a finished booklet.
+                logger.LogError("Booklet requested on '{Printer}' but the Konica finishing node (JobKMJobCustomProperties000) is absent: CStapleFold/Folding NOT applied - output will be flat, unstapled sheets.",
+                    request.PrinterName);
+                finishingWarning = "Finition livret non appliquée (pilote sans module Konica) : vérifiez agrafage/pliage sur la sortie papier.";
+            }
         }
         else
         {
@@ -172,7 +198,8 @@ internal sealed class PrintExecutionService(
             Success = true, PaperSizeUsed = resolvedPaperSize, Landscape = isLandscape,
             Duplex = request.Profile.RequiresDuplex, PagesPrinted = pageCount,
             ImposedPdfPath = request.Profile.IsBooklet ? pdfPath : null,
-            DetectedBookletPaper = request.Profile.IsBooklet ? resolvedPaperSize : null
+            DetectedBookletPaper = request.Profile.IsBooklet ? resolvedPaperSize : null,
+            Warning = finishingWarning
         };
     }
 
@@ -243,10 +270,10 @@ internal sealed class PrintExecutionService(
 
     private const string PsfNs = "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework";
 
-    private PrintTicket InjectKonicaBookletFinishing(PrintTicket ticket)
+    private (PrintTicket Ticket, bool Applied) InjectKonicaBookletFinishing(PrintTicket ticket)
     {
         var ms = ticket.GetXmlStream();
-        if (ms is null) { logger.LogWarning("Booklet: no XML stream"); return ticket; }
+        if (ms is null) { logger.LogWarning("Booklet: no XML stream"); return (ticket, false); }
         using var sr = new System.IO.StreamReader(ms);
         var ticketXml = sr.ReadToEnd();
 
@@ -257,7 +284,10 @@ internal sealed class PrintExecutionService(
             .Elements(psf + "ParameterInit")
             .FirstOrDefault(e => (e.Attribute("name")?.Value ?? "").Contains("JobKMJobCustomProperties000"));
 
-        if (propParam is not null)
+        if (propParam is null)
+            return (ticket, false);
+
+        var applied = false;
         {
             var valueElem = propParam.Element(psf + "Value");
             if (valueElem is not null)
@@ -276,6 +306,7 @@ internal sealed class PrintExecutionService(
                                 ? pi.GetRawText() : "{}";
                             valueElem.Value = "{\"features\":" + JsonSerializer.Serialize(features) + ",\"paraminits\":" + paraminits + "}";
                             logger.LogInformation("Booklet: CStapleFold=On, Folding=On injected into Konica PrintTicket");
+                            applied = true;
                         }
                     }
                 }
@@ -289,14 +320,32 @@ internal sealed class PrintExecutionService(
         using var outMs = new MemoryStream();
         doc.Save(outMs);
         outMs.Position = 0;
-        return new PrintTicket(outMs);
+        return (new PrintTicket(outMs), applied);
     }
 
     private void DeleteTempPdf(string originalPath, string actualPath)
     {
-        if (actualPath == originalPath || !File.Exists(actualPath)) return;
-        try { File.Delete(actualPath); }
-        catch (Exception ex) { logger.LogWarning(ex, "Temp print PDF not deleted (will linger in pdf-cache): {Path}", actualPath); }
+        if (actualPath != originalPath && File.Exists(actualPath))
+        {
+            try { File.Delete(actualPath); }
+            catch (Exception ex) { logger.LogWarning(ex, "Temp print PDF not deleted (will linger in pdf-cache): {Path}", actualPath); }
+        }
+        // Staging leak guard: booklet_/flat_ GUID files are per-print staging outputs
+        // (GenerateBooklet/FlatPrintPdf), NOT shared cache entries. Delete the request
+        // staging file after the print so pdf-cache does not fill with orphans.
+        // cache_*.pdf preview files are intentionally kept (preview reuse + prewarm).
+        DeleteStagingTemp(originalPath);
+    }
+
+    private void DeleteStagingTemp(string path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+        var name = Path.GetFileName(path);
+        if (!name.StartsWith("booklet_", StringComparison.OrdinalIgnoreCase)
+            && !name.StartsWith("flat_", StringComparison.OrdinalIgnoreCase))
+            return;
+        try { File.Delete(path); }
+        catch (Exception ex) { logger.LogWarning(ex, "Staging print PDF not deleted (will be swept by TTL): {Path}", path); }
     }
 
     private const int StaPrintTimeoutSeconds = 180;
@@ -327,7 +376,8 @@ internal sealed class PrintExecutionService(
                 StaPrintTimeoutSeconds, printerName ?? typeof(T).Name);
             throw new TimeoutException(
                 $"Print did not complete within {StaPrintTimeoutSeconds}s (spooler hung or printer offline?). " +
-                "Background STA thread left running.");
+                "Background STA thread left running. Do not retry yet — the abandoned job may still emerge from the printer; " +
+                "retrying now risks a duplicate print.");
         }
 
         completed.Wait();

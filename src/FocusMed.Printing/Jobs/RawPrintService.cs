@@ -6,7 +6,7 @@ namespace FocusMed.Printing.Jobs;
 
 internal sealed class RawPrintService(ILogger<RawPrintService> logger) : IRawPrintService
 {
-    public async Task<bool> PrintPdfAsync(string printerIp, byte[] pdfData, string paperSize = "A4", bool duplex = false, bool shortEdgeBind = false, int port = 9100, int timeoutMs = 30000, CancellationToken ct = default)
+    public async Task<bool> PrintPdfAsync(string printerIp, byte[] pdfData, string paperSize = "A4", bool duplex = false, bool shortEdgeBind = false, int port = 9100, int timeoutMs = 30000, int copies = 1, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(printerIp))
         {
@@ -29,10 +29,15 @@ internal sealed class RawPrintService(ILogger<RawPrintService> logger) : IRawPri
             await client.ConnectAsync(printerIp, port, cts.Token);
             await using var stream = client.GetStream();
 
-            var pjlHeader = BuildPjlHeader(paperSize, duplex, shortEdgeBind);
+            var safeCopies = Math.Clamp(copies, 1, 99);
+            var pjlHeader = BuildPjlHeader(paperSize, duplex, shortEdgeBind, safeCopies);
             await stream.WriteAsync(pjlHeader, cts.Token);
 
-            await stream.WriteAsync(pdfData, cts.Token);
+            // Copies loop: raw port 9100 has no driver-side copy count, so each copy is
+            // sent as its own PDF job body. (Previously Copies was silently dropped and
+            // every raw print produced exactly 1 copy.)
+            for (var copy = 0; copy < safeCopies; copy++)
+                await stream.WriteAsync(pdfData, cts.Token);
             await stream.FlushAsync(cts.Token);
 
             logger.LogInformation("RawPrint: sent {Size:N0} bytes to {Ip}:{Port} paper={Paper} duplex={Duplex}", pdfData.Length, printerIp, port, paperSize, duplex);
@@ -55,7 +60,7 @@ internal sealed class RawPrintService(ILogger<RawPrintService> logger) : IRawPri
         }
     }
 
-    public async Task<bool> PrintPdfAsync(string printerIp, string pdfFilePath, string paperSize = "A4", bool duplex = false, bool shortEdgeBind = false, int port = 9100, int timeoutMs = 30000, CancellationToken ct = default)
+    public async Task<bool> PrintPdfAsync(string printerIp, string pdfFilePath, string paperSize = "A4", bool duplex = false, bool shortEdgeBind = false, int port = 9100, int timeoutMs = 30000, int copies = 1, CancellationToken ct = default)
     {
         if (!File.Exists(pdfFilePath))
         {
@@ -64,10 +69,10 @@ internal sealed class RawPrintService(ILogger<RawPrintService> logger) : IRawPri
         }
 
         var pdfData = await File.ReadAllBytesAsync(pdfFilePath, ct);
-        return await PrintPdfAsync(printerIp, pdfData, paperSize, duplex, shortEdgeBind, port, timeoutMs, ct);
+        return await PrintPdfAsync(printerIp, pdfData, paperSize, duplex, shortEdgeBind, port, timeoutMs, copies, ct);
     }
 
-    private static byte[] BuildPjlHeader(string paperSize, bool duplex, bool shortEdgeBind)
+    internal static byte[] BuildPjlHeader(string paperSize, bool duplex, bool shortEdgeBind, int copies = 1)
     {
         var sb = new StringBuilder();
         sb.Append("\x1b%-12345X");
@@ -89,6 +94,9 @@ internal sealed class RawPrintService(ILogger<RawPrintService> logger) : IRawPri
             sb.Append("@PJL SET DUPLEX=ON\r\n");
             sb.Append(shortEdgeBind ? "@PJL SET DUPLEXBIND=SHORTEDGE\r\n" : "@PJL SET DUPLEXBIND=LONGEDGE\r\n");
         }
+
+        if (copies > 1)
+            sb.Append($"@PJL SET QTY={copies}\r\n");
 
         sb.Append("@PJL ENTER LANGUAGE = PDF\r\n");
         return Encoding.ASCII.GetBytes(sb.ToString());
