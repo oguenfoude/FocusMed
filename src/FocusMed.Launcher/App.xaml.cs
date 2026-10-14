@@ -182,7 +182,7 @@ public partial class App : System.Windows.Application
                         Log.Warning("Bootstrap health: {Issues}", text);
                         try
                         {
-                            Dispatcher.BeginInvoke(() => ShowBalloon("FocusMed — vérifiez l'installation", text));
+                            _ = Dispatcher.BeginInvoke(() => ShowBalloon("FocusMed — vérifiez l'installation", text));
                         }
                         catch (Exception ex)
                         {
