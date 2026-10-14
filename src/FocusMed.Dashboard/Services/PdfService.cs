@@ -53,7 +53,11 @@ public class PdfService
         var validPaths = imagePaths.Where(File.Exists).ToList();
         if (validPaths.Count == 0 && string.IsNullOrEmpty(resumePdfPath)) return "";
 
-        var inputKey = $"{patientName}|{studyDate}|{resumePdfPath}|{imagesPerPage}|{gapPx}|{marginPx}|{pageSize}|{isBooklet}|{string.Join(";", validPaths)}";
+        // Resume-cache poison guard: the key carries the resume file's existence +
+        // length + mtime, so a replaced resume under the same relative path can never
+        // serve the stale merged PDF. Computed before the lock AND re-checked inside.
+        var resumeFingerprintPre = GetResumeFingerprint(resumePdfPath);
+        var inputKey = $"print_v2|{patientName}|{studyDate}|{resumePdfPath}|{resumeFingerprintPre}|{imagesPerPage}|{gapPx}|{marginPx}|{pageSize}|{isBooklet}|{string.Join(";", validPaths)}";
         var hashBytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(inputKey));
         var hashStr = Convert.ToHexString(hashBytes).ToLowerInvariant();
         var fileName = $"cache_{hashStr}.pdf";
@@ -61,6 +65,7 @@ public class PdfService
 
         if (File.Exists(finalPath))
         {
+            TouchFile(finalPath);
             return $"/pdf-cache/{fileName}";
         }
 
@@ -71,7 +76,20 @@ public class PdfService
             await pdfLock.WaitAsync(ct);
             lockTaken = true;
             if (File.Exists(finalPath))
-                return $"/pdf-cache/{fileName}";
+            {
+                // Re-check inside the lock: the resume may have changed between the
+                // pre-lock stat and now. On mismatch, drop the stale hit and regenerate
+                // under the same key (overwrite) instead of serving poisoned bytes.
+                if (GetResumeFingerprint(resumePdfPath) != resumeFingerprintPre)
+                {
+                    try { File.Delete(finalPath); } catch (Exception ex) { _logger.LogDebug(ex, "Stale resume-keyed preview delete failed (non-fatal): {Path}", finalPath); }
+                }
+                else
+                {
+                    TouchFile(finalPath);
+                    return $"/pdf-cache/{fileName}";
+                }
+            }
 
             var tempFiles = new List<string>();
             try
@@ -622,6 +640,15 @@ public class PdfService
         return bestCols;
     }
 
+    /// <summary>
+    /// Merge order is always [cover, resume?, images?, padding?, blank].
+    /// The trailing blank page is structural (print finishing): every entry point
+    /// (GeneratePrintPdf preview, GenerateBookletPrintPdf, GenerateFlatPrintPdf)
+    /// ends with exactly one blank page in the merge output size.
+    /// For booklet, padding is computed so that (content + trailing blank) stays a
+    /// multiple of 4 (imposition requirement); BookletImpositionService re-pads
+    /// again at print time, so this is belt-and-braces.
+    /// </summary>
     private void MergePdfs(string outputPath, string? coverPdfPath, string? resumePdfPath, string? imagesPdfPath, string pageSize = "A4", bool padToMultipleOf4 = false)
     {
         using var outputDocument = new PdfDocument();
@@ -658,23 +685,33 @@ public class PdfService
             }
         }
 
+        double blankW = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 297 : 210;
+        double blankH = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 420 : 297;
+
         if (padToMultipleOf4)
         {
+            // Reserve the trailing blank: pad so (content + blank) is a multiple of 4.
             int currentPages = outputDocument.Pages.Count;
-            int remainder = currentPages % 4;
+            int remainder = (currentPages + 1) % 4;
             if (remainder != 0)
             {
                 int needed = 4 - remainder;
-                double padW = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 297 : 210;
-                double padH = pageSize.Equals("A3", StringComparison.OrdinalIgnoreCase) ? 420 : 297;
                 for (int i = 0; i < needed; i++)
                 {
                     var blankPage = outputDocument.AddPage();
-                    blankPage.Width = PdfSharpCore.Drawing.XUnit.FromMillimeter(padW);
-                    blankPage.Height = PdfSharpCore.Drawing.XUnit.FromMillimeter(padH);
+                    blankPage.Width = PdfSharpCore.Drawing.XUnit.FromMillimeter(blankW);
+                    blankPage.Height = PdfSharpCore.Drawing.XUnit.FromMillimeter(blankH);
                 }
             }
         }
+
+        // Blank-last: exactly one trailing blank page in the merge output size.
+        {
+            var blankPage = outputDocument.AddPage();
+            blankPage.Width = PdfSharpCore.Drawing.XUnit.FromMillimeter(blankW);
+            blankPage.Height = PdfSharpCore.Drawing.XUnit.FromMillimeter(blankH);
+        }
+        _logger.LogDebug("MergePdfs merged {Count} pages (cover first, one trailing blank {W}x{H}mm)", outputDocument.Pages.Count, blankW, blankH);
 
         outputDocument.Save(outputPath);
     }
@@ -696,11 +733,6 @@ public class PdfService
             catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete PDF {Path}", pdfUrl); return; }
         }
         _logger.LogWarning("DeletePdf gave up after 3 attempts (file locked, will be caught by TTL sweep): {Url}", pdfUrl);
-    }
-
-    public void DeletePdf(string pdfUrl)
-    {
-        DeletePdfAsync(pdfUrl).GetAwaiter().GetResult();
     }
 
     public int GetPageCount(string pdfUrl)
@@ -730,6 +762,38 @@ public class PdfService
         _lastCleanupUtc = now;
 
         await CleanDirectoryAsync(_pdfCacheDir, "*.pdf", TimeSpan.FromMinutes(maxAgeMinutes));
+        // Covers live in a subdir with a 24h TTL (SHA256-keyed, cheap to rebuild but
+        // hit on every preview). Without this sweep they accumulated forever.
+        await CleanDirectoryAsync(_coverCacheDir, "*.pdf", TimeSpan.FromHours(24));
+    }
+
+    // Touch-on-serve: a cache hit refreshes mtime so in-use previews survive TTL
+    // sweeps. Without this, a preview open in a tab could be swept mid-view and the
+    // iframe would 404 (served with no-store, but the file itself must still exist).
+    private void TouchFile(string path)
+    {
+        try { File.SetLastWriteTimeUtc(path, DateTime.UtcNow); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Cache touch failed (non-fatal): {Path}", path); }
+    }
+
+    // "exists:length:mtimeTicks" for the resume file, or "none". Any replacement under
+    // the same relative path changes the fingerprint and therefore the merged key.
+    private static string GetResumeFingerprint(string? resumePdfPath)
+    {
+        if (string.IsNullOrEmpty(resumePdfPath)) return "none";
+        try
+        {
+            var dataDir = Environment.GetEnvironmentVariable("FOCUSMED_DATA")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed");
+            var full = Path.Combine(dataDir, resumePdfPath);
+            var fi = new FileInfo(full);
+            if (!fi.Exists) return "missing";
+            return $"exists:{fi.Length}:{fi.LastWriteTimeUtc.Ticks}";
+        }
+        catch
+        {
+            return "unknown";
+        }
     }
 
     private async Task CleanDirectoryAsync(string dir, string pattern, TimeSpan maxAge)

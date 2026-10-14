@@ -89,6 +89,7 @@ builder.Services.AddScoped<PdfService>();
 
 
 builder.Services.AddHostedService<DeletedCleanupService>();
+builder.Services.AddHostedService<PdfPrewarmService>();
 
 builder.Services.AddFocusMedPrinting();
 

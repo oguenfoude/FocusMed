@@ -70,6 +70,7 @@ else
                         <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-semibold border border-slate-200">@FormatSex(Study.Patient?.Sex)</span>
                         <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-semibold border border-slate-200">@ComputeAge(Study.Patient?.BirthDate)</span>
                         <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-medium border border-slate-200">Né(e) le @FormatBirthDate(Study.Patient?.BirthDate)</span>
+                        <button @onclick="OpenPatientEdit" class="px-2.5 py-1 rounded-lg bg-white text-brand-700 font-bold border border-brand-200 hover:bg-brand-100 transition-colors" title="Modifier l'identité du patient">Modifier</button>
                     </div>
                 </div>
             </div>
@@ -116,6 +117,18 @@ else
                 </div>
             </div>
         </div>
+
+        @if (ShowPatientEdit)
+        {
+            <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
+                <input type="text" @bind="EditPatientId" placeholder="ID patient"
+                       class="w-28 px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                <input type="text" @bind="EditPatientName" placeholder="Nom du patient"
+                       class="flex-1 min-w-0 px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                <button @onclick="ConfirmPatientEdit" class="px-2 py-1 text-[10px] font-semibold text-brand-700 bg-brand-50 rounded hover:bg-brand-100 transition-colors border border-brand-100">Enregistrer</button>
+                <button @onclick="CancelPatientEdit" class="px-2 py-1 text-[10px] font-semibold text-slate-500 bg-slate-100 rounded hover:bg-slate-200 transition-colors">Annuler</button>
+            </div>
+        }
 
         <!-- Patient Card Bottom Controls: 3 clean titled zones (Résumé / Mise en page / Impression) -->
         <div class="mt-3 pt-3 border-t border-slate-100 grid grid-cols-1 xl:grid-cols-[auto_1fr_auto] gap-3 items-stretch">
@@ -272,9 +285,15 @@ else
                         var i = idx;
                         idx++;
                         var isSelected = SelectedFrameIds.Contains(frame.SopInstanceUid);
-                        <div class="group flex items-center gap-2.5 py-1.5 pl-2 pr-1.5 rounded-lg cursor-pointer transition-colors @(isSelected ? "bg-brand-50 border border-brand-200" : "hover:bg-slate-50 border border-transparent")"
+                        <div class="group flex items-center gap-2.5 py-1.5 pl-2 pr-1.5 rounded-lg cursor-pointer transition-colors @(_dragOverSopUid == frame.SopInstanceUid ? "bg-brand-50 border border-brand-500" : (isSelected ? "bg-brand-50 border border-brand-200" : "hover:bg-slate-50 border border-transparent"))"
+                             draggable="true"
                              @onclick="() => ToggleFrameSelection(frame.SopInstanceUid)"
-                             @ondblclick="() => OpenLightbox(i)">
+                             @ondblclick="() => OpenLightbox(i)"
+                             @ondragstart="() => OnDragStart(frame.SopInstanceUid)"
+                             @ondragend="OnDragEnd"
+                             @ondragenter="() => _dragOverSopUid = frame.SopInstanceUid"
+                             @ondragover:preventDefault
+                              @ondrop="() => OnDropAsync(frame.SopInstanceUid)" title="Glisser-déposer pour réordonner (souris ; tactile non pris en charge)">
                             <div class="w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors @(isSelected ? "bg-brand-500 border-brand-500" : "border-slate-300 bg-white")">
                                 @if (isSelected)
                                 {
@@ -285,7 +304,7 @@ else
                                 <img src="@webPath" class="w-full h-full object-contain" alt="Frame @(frame.FrameIndex + 1)" loading="lazy" />
                             </div>
                             <div class="flex-1 min-w-0 flex items-center gap-2">
-                                <span class="text-sm font-bold text-slate-900">@(frame.FrameIndex + 1)</span>
+                                <span class="text-sm font-bold text-slate-900" title="Position @(i + 1) · Frame @(frame.FrameIndex + 1)">@(i + 1)</span>
                                 @if (!string.IsNullOrEmpty(frame.Modality))
                                 {
                                     <span class="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md truncate">@frame.Modality</span>
@@ -398,10 +417,13 @@ else
             }
 
             <div class="flex items-center justify-center w-full h-full p-16" @onclick:stopPropagation>
-                <img src="@GetWebPath(VisibleFrames[LightboxIndex].PngPath)"
-                     class="max-w-full max-h-full object-contain select-none"
-                     style="transform: scale(@ZoomLevel); transform-origin: center center; transition: transform 0.2s ease;"
-                     draggable="false" />
+                @if (LightboxIndex >= 0 && LightboxIndex < VisibleFrames.Count)
+                {
+                    <img src="@GetWebPath(VisibleFrames[LightboxIndex].PngPath)"
+                         class="max-w-full max-h-full object-contain select-none"
+                         style="transform: scale(@ZoomLevel); transform-origin: center center; transition: transform 0.2s ease;"
+                         draggable="false" />
+                }
             </div>
 
             <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-white/10 rounded-full px-4 py-2 backdrop-blur-sm">
@@ -418,7 +440,7 @@ else
             </div>
 
             <div class="absolute bottom-6 right-6 z-50 text-xs text-white/70 font-medium">
-                @(LightboxIndex + 1) / @VisibleFrames.Count
+                @(VisibleFrames.Count == 0 ? 0 : Math.Clamp(LightboxIndex, 0, VisibleFrames.Count - 1) + 1) / @VisibleFrames.Count
             </div>
         </div>
     }
@@ -471,8 +493,10 @@ else
         ? EffectiveAutoPerPage
         : ManualImagesPerPage;
 
-    // Estimated output page count for the layout badge. Booklet pads to a multiple
-    // of 4 pages (imposition), so the page count is rounded up to 4 here too.
+    // Estimated output page count for the layout badge (estimate only: covers image
+    // pages; the actual PDF has +cover/+resume/+blank and booklet pads to a multiple
+    // of 4 at imposition — see PageCount, read back via GetPageCount after render).
+    // Booklet pads to a multiple of 4 pages (imposition), rounded up here too.
     private int EstimatedPageCount
     {
         get
@@ -485,12 +509,7 @@ else
         }
     }
 
-    private static int ComputeAutoPerPage(int count)
-    {
-        if (count <= 0) return 1;
-        var pages = (int)Math.Ceiling(count / 6.0);
-        return Math.Clamp((int)Math.Ceiling(count / (double)pages), 1, 16);
-    }
+    private static int ComputeAutoPerPage(int count) => PdfPreviewDefaults.ComputeAutoPerPage(count);
 
     private string? PdfPreviewUrl;
     private bool IsRegeneratingPdf;
@@ -499,6 +518,14 @@ else
     private CancellationTokenSource? _extractCts;
     private readonly object _regenLock = new();
     private bool _disposed;
+    // Ghost-preview guard: every regen bumps this generation. A render that finishes
+    // after a newer regen started deletes its own output and exits quietly instead
+    // of overwriting PdfPreviewUrl with a stale preview.
+    private int _pdfGen;
+    // Selection persistence gate: serializes rapid checkbox toggles so overlapping
+    // writes cannot interleave; _selSeq gives last-writer-wins ordering.
+    private readonly SemaphoreSlim _selectionGate = new(1, 1);
+    private long _selSeq;
 
 
     private bool LightboxOpen;
@@ -528,12 +555,115 @@ else
     private void ToggleCtVisibility()
     {
         _showCtImages = !_showCtImages;
+        // Visibility only filters the displayed list; the persisted selection (by SOP UID)
+        // is untouched, so no preview regen is needed. Reset the lightbox index because
+        // the frame list just changed length (prevents VisibleFrames[LightboxIndex] crash).
+        LightboxIndex = 0;
+        if (LightboxOpen && VisibleFrames.Count == 0)
+            LightboxOpen = false;
+    }
+
+    // Drag-and-drop reordering (HTML5, pure Blazor — no JS). The dragged image block is
+    // removed from the full SOP order and re-inserted at the drop target, then persisted.
+    private string? _dragSopUid;
+    private string? _dragOverSopUid;
+
+    private void OnDragStart(string sopUid)
+    {
+        _dragSopUid = sopUid;
+        _dragOverSopUid = null;
+    }
+
+    private void OnDragEnd()
+    {
+        _dragSopUid = null;
+        _dragOverSopUid = null;
+    }
+
+    private async Task OnDropAsync(string targetSopUid)
+    {
+        var dragged = _dragSopUid;
+        _dragSopUid = null;
+        _dragOverSopUid = null;
+        if (string.IsNullOrEmpty(dragged) || dragged == targetSopUid || Study == null) return;
+
+        var fullOrder = Frames.Select(f => f.SopInstanceUid).Distinct().ToList();
+        if (!fullOrder.Remove(dragged)) return;
+        var targetIdx = fullOrder.IndexOf(targetSopUid);
+        if (targetIdx < 0) return;
+        fullOrder.Insert(targetIdx, dragged);
+        await ApplyNewOrderAsync(fullOrder);
+    }
+
+    private async Task ApplyNewOrderAsync(List<string> fullOrder)
+    {
+        if (Study == null) return;
+        try
+        {
+            var ok = await StudyService.SetImageOrderAsync(Study.Id, fullOrder);
+            if (!ok)
+            {
+                await ShowToast("Impossible d'enregistrer l'ordre.", true);
+                return;
+            }
+            var rank = fullOrder.Select((sop, r) => (sop, r)).ToDictionary(x => x.sop, x => x.r);
+            int RankOf(FrameResult f) => rank.TryGetValue(f.SopInstanceUid, out var r) ? r : int.MaxValue;
+            Frames = Frames.OrderBy(RankOf).ThenBy(f => f.FrameIndex).ToList();
+            _availableFrames = _availableFrames.OrderBy(RankOf).ThenBy(f => f.FrameIndex).ToList();
+            await InvokeAsync(StateHasChanged);
+            await RegeneratePdfPreviewAsync();
+            await ShowToast("Ordre enregistré.");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to reorder images in Study {StudyId}", Study.Id);
+            await ShowToast("Impossible d'enregistrer l'ordre.", true);
+        }
     }
 
     private HashSet<string> SelectedFrameIds = new();
 
     private bool ShowUnlinkConfirm;
     private bool IsUnlinking;
+
+    private bool ShowPatientEdit;
+    private string EditPatientId = "";
+    private string EditPatientName = "";
+
+    private void OpenPatientEdit()
+    {
+        EditPatientId = Study?.Patient?.PatientId ?? "";
+        EditPatientName = Study?.Patient?.PatientName ?? "";
+        ShowPatientEdit = true;
+    }
+
+    private void CancelPatientEdit() => ShowPatientEdit = false;
+
+    private async Task ConfirmPatientEdit()
+    {
+        if (Study == null) return;
+        ShowPatientEdit = false;
+        try
+        {
+            var ok = await StudyService.RenamePatientAsync(Study.Id, EditPatientId, EditPatientName);
+            if (!ok)
+            {
+                await ShowToast("Nom/ID invalide.", true);
+                return;
+            }
+            await LoadStudyAsync();
+            if (Study != null)
+                TotalImageCount = Study.Series.SelectMany(s => s.Images).Count();
+            await ShowToast("Patient mis à jour.");
+            if (SelectedFrameIds.Count > 0)
+                _ = RegeneratePdfPreviewAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to rename patient for Study {StudyId}", Study.Id);
+            await ShowToast("Impossible de mettre à jour le patient.", true);
+        }
+    }
 
     private string SelectedPrintMode { get; set; } = "BookletA3";
     private bool IsPrinting;
@@ -562,8 +692,15 @@ else
         if (Study != null)
         {
             TotalImageCount = Study.Series.SelectMany(s => s.Images).Count();
-            _extractCts = new CancellationTokenSource();
-            _ = ExtractImagesAsync(_extractCts.Token);
+            CancellationToken extractToken;
+            lock (_regenLock)
+            {
+                if (_disposed) return;
+                _extractCts?.Dispose();
+                _extractCts = new CancellationTokenSource();
+                extractToken = _extractCts.Token;
+            }
+            _ = ExtractImagesAsync(extractToken);
         }
         else
         {
@@ -580,6 +717,7 @@ else
                 .Include(s => s.Patient)
                 .Include(s => s.Series).ThenInclude(s => s.Images)
                 .AsSplitQuery()
+                .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.Id == Id);
 
             if (Study != null)
@@ -600,15 +738,8 @@ else
     // SonoVision films (Source "PRINT", modality SC or OT) always default to ONE image
     // per page — each film is a full clinical image to review at scale. CT/OT diagnostic
     // series are also 1/page. Other modalities (auto-scaled prescriptions, etc.) default
-    // to Auto (empty).
-    private static string DefaultImagesPerPage(Study study)
-    {
-        var onePerPage = study.Series.SelectMany(s => s.Images).Any(i => i.Source == "PRINT")
-            || study.Series.Any(s =>
-                string.Equals(s.Modality, "CT", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(s.Modality, "OT", StringComparison.OrdinalIgnoreCase));
-        return onePerPage ? "1" : "";
-    }
+    // to Auto (empty). Shared with PdfPrewarmService via PdfPreviewDefaults.
+    private static string DefaultImagesPerPage(Study study) => PdfPreviewDefaults.DefaultPerPageInput(study);
 
     private async Task ExtractImagesAsync(CancellationToken ct)
     {
@@ -620,17 +751,27 @@ else
             Frames = await PngExtractionService.GetOrExtractFramesAsync(Study!.Id, ct);
             if (_disposed || ct.IsCancellationRequested) return;
             _availableFrames = Frames.Where(f => f.FileExists).ToList();
+            // The frame list changed length: clamp the lightbox index so a stale
+            // LightboxIndex can never index out of range on the next render.
+            if (LightboxIndex >= _availableFrames.Count)
+                LightboxIndex = Math.Max(0, _availableFrames.Count - 1);
+            if (LightboxOpen && _availableFrames.Count == 0)
+                LightboxOpen = false;
 
             // Default: select only the PRINT frames (the SonoVision films) when the study
             // mixes prints with C-STORE data (e.g. a CT exam). C-STORE frames start
             // deselected AND hidden. A study with only C-STORE frames (no print source)
             // still starts fully selected.
+            // Saved selection wins: any explicit operator choice (IsSelected != null)
+            // restores exactly what was checked last visit — forever.
+            // Shared with PdfPrewarmService via PdfPreviewDefaults.ResolveSelection.
             _showCtImages = false;
-            var hasPrintFrames = _availableFrames.Any(f => f.Source == "PRINT");
-            SelectedFrameIds = new HashSet<string>(
-                hasPrintFrames
-                    ? _availableFrames.Where(f => f.Source == "PRINT").Select(f => f.SopInstanceUid)
-                    : _availableFrames.Select(f => f.SopInstanceUid));
+            var savedSelection = Study!.Series
+                .SelectMany(s => s.Images)
+                .Where(i => i.IsSelected.HasValue)
+                .ToDictionary(i => i.SopInstanceUid, i => i.IsSelected, StringComparer.Ordinal);
+            SelectedFrameIds = PdfPreviewDefaults.ResolveSelection(
+                _availableFrames.Select(f => (f.SopInstanceUid, f.Source)), savedSelection);
 
             if (SelectedFrameIds.Count > 0)
                 await RegeneratePdfPreviewAsync();
@@ -655,11 +796,14 @@ else
     {
         if (_disposed) return;
         CancellationTokenSource regenCts;
+        int gen;
         lock (_regenLock)
         {
+            if (_disposed) return;
             _regenCts?.Cancel();
-            _regenCts?.Dispose();
+            try { _regenCts?.Dispose(); } catch (ObjectDisposedException) { }
             regenCts = _regenCts = new CancellationTokenSource();
+            gen = ++_pdfGen;
         }
         var ct = regenCts.Token;
 
@@ -668,10 +812,13 @@ else
             await Task.Delay(150, ct);
             if (_disposed || ct.IsCancellationRequested) return;
 
-            if (SelectedFrameIds.Count == 0)
+            // Immutable snapshot: checkbox toggles mutate SelectedFrameIds on the UI
+            // thread while this render is in flight. All work below uses the copy.
+            var selectedSnapshot = SelectedFrameIds.ToList();
+            if (selectedSnapshot.Count == 0)
             {
                 if (!string.IsNullOrEmpty(PdfPreviewUrl))
-                    try { PdfService.DeletePdf(PdfPreviewUrl); } catch (Exception ex) { Logger.LogDebug(ex, "Preview cleanup DeletePdf failed (non-fatal)"); }
+                    try { await PdfService.DeletePdfAsync(PdfPreviewUrl); } catch (Exception ex) { Logger.LogDebug(ex, "Preview cleanup DeletePdf failed (non-fatal)"); }
                 PdfPreviewUrl = null;
                 PageCount = 0;
                 await InvokeAsync(StateHasChanged);
@@ -681,8 +828,9 @@ else
             IsRegeneratingPdf = true;
             await InvokeAsync(StateHasChanged);
 
+            var selectedSet = new HashSet<string>(selectedSnapshot, StringComparer.Ordinal);
             var imagePaths = Frames
-                .Where(f => f.FileExists && SelectedFrameIds.Contains(f.SopInstanceUid) && !string.IsNullOrEmpty(f.PngPath))
+                .Where(f => f.FileExists && selectedSet.Contains(f.SopInstanceUid) && !string.IsNullOrEmpty(f.PngPath))
                 .Select(f => f.PngPath!)
                 .ToList();
 
@@ -699,8 +847,7 @@ else
             var studyDescription = Study?.Description ?? "";
             var resumePdfPath = Study?.ResumePdfPath;
 
-            bool isBooklet = SelectedPrintMode == "BookletA3";
-            string pdfPageSize = SelectedPrintMode == "FlatA3" ? "A3" : "A4";
+            (var pdfPageSize, bool isBooklet) = PdfPreviewDefaults.ForMode(SelectedPrintMode);
 
             var newUrl = await Task.Run(() =>
                 PdfService.GeneratePrintPdf(patientName, studyDate, studyDescription, imagePaths, resumePdfPath, pdfPageSize, isBooklet, imagesPerPage: EffectiveImagesPerPage, gapPx: GapPx, marginPx: MarginPx, ct: ct), ct);
@@ -708,9 +855,14 @@ else
 
 
 
-            if (ct.IsCancellationRequested)
+            if (ct.IsCancellationRequested || gen != Volatile.Read(ref _pdfGen) || _disposed)
             {
+                // Stale render: a newer regen superseded us. Our output is keyed on the
+                // same inputs an older selection produced, so delete it quietly instead
+                // of swapping it into the preview (ghost-preview guard).
                 IsRegeneratingPdf = false;
+                if (!string.IsNullOrEmpty(newUrl))
+                    try { await PdfService.DeletePdfAsync(newUrl); } catch (Exception ex) { Logger.LogDebug(ex, "Stale preview cleanup failed (non-fatal)"); }
                 return;
             }
 
@@ -722,7 +874,7 @@ else
                 IsRegeneratingPdf = false;
                 await InvokeAsync(StateHasChanged);
                 if (!string.IsNullOrEmpty(oldUrl) && oldUrl != newUrl)
-                    try { PdfService.DeletePdf(oldUrl); } catch (Exception ex) { Logger.LogDebug(ex, "Old preview DeletePdf failed (non-fatal)"); }
+                    try { await PdfService.DeletePdfAsync(oldUrl); } catch (Exception ex) { Logger.LogDebug(ex, "Old preview DeletePdf failed (non-fatal)"); }
             }
             else
             {
@@ -766,19 +918,47 @@ else
     {
         if (!SelectedFrameIds.Remove(sopUid))
             SelectedFrameIds.Add(sopUid);
+        _ = PersistSelectionAsync();
         _ = RegeneratePdfPreviewAsync();
     }
 
     private void SelectAllFrames()
     {
         SelectedFrameIds = new HashSet<string>(VisibleFrames.Select(f => f.SopInstanceUid));
+        _ = PersistSelectionAsync();
         _ = RegeneratePdfPreviewAsync();
     }
 
     private void DeselectAllFrames()
     {
         SelectedFrameIds.Clear();
+        _ = PersistSelectionAsync();
         _ = RegeneratePdfPreviewAsync();
+    }
+
+    // Fire-and-forget so checkbox feel stays instant; the pdf-cache key already covers
+    // the selection, so a revisit renders the same preview without re-toggling.
+    // Serialized per study with last-writer-wins sequencing: rapid toggles each snapshot
+    // their own copy, and only the newest snapshot reaches the DB (older ones exit).
+    private async Task PersistSelectionAsync()
+    {
+        var seq = Interlocked.Increment(ref _selSeq);
+        var snapshot = SelectedFrameIds.ToList();
+        await _selectionGate.WaitAsync();
+        try
+        {
+            if (Study == null || _disposed) return;
+            if (seq != Volatile.Read(ref _selSeq)) return;
+            await StudyService.SetImageSelectionAsync(Study.Id, new HashSet<string>(snapshot, StringComparer.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to persist selection for Study {StudyId} (non-fatal)", Study?.Id);
+        }
+        finally
+        {
+            _selectionGate.Release();
+        }
     }
 
     private void OpenUnlinkConfirm() => ShowUnlinkConfirm = true;
@@ -833,11 +1013,20 @@ else
         StatusMessage = message;
         IsError = isError;
         await InvokeAsync(StateHasChanged);
-        await Task.Delay(3000);
+        try
+        {
+            await Task.Delay(3000);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Toast delay failed (non-fatal)");
+            return;
+        }
         if (seq != _toastSeq) return;
         StatusMessage = "";
         IsError = false;
-        await InvokeAsync(StateHasChanged);
+        try { await InvokeAsync(StateHasChanged); }
+        catch (Exception ex) { Logger.LogDebug(ex, "Toast dismiss render failed (circuit gone, non-fatal)"); }
     }
 
     private async Task PrintStudy()
@@ -926,6 +1115,8 @@ else
             if (result.Success)
             {
                 await ShowToast($"Impression envoyée à '{presetName}'.");
+                if (!string.IsNullOrWhiteSpace(result.Warning))
+                    await ShowToast($"Avertissement : {result.Warning}", true);
             }
             else
             {
@@ -946,24 +1137,37 @@ else
 
     public void Dispose()
     {
-        _disposed = true;
-        _regenCts?.Cancel();
-        _regenCts?.Dispose();
-        _extractCts?.Cancel();
-        _extractCts?.Dispose();
+        // Null-and-check under the same _regenLock the regen/extract paths use, so a
+        // CTS swap can never race Dispose into ObjectDisposedException. CTS refs are
+        // cancelled/disposed OUTSIDE the lock (Cancel can re-enter via continuations).
+        // NOTE: the cached preview file is intentionally NOT deleted here — preview URLs
+        // are content-hash shared (prewarm + back-nav reuse the same cache_*.pdf). Only
+        // the URL is cleared; the 60min TTL sweep reclaims the file.
+        CancellationTokenSource? regenCts;
+        CancellationTokenSource? extractCts;
+        lock (_regenLock)
+        {
+            _disposed = true;
+            regenCts = _regenCts;
+            _regenCts = null;
+            extractCts = _extractCts;
+            _extractCts = null;
+        }
+        try { regenCts?.Cancel(); } catch (ObjectDisposedException) { } catch (Exception ex) { Logger.LogDebug(ex, "Regen CTS cancel failed on dispose (non-fatal)"); }
+        try { regenCts?.Dispose(); } catch (ObjectDisposedException) { } catch (Exception ex) { Logger.LogDebug(ex, "Regen CTS dispose failed on dispose (non-fatal)"); }
+        try { extractCts?.Cancel(); } catch (ObjectDisposedException) { } catch (Exception ex) { Logger.LogDebug(ex, "Extract CTS cancel failed on dispose (non-fatal)"); }
+        try { extractCts?.Dispose(); } catch (ObjectDisposedException) { } catch (Exception ex) { Logger.LogDebug(ex, "Extract CTS dispose failed on dispose (non-fatal)"); }
         if (!string.IsNullOrEmpty(Study?.StudyInstanceUid))
         {
             try { PngExtractionService.ReleaseStudyPng(Study.StudyInstanceUid); } catch (Exception ex) { Logger.LogDebug(ex, "ReleaseStudyPng failed on dispose (non-fatal)"); }
         }
-        if (!string.IsNullOrEmpty(PdfPreviewUrl))
-        {
-            try { PdfService.DeletePdf(PdfPreviewUrl); } catch (Exception ex) { Logger.LogDebug(ex, "Preview DeletePdf failed on dispose (non-fatal)"); }
-        }
+        PdfPreviewUrl = null;
     }
 
     private void OpenLightbox(int index)
     {
-        LightboxIndex = index;
+        if (VisibleFrames.Count == 0) return;
+        LightboxIndex = Math.Clamp(index, 0, VisibleFrames.Count - 1);
         LightboxOpen = true;
         ZoomLevel = 1.0;
         _ = FocusLightboxAsync();

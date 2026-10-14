@@ -184,8 +184,11 @@ else
                                 }
                                 else if (study.Status == StudyStatus.Receiving)
                                 {
-                                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
-                                        <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Réception
+                                    <span class="inline-flex items-center gap-2">
+                                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                                            <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Réception
+                                        </span>
+                                        <span class="text-xs text-slate-500">en cours depuis @study.CreatedAt.ToLocalTime().ToString("HH:mm")</span>
                                     </span>
                                 }
                                 else if (study.Status == StudyStatus.Failed)
@@ -391,18 +394,24 @@ else
 
         if (!string.IsNullOrWhiteSpace(SearchTerm))
         {
-            var term = SearchTerm.Trim();
+            // Escape LIKE wildcards so a literal "%", "_" or "[" in a patient name
+            // cannot turn the search into a wildcard match.
+            var term = EscapeLike(SearchTerm.Trim());
             query = query.Where(s =>
                 EF.Functions.Like((s.Patient!.PatientName ?? "").Replace("^", " "), $"%{term}%"));
         }
 
         if (SelectedDate.HasValue)
         {
-            var date = SelectedDate.Value.Date;
+            // UTC day window (entities store UTC dates): matches the DeletedStudies
+            // picker window approach instead of local-time .Date equality, so the same
+            // calendar day filters identically on every machine timezone.
+            var dayStart = DateTime.SpecifyKind(SelectedDate.Value.Date, DateTimeKind.Utc);
+            var dayEnd = dayStart.AddDays(1);
             query = query.Where(s =>
-                s.CreatedAt.Date == date ||
-                (s.StudyDate.HasValue && s.StudyDate.Value.Date == date) ||
-                s.LastUpdatedAt.Date == date);
+                (s.CreatedAt >= dayStart && s.CreatedAt < dayEnd) ||
+                (s.StudyDate.HasValue && s.StudyDate.Value >= dayStart && s.StudyDate.Value < dayEnd) ||
+                (s.LastUpdatedAt >= dayStart && s.LastUpdatedAt < dayEnd));
         }
 
         if (!string.IsNullOrEmpty(SelectedModality))
@@ -544,22 +553,30 @@ else
         if (CurrentPage < TotalPages) { CurrentPage++; await LoadDataAsync(); }
     }
 
+    // Escapes [, % and _ for a SQL LIKE pattern (EF.Functions.Like emits LIKE with
+    // no ESCAPE clause on SQLite; bracket-escaping is the portable guard).
+    private static string EscapeLike(string term) =>
+        term.Replace("[", "[[]").Replace("%", "[%]").Replace("_", "[_]");
+
     private async Task MarkComplete(Study study)
     {
         IsProcessing = true;
         StateHasChanged();
         try
         {
-            await StudyService.MarkCompleteAsync(study.Id);
+            var ok = await StudyService.MarkCompleteAsync(study.Id);
             await LoadDataAsync();
-            await ShowToast("Étude marquée comme terminée");
+            if (ok)
+                await ShowToast("Étude marquée comme terminée");
+            else
+                await ShowToast("Étude vide — ajoutez des images ou supprimez-la.", true);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to mark study complete");
             await ShowToast("Erreur lors de la mise à jour", true);
         }
-        finally { IsProcessing = false; }
+        finally { IsProcessing = false; StateHasChanged(); }
     }
 
     private async Task ArchiveStudy(Study study)
@@ -577,7 +594,7 @@ else
             Logger.LogError(ex, "Failed to archive study");
             await ShowToast("Erreur lors de l'archivage", true);
         }
-        finally { IsProcessing = false; }
+        finally { IsProcessing = false; StateHasChanged(); }
     }
 
     private void SoftDeleteStudy(Study study) => StudyToDelete = study;
@@ -600,7 +617,7 @@ else
             Logger.LogError(ex, "Failed to soft delete study");
             await ShowToast("Erreur lors de la suppression", true);
         }
-        finally { IsProcessing = false; }
+        finally { IsProcessing = false; StateHasChanged(); }
     }
 
 
@@ -658,6 +675,19 @@ else
 
         try
         {
+            // Stale-row recheck at confirm time: the picker row may predate a
+            // soft-delete (other tab, auto-cleanup). Refuse with a specific message
+            // instead of letting the service resurrect trashed images.
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                var freshSource = await db.Studies.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sourceId);
+                if (freshSource == null || freshSource.Status == StudyStatus.Deleted)
+                {
+                    await ShowToast("Fusion impossible : l'étude source a été supprimée entre-temps.", true);
+                    await LoadDataAsync();
+                    return;
+                }
+            }
             var ok = await StudyService.MergeStudyAsync(sourceId, targetId);
             if (ok)
             {
@@ -690,11 +720,20 @@ else
         StatusMessage = message;
         IsError = isError;
         await InvokeAsync(StateHasChanged);
-        await Task.Delay(3000);
+        try
+        {
+            await Task.Delay(3000);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Toast delay failed (non-fatal)");
+            return;
+        }
         if (seq != _toastSeq) return;
         StatusMessage = "";
         IsError = false;
-        await InvokeAsync(StateHasChanged);
+        try { await InvokeAsync(StateHasChanged); }
+        catch (Exception ex) { Logger.LogDebug(ex, "Toast dismiss render failed (circuit gone, non-fatal)"); }
     }
 
     private void ClearToast()

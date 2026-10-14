@@ -19,7 +19,7 @@
         <div>
             <h2 class="text-lg font-bold text-slate-900">Études supprimées</h2>
             <p class="text-xs text-slate-500 mt-0.5">
-                <span class="text-slate-700 font-bold">@(FilteredStudies?.Count() ?? 0)</span> étude@((FilteredStudies?.Count() ?? 0) != 1 ? "s" : "") — suppression automatique après 30 jours
+                <span class="text-slate-700 font-bold">@TotalCount</span> étude@(TotalCount != 1 ? "s" : "") — suppression automatique après 30 jours
             </p>
         </div>
     </div>
@@ -45,7 +45,7 @@
     </div>
 </div>
 
-@if (DeletedStudyList == null)
+@if (Studies == null)
 {
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div class="px-4 sm:px-6 py-4 border-b border-slate-100 flex flex-wrap gap-4">
@@ -64,7 +64,7 @@
         </div>
     </div>
 }
-else if (!(FilteredStudies?.Any() ?? false))
+else if (Studies.Count == 0)
 {
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-12 text-center">
         <div class="mx-auto w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-4">
@@ -92,7 +92,7 @@ else
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
-                    @foreach (var study in PagedStudies)
+                    @foreach (var study in Studies)
                     {
                         var modalities = study.Series.Select(s => s.Modality).Distinct().ToList();
                         var modalityDisplay = modalities.Any() ? string.Join(", ", modalities) : "N/A";
@@ -168,14 +168,15 @@ else
 <ToastNotification Message="@StatusMessage" IsError="@IsError" OnDismiss="ClearToast" />
 
 @code {
-    private List<Study>? DeletedStudyList;
-    private IEnumerable<Study>? FilteredStudies;
-    private IEnumerable<Study> PagedStudies => FilteredStudies?.Skip((CurrentPage - 1) * PageSize).Take(PageSize) ?? [];
+    // Current page only — filtering, ordering and paging all run in SQLite
+    // (same BuildFilteredQuery pattern as Home; never loads the full table).
+    private List<Study>? Studies;
+    private int TotalCount;
 
     private string SearchTerm { get; set; } = "";
     private int CurrentPage = 1;
     private const int PageSize = 50;
-    private int TotalPages => Math.Max(1, (int)Math.Ceiling((FilteredStudies?.Count() ?? 0) / (double)PageSize));
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
 
     private Study? StudyToDelete;
     private bool IsProcessing;
@@ -184,6 +185,10 @@ else
     private bool IsError = false;
 
     private System.Threading.Timer? _refreshTimer;
+    // Reentrancy guard: the 10s timer callback is async void and may overlap a slow
+    // query (or a manual refresh). Only one refresh runs at a time; overlapping ticks
+    // are skipped instead of interleaving list swaps mid-render.
+    private int _timerBusy;
 
     protected override async Task OnInitializedAsync()
     {
@@ -191,63 +196,82 @@ else
 
         _refreshTimer = new System.Threading.Timer(async _ =>
         {
+            if (Interlocked.Exchange(ref _timerBusy, 1) == 1) return;
             try
             {
+                var search = SearchTerm;
+                var page = CurrentPage;
                 using var scope = ScopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
-                var data = await db.Studies
+                var filtered = BuildFilteredQuery(db, search);
+                var total = await filtered.CountAsync();
+                var totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)PageSize));
+                if (page > totalPages) page = totalPages;
+                var rows = await filtered
+                    .OrderByDescending(s => s.LastUpdatedAt)
                     .Include(s => s.Patient)
                     .Include(s => s.Series)
                     .AsSplitQuery()
-                    .Where(s => s.Status == StudyStatus.Deleted)
-                    .OrderByDescending(s => s.LastUpdatedAt)
+                    .Skip((page - 1) * PageSize)
+                    .Take(PageSize)
                     .ToListAsync();
 
+                // Swap atomically inside a single InvokeAsync so the render never sees
+                // a half-updated (count vs rows) state.
                 await InvokeAsync(() =>
                 {
-                    DeletedStudyList = data;
-                    ApplyFilters();
+                    SearchTerm = search;
+                    CurrentPage = page;
+                    TotalCount = total;
+                    Studies = rows;
                     StateHasChanged();
                 });
             }
             catch (Exception ex) { Logger.LogWarning(ex, "Timer refresh failed for DeletedStudies"); }
+            finally { Interlocked.Exchange(ref _timerBusy, 0); }
         }, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+    }
+
+    private static string EscapeLike(string term) =>
+        term.Replace("[", "[[]").Replace("%", "[%]").Replace("_", "[_]");
+
+    private static IQueryable<Study> BuildFilteredQuery(FocusMedDbContext db, string searchTerm)
+    {
+        var query = db.Studies.Where(s => s.Status == StudyStatus.Deleted);
+
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            var term = EscapeLike(searchTerm.Trim());
+            query = query.Where(s =>
+                EF.Functions.Like((s.Patient!.PatientName ?? "").Replace("^", " "), $"%{term}%"));
+        }
+
+        return query;
     }
 
     private async Task LoadDataAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        DeletedStudyList = await db.Studies
+        var filtered = BuildFilteredQuery(db, SearchTerm);
+        TotalCount = await filtered.CountAsync();
+
+        var totalPages = Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
+        if (CurrentPage > totalPages) CurrentPage = totalPages;
+
+        Studies = await filtered
+            .OrderByDescending(s => s.LastUpdatedAt)
             .Include(s => s.Patient)
             .Include(s => s.Series)
             .AsSplitQuery()
-            .Where(s => s.Status == StudyStatus.Deleted)
-            .OrderByDescending(s => s.LastUpdatedAt)
+            .Skip((CurrentPage - 1) * PageSize)
+            .Take(PageSize)
             .ToListAsync();
-
-        ApplyFilters();
     }
 
-    private void ApplyFilters()
-    {
-        if (DeletedStudyList == null) { FilteredStudies = []; return; }
-
-        var query = DeletedStudyList.AsEnumerable();
-
-        if (!string.IsNullOrWhiteSpace(SearchTerm))
-        {
-            query = query.Where(s =>
-                (s.Patient?.PatientName ?? "").Replace("^", " ").Contains(SearchTerm, StringComparison.OrdinalIgnoreCase));
-        }
-
-        FilteredStudies = query.ToList();
-        if (CurrentPage > TotalPages) CurrentPage = TotalPages;
-    }
-
-    private void OnFilterChanged()
+    private async Task OnFilterChanged()
     {
         CurrentPage = 1;
-        ApplyFilters();
+        await LoadDataAsync();
     }
 
     private async Task RefreshDataAsync()
@@ -261,8 +285,8 @@ else
 
     private void RefreshData() => _ = RefreshDataAsync();
 
-    private void PreviousPage() { if (CurrentPage > 1) CurrentPage--; }
-    private void NextPage() { if (CurrentPage < TotalPages) CurrentPage++; }
+    private async Task PreviousPage() { if (CurrentPage > 1) { CurrentPage--; await LoadDataAsync(); } }
+    private async Task NextPage() { if (CurrentPage < TotalPages) { CurrentPage++; await LoadDataAsync(); } }
 
     private async Task RestoreStudy(Study study)
     {
@@ -271,8 +295,7 @@ else
         try
         {
             await StudyService.RestoreStudyAsync(study.Id);
-            DeletedStudyList?.Remove(study);
-            ApplyFilters();
+            await LoadDataAsync();
             await ShowToast("Étude restaurée");
         }
         catch (Exception ex)
@@ -280,7 +303,7 @@ else
             Logger.LogError(ex, "Failed to restore study");
             await ShowToast("Erreur lors de la restauration", true);
         }
-        finally { IsProcessing = false; }
+        finally { IsProcessing = false; StateHasChanged(); }
     }
 
     private void ConfirmDelete(Study study) => StudyToDelete = study;
@@ -294,9 +317,8 @@ else
         try
         {
             await StudyService.DeleteStudyAsync(StudyToDelete.Id);
-            DeletedStudyList?.Remove(StudyToDelete);
             StudyToDelete = null;
-            ApplyFilters();
+            await LoadDataAsync();
             await ShowToast("Étude supprimée définitivement");
         }
         catch (Exception ex)
@@ -304,7 +326,7 @@ else
             Logger.LogError(ex, "Failed to delete study");
             await ShowToast("Erreur lors de la suppression", true);
         }
-        finally { IsProcessing = false; }
+        finally { IsProcessing = false; StateHasChanged(); }
     }
 
 
@@ -317,10 +339,18 @@ else
         StatusMessage = message;
         IsError = isError;
         StateHasChanged();
-        await Task.Delay(3000);
+        try
+        {
+            await Task.Delay(3000);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Toast delay failed (non-fatal)");
+            return;
+        }
         if (seq != _toastSeq) return; // a newer toast superseded this one
         StatusMessage = "";
-        StateHasChanged();
+        try { StateHasChanged(); } catch (Exception ex) { Logger.LogDebug(ex, "Toast dismiss render failed (circuit gone, non-fatal)"); }
     }
 
     private void ClearToast()

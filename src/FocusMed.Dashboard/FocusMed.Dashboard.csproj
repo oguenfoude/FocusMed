@@ -20,6 +20,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <!-- NU1902/NU1903: SixLabors.ImageSharp advisories, see AGENTS.md. -->
+    <NoWarn>$(NoWarn);NU1902;NU1903</NoWarn>
   </PropertyGroup>
 
   <!-- Framework-dependent publish drops hostfxr.dll/hostpolicy.dll next to the apphost;

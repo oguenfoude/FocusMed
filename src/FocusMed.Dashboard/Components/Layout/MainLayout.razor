@@ -227,14 +227,29 @@
         Navigation.NavigateTo(reloadUri, forceLoad: true);
     }
 
+    private bool _disposed;
+
+    private void DisposeTimers()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        try { _healthTimer?.Dispose(); } catch { }
+        try { _soundTimer?.Dispose(); } catch { }
+        _healthTimer = null;
+        _soundTimer = null;
+    }
+
     public void Dispose()
     {
-        _healthTimer?.Dispose();
-        _soundTimer?.Dispose();
+        DisposeTimers();
     }
 
     public async ValueTask DisposeAsync()
     {
+        // Blazor prefers IAsyncDisposable when present: a component implementing BOTH
+        // interfaces had its timers leak because only DisposeAsync ran. Stop polling
+        // here too so dead tabs/circuits stop hitting the DB and the DICOM port.
+        DisposeTimers();
         if (_soundModule is not null)
         {
             try { await _soundModule.DisposeAsync(); }
