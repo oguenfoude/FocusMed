@@ -48,7 +48,8 @@ src/
 ├── FocusMed.Dashboard/          Blazor Server UI (HTTP :5000). Browse/archive/delete studies, PDF preview + printing. (net10.0-windows)
 ├── FocusMed.Printing/           Print engine — Windows driver (XPS) + raw TCP, booklet imposition, Konica finishing. (net10.0-windows)
 ├── FocusMed.Printing.TestConsole/  Console diagnostic harness for the print engine. (net10.0-windows)
-└── FocusMed.Launcher/           WPF supervisor — tray app, virtual "FocusMed" printer, resume-capture popup, restarts Worker + Dashboard. (net10.0-windows)
+├── FocusMed.Launcher/           WPF supervisor — tray app, virtual "FocusMed" printer, resume-capture popup, restarts Worker + Dashboard. (net10.0-windows)
+└── FocusMed.Tests/              xUnit unit + integration (net10.0-windows, in slnx)
 ```
 
 Dependency direction: `Worker` → `Dicom` → `Data` (leaf). `Dashboard` → `Data` + `Dicom` + `Printing`. `Launcher` → `Data`. `Printing` has no project dependencies. Solution is `FocusMed.slnx` (XML, not classic `.sln`).
@@ -133,7 +134,7 @@ Enums: `StorageCommitmentStatus` (Pending/Completed/Failed), `PrintStatus` (Pend
 
 ## Configuration
 
-All non-default config goes in `src/FocusMed.Worker/appsettings.json` (the Launcher regenerates a merged `appsettings.json` from `config.json` for deployed children).
+Worker keys live in `src/FocusMed.Worker/appsettings.json`; Dashboard (`src/FocusMed.Dashboard/appsettings.json`: `DicomNetworking:DicomPort`, `RawPrinters` 3 Konica presets) and Launcher (`config.json` + `src/FocusMed.Launcher/appsettings.json`) have their own; deployed children share the Launcher-merged `appsettings.json`.
 
 ### `DicomNetworking` section
 
@@ -154,9 +155,10 @@ All non-default config goes in `src/FocusMed.Worker/appsettings.json` (the Launc
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `ConnectionString` | `Data Source=focusmed.db` | SQLite connection string |
 | `StudyStabilizationSeconds` | `60` | Inactivity before a Receiving study becomes prewarm-eligible (no auto-complete; Terminé is manual) |
 | `PngExtraction:Enabled` | `true` | On-demand PNG extraction toggle |
+| `ArchiveRetentionDays` | `0` (keep forever) | Retention sweep switch for Archived/Deleted studies |
+| `Backup:{Enabled,IntervalHours,RetentionDays,Folder}` | `true,24,7,backups` | Daily `VACUUM INTO` snapshot + prune |
 
 ### `StorageForwardTargets[]` (C-STORE SCU Auto-Forward)
 
