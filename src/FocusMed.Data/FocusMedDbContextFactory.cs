@@ -8,8 +8,7 @@ public class FocusMedDbContextFactory : IDesignTimeDbContextFactory<FocusMedDbCo
     public FocusMedDbContext CreateDbContext(string[] args)
     {
         var optionsBuilder = new DbContextOptionsBuilder<FocusMedDbContext>();
-        optionsBuilder.UseSqlite(
-            Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION") ?? $@"Data Source={Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed", "focusmed.db")}");
+        optionsBuilder.UseSqlite(ConnectionStringHelper.Resolve(null));
 
         return new FocusMedDbContext(optionsBuilder.Options);
     }

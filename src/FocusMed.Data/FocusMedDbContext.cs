@@ -138,5 +138,16 @@ public class FocusMedDbContext : DbContext
 
         modelBuilder.Entity<DicomImage>()
             .HasIndex(i => i.SeriesId);
+
+        // Hot-path composite indexes (Studies is polled every 2-5s; C-STORE hits it per image).
+        // Single-column indexes above are kept -- each composite serves a multi-column hot query SQLite cannot satisfy with one single-column index.
+        modelBuilder.Entity<Study>()
+            .HasIndex(s => new { s.CallingAeTitle, s.CreatedAt }); // Absorb candidates + print same-AE attach: CallingAeTitle == X AND CreatedAt >= cutoff ORDER BY CreatedAt
+
+        modelBuilder.Entity<Study>()
+            .HasIndex(s => new { s.Status, s.LastUpdatedAt }); // Completion scan + prewarm + retention + MAX(LastUpdatedAt) poll + Archives/Deleted lists
+
+        modelBuilder.Entity<Study>()
+            .HasIndex(s => new { s.StudyInstanceUid, s.Status }); // C-STORE raw-SQL grouping lookup (per image) + print resolver explicit-UID lookup
     }
 }
