@@ -30,6 +30,8 @@ public class StorageCommitmentScuService : BackgroundService
         _ourAet = networkingOptions.Value.AETitle;
     }
 
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _unmappedWarnedAt = new();
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -38,12 +40,19 @@ public class StorageCommitmentScuService : BackgroundService
             {
                 await ProcessPendingJobsAsync(stoppingToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogError(ex, "Error occurred processing storage commitment jobs.");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
     }
 
@@ -62,6 +71,18 @@ public class StorageCommitmentScuService : BackgroundService
         {
             try
             {
+                // Back off unmapped AETs: no mapping means every attempt fails, so
+                // skip the per-job image queries and warn at most once per 10 min.
+                if (!_networkingOptions.Value.StorageCommitmentScuMapping.ContainsKey(job.CallingAet))
+                {
+                    if (!_unmappedWarnedAt.TryGetValue(job.CallingAet, out var lastWarned) || DateTime.UtcNow - lastWarned > TimeSpan.FromMinutes(10))
+                    {
+                        _logger.LogWarning("No StorageCommitmentScuMapping for AET {Aet}, leaving jobs Pending (throttled)", job.CallingAet);
+                        _unmappedWarnedAt[job.CallingAet] = DateTime.UtcNow;
+                    }
+                    continue;
+                }
+
                 using var scope = _scopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<FocusMedDbContext>();
 
@@ -74,12 +95,15 @@ public class StorageCommitmentScuService : BackgroundService
 
                 if (archivedImagesCount == uids.Length)
                 {
-                    var sent = await SendNEventReportAsync(job, sopClassMap);
+                    var sent = await SendNEventReportAsync(job, sopClassMap, stoppingToken);
                     if (sent)
                     {
-                        job.Status = StorageCommitmentStatus.Completed;
-                        job.CompletedAt = DateTime.UtcNow;
-                        db.StorageCommitmentJobs.Update(job);
+                        // Re-query tracked: the list above came from a disposed scope;
+                        // Update(detached) would clobber concurrent column writes.
+                        var tracked = await db.StorageCommitmentJobs.FirstOrDefaultAsync(j => j.Id == job.Id, stoppingToken);
+                        if (tracked == null || tracked.Status != StorageCommitmentStatus.Pending) continue;
+                        tracked.Status = StorageCommitmentStatus.Completed;
+                        tracked.CompletedAt = DateTime.UtcNow;
                         await db.SaveChangesAsync(stoppingToken);
                     }
                     else
@@ -89,21 +113,22 @@ public class StorageCommitmentScuService : BackgroundService
                 }
                 else if (job.CreatedAt < DateTime.UtcNow.AddHours(-1))
                 {
-                    await SendNEventReportFailedAsync(job, sopClassMap);
-                    job.Status = StorageCommitmentStatus.Failed;
-                    job.CompletedAt = DateTime.UtcNow;
-                    db.StorageCommitmentJobs.Update(job);
+                    await SendNEventReportFailedAsync(job, sopClassMap, stoppingToken);
+                    var tracked = await db.StorageCommitmentJobs.FirstOrDefaultAsync(j => j.Id == job.Id, stoppingToken);
+                    if (tracked == null || tracked.Status != StorageCommitmentStatus.Pending) continue;
+                    tracked.Status = StorageCommitmentStatus.Failed;
+                    tracked.CompletedAt = DateTime.UtcNow;
                     await db.SaveChangesAsync(stoppingToken);
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogError(ex, "Failed to process StorageCommitmentJob {JobId}", job.Id);
             }
         }
     }
 
-    private async Task<bool> SendNEventReportAsync(FocusMed.Data.Entities.StorageCommitmentJob job, Dictionary<string, string> sopClassMap)
+    private async Task<bool> SendNEventReportAsync(FocusMed.Data.Entities.StorageCommitmentJob job, Dictionary<string, string> sopClassMap, CancellationToken ct = default)
     {
         if (!_networkingOptions.Value.StorageCommitmentScuMapping.TryGetValue(job.CallingAet, out var endpoint))
         {
@@ -151,12 +176,29 @@ public class StorageCommitmentScuService : BackgroundService
         };
 
         await client.AddRequestAsync(request);
-        await client.SendAsync();
+        // A hung peer must not stall the 10s loop forever: 30s cap, shutdown-aware.
+        // (The installed fo-dicom exposes no cancellable SendAsync overload.)
+        var sendTask = client.SendAsync();
+        Task finished;
+        try
+        {
+            finished = await Task.WhenAny(sendTask, Task.Delay(TimeSpan.FromSeconds(30), ct));
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        if (finished != sendTask)
+        {
+            _logger.LogWarning("N-EVENT-REPORT send timed out for Tx={TransactionUid}", job.TransactionUid);
+            return false;
+        }
+        await sendTask;
         _logger.LogInformation("N-EVENT-REPORT sent: Tx={TransactionUid}", job.TransactionUid);
         return true;
     }
 
-    private async Task SendNEventReportFailedAsync(FocusMed.Data.Entities.StorageCommitmentJob job, Dictionary<string, string> sopClassMap)
+    private async Task SendNEventReportFailedAsync(FocusMed.Data.Entities.StorageCommitmentJob job, Dictionary<string, string> sopClassMap, CancellationToken ct = default)
     {
         if (!_networkingOptions.Value.StorageCommitmentScuMapping.TryGetValue(job.CallingAet, out var endpoint))
         {
@@ -201,6 +243,21 @@ public class StorageCommitmentScuService : BackgroundService
         };
 
         await client.AddRequestAsync(request);
-        await client.SendAsync();
+        var sendTask = client.SendAsync();
+        Task finished;
+        try
+        {
+            finished = await Task.WhenAny(sendTask, Task.Delay(TimeSpan.FromSeconds(30), ct));
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        if (finished != sendTask)
+        {
+            _logger.LogWarning("N-EVENT-REPORT (failed) send timed out for Tx={TransactionUid}", job.TransactionUid);
+            return;
+        }
+        await sendTask;
     }
 }

@@ -43,9 +43,11 @@ public class BackupService : BackgroundService
             _logger.LogDebug("Database backup disabled (Backup:Enabled=false)");
             return;
         }
-        if (_intervalHours <= 0 || _retentionDays < 0)
+        // RetentionDays<=0 disables backups entirely: 0 would otherwise write a
+        // backup and delete it in the same run (cutoff=UtcNow), a backup illusion.
+        if (_intervalHours <= 0 || _retentionDays <= 0)
         {
-            _logger.LogWarning("Invalid Backup config (IntervalHours={Hours}, RetentionDays={Days}); backups disabled",
+            _logger.LogDebug("Database backup disabled (IntervalHours={Hours}, RetentionDays={Days})",
                 _intervalHours, _retentionDays);
             return;
         }

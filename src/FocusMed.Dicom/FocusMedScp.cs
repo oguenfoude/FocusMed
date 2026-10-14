@@ -45,6 +45,7 @@ public class FocusMedScp : DicomService,
     private string? _incomingPatientBirthDate;
     private string? _incomingPatientSex;
 
+    private static int _transferSyntaxWarned;
     private static readonly Dictionary<string, DicomTransferSyntax> TransferSyntaxMap = new()
     {
         ["ImplicitVRLittleEndian"] = DicomTransferSyntax.ImplicitVRLittleEndian,
@@ -78,6 +79,40 @@ public class FocusMedScp : DicomService,
             .Select(name => TransferSyntaxMap.TryGetValue(name, out var ts) ? ts : null)
             .Where(ts => ts != null)
             .ToArray()!;
+
+        // Fail-loud once (not per-association): a misspelled SupportedTransferSyntaxes
+        // entry would otherwise just shrink negotiation into reject storms.
+        var unknownSyntaxes = _networkingOptions.Value.SupportedTransferSyntaxes
+            .Where(name => !TransferSyntaxMap.ContainsKey(name))
+            .ToArray();
+        if (unknownSyntaxes.Length > 0 && Interlocked.Exchange(ref _transferSyntaxWarned, 1) == 0)
+            _logger.LogWarning("Unknown transfer syntax names ignored: {Names}", string.Join(",", unknownSyntaxes));
+    }
+
+    private static string NormalizeIp(string? ip)
+    {
+        if (string.IsNullOrWhiteSpace(ip)) return string.Empty;
+        ip = ip.Trim().Trim('[', ']');
+        if (ip == "::1" || ip == "::ffff:127.0.0.1") return "127.0.0.1";
+        return ip;
+    }
+
+    // Unbounded wildcard C-FIND would dump whole tables (PHI + full scans).
+    private const int MaxCFindResults = 200;
+
+    // Escape user input for EF.Functions.Like: a literal % _ [ would otherwise
+    // act as a wildcard and disclose more rows than asked for.
+    private static string EscapeLike(string value) =>
+        value.Replace("[", "[[]").Replace("%", "[%]").Replace("_", "[_]");
+
+    // PS3.5 9.2: 2.25.<decimal digits of UUID>. $"2.25.{Guid:N}" is hex — invalid.
+    private static string NewDecimalUuidUid()
+    {
+        var bytes = Guid.NewGuid().ToByteArray();
+        System.Numerics.BigInteger bi = 0;
+        foreach (var b in bytes) bi = (bi << 8) | b;
+        if (bi.Sign < 0) bi = -bi;
+        return "2.25." + bi.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     public async Task OnReceiveAssociationRequestAsync(DicomAssociation association)
@@ -98,11 +133,14 @@ public class FocusMedScp : DicomService,
 
         if (_networkingOptions.Value.EnforceAeWhitelist)
         {
-            var callingAe = association.CallingAE;
-            var remoteIp = association.RemoteHost;
+            // Normalize: AE titles are space-padded/case varies by SCU, and the same
+            // localhost arrives as 127.0.0.1 vs ::1/::ffff:127.0.0.1 on dual-stack.
+            var callingAe = (association.CallingAE ?? string.Empty).Trim();
+            var remoteIp = NormalizeIp(association.RemoteHost);
 
             var allowed = _networkingOptions.Value.AllowedCallingAETitles
-                .Any(ae => ae.AETitle == callingAe && ae.IPAddress == remoteIp);
+                .Any(ae => string.Equals((ae.AETitle ?? string.Empty).Trim(), callingAe, StringComparison.OrdinalIgnoreCase)
+                    && NormalizeIp(ae.IPAddress) == remoteIp);
 
             if (!allowed)
             {
@@ -316,25 +354,28 @@ public class FocusMedScp : DicomService,
             if (!string.IsNullOrWhiteSpace(patientId)) query = query.Where(w => w.PatientId.Contains(patientId));
             if (!string.IsNullOrWhiteSpace(patientName) && patientName != "*")
             {
-                var searchName = patientName.Replace("*", "").Replace("?", "");
+                var searchName = EscapeLike(patientName.Replace("*", "").Replace("?", ""));
                 query = query.Where(w => EF.Functions.Like(w.PatientName, $"%{searchName}%"));
             }
 
-            var entries = await query.ToListAsync();
+            var entries = await query.Take(MaxCFindResults).ToListAsync();
+            if (entries.Count == MaxCFindResults)
+                _logger.LogInformation("C-FIND MWL truncated at {Max} rows (unbounded query capped)", MaxCFindResults);
 
             foreach (var entry in entries)
             {
-                if (string.IsNullOrEmpty(entry.StudyInstanceUid))
-                {
-                    entry.StudyInstanceUid = $"2.25.{Guid.NewGuid():N}";
-                }
+                // Fill response only — a read must never persist side-effects, and
+                // $"2.25.{Guid:N}" is hex (non-conformant); 2.25 requires decimal UUID.
+                var responseStudyUid = entry.StudyInstanceUid;
+                if (string.IsNullOrEmpty(responseStudyUid))
+                    responseStudyUid = NewDecimalUuidUid();
 
                 var responseDataset = new DicomDataset
                 {
                     { DicomTag.PatientName, entry.PatientName },
                     { DicomTag.PatientID, entry.PatientId },
                     { DicomTag.AccessionNumber, entry.AccessionNumber },
-                    { DicomTag.StudyInstanceUID, entry.StudyInstanceUid },
+                    { DicomTag.StudyInstanceUID, responseStudyUid },
                     { DicomTag.RequestedProcedureID, entry.RequestedProcedureId }
                 };
 
@@ -353,7 +394,6 @@ public class FocusMedScp : DicomService,
                 results.Add(new DicomCFindResponse(request, DicomStatus.Pending) { Dataset = responseDataset });
             }
 
-            await db.SaveChangesAsync();
             results.Add(new DicomCFindResponse(request, DicomStatus.Success));
             return results.ToArray();
         }
@@ -369,7 +409,9 @@ public class FocusMedScp : DicomService,
             if (!string.IsNullOrWhiteSpace(patientName) && patientName != "*")
                 query = query.Where(p => p.PatientName.Contains(patientName));
 
-            var patients = await query.ToListAsync();
+            var patients = await query.Take(MaxCFindResults).ToListAsync();
+            if (patients.Count == MaxCFindResults)
+                _logger.LogInformation("C-FIND PATIENT truncated at {Max} rows", MaxCFindResults);
 
             foreach (var patient in patients)
             {
@@ -399,7 +441,9 @@ public class FocusMedScp : DicomService,
             if (!string.IsNullOrWhiteSpace(patientName))
                 query = query.Where(s => s.Patient.PatientName.Contains(patientName));
 
-            var studies = await query.ToListAsync();
+            var studies = await query.Take(MaxCFindResults).ToListAsync();
+            if (studies.Count == MaxCFindResults)
+                _logger.LogInformation("C-FIND STUDY truncated at {Max} rows", MaxCFindResults);
 
             foreach (var study in studies)
             {
@@ -429,7 +473,9 @@ public class FocusMedScp : DicomService,
             if (!string.IsNullOrWhiteSpace(modality))
                 query = query.Where(s => s.Modality.Contains(modality));
 
-            var seriesList = await query.ToListAsync();
+            var seriesList = await query.Take(MaxCFindResults).ToListAsync();
+            if (seriesList.Count == MaxCFindResults)
+                _logger.LogInformation("C-FIND SERIES truncated at {Max} rows", MaxCFindResults);
 
             foreach (var series in seriesList)
             {
@@ -545,7 +591,13 @@ public class FocusMedScp : DicomService,
             };
         }
 
-        yield return new DicomCMoveResponse(request, DicomStatus.Success)
+        // Never claim Success when sub-operations actually failed: all-failed is a
+        // failure, partial is the standard Q/R warning — the counts stay accurate.
+        var finalStatus = failed > 0 && images.Count > 0 && failed == images.Count
+            ? DicomStatus.ProcessingFailure
+            : failed > 0 ? DicomStatus.QueryRetrieveSubOpsOneOrMoreFailures
+            : DicomStatus.Success;
+        yield return new DicomCMoveResponse(request, finalStatus)
         {
             Dataset = new DicomDataset
             {
@@ -582,6 +634,11 @@ public class FocusMedScp : DicomService,
                 var existing = await db.PrintJobs.FirstOrDefaultAsync(p => p.SopInstanceUid == sopUid);
                 if (existing != null)
                 {
+                    // Fill-only refresh: a retried session may carry corrected AE/IP.
+                    // Never clobber already-stored values.
+                    if (string.IsNullOrWhiteSpace(existing.CallingAeTitle)) existing.CallingAeTitle = Association.CallingAE;
+                    if (string.IsNullOrWhiteSpace(existing.RemoteIp)) existing.RemoteIp = Association.RemoteHost;
+                    await db.SaveChangesAsync();
                     var ds = new DicomDataset(request.Dataset);
                     ds.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
                     return new DicomNCreateResponse(request, DicomStatus.Success) { Dataset = ds };
@@ -772,6 +829,35 @@ public class FocusMedScp : DicomService,
                 }
 
                 var filmBox = await db.FilmBoxes.FirstOrDefaultAsync(f => f.SopInstanceUid == filmBoxUid);
+                if (filmBox == null)
+                {
+                    // Mirror the FilmBox path: attach via the association fallback so a
+                    // stray ImageBox N-CREATE never becomes an orphan (null FilmBoxId)
+                    // that N-SET/print flows cannot reach.
+                    PrintJob? fallbackJob = null;
+                    if (!string.IsNullOrEmpty(_fallbackPrintJobSopUid))
+                        fallbackJob = await db.PrintJobs.FirstOrDefaultAsync(p => p.SopInstanceUid == _fallbackPrintJobSopUid);
+                    if (fallbackJob == null)
+                        fallbackJob = await db.PrintJobs
+                            .Where(p => p.CallingAeTitle == Association.CallingAE && p.CreatedAt >= DateTime.UtcNow.AddSeconds(-60))
+                            .OrderByDescending(p => p.CreatedAt)
+                            .FirstOrDefaultAsync();
+                    if (fallbackJob == null)
+                    {
+                        fallbackJob = new PrintJob { SopInstanceUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID, CallingAeTitle = Association.CallingAE, RemoteIp = Association.RemoteHost };
+                        db.PrintJobs.Add(fallbackJob);
+                        await db.SaveChangesAsync();
+                    }
+                    _fallbackPrintJobSopUid = fallbackJob.SopInstanceUid;
+                    filmBox = new FilmBox
+                    {
+                        SopInstanceUid = string.IsNullOrEmpty(filmBoxUid) ? DicomUIDGenerator.GenerateDerivedFromUUID().UID : filmBoxUid,
+                        PrintJobId = fallbackJob.Id
+                    };
+                    db.FilmBoxes.Add(filmBox);
+                    await db.SaveChangesAsync();
+                    _logger.LogWarning("ImageBox N-CREATE: no FilmBox for UID '{FilmBoxUid}', attached via association fallback (FilmBox #{FilmBoxId})", filmBoxUid ?? "(empty)", filmBox.Id);
+                }
 
                 var refImageUid = string.Empty;
                 if (request.Dataset.TryGetSequence(DicomTag.ReferencedImageSequence, out var refImageSeq)
@@ -1035,7 +1121,8 @@ public class FocusMedScp : DicomService,
         try { sopClassUid = request.SOPClassUID?.UID ?? string.Empty; }
         catch (Exception ex) { _logger.LogDebug(ex, "Failed to extract SOP Class UID from N-ACTION request"); sopClassUid = string.Empty; }
 
-        var actionType = request.Dataset.GetSingleValueOrDefault(DicomTag.ActionTypeID, (ushort)0);
+        // Dataset may be absent (dataset-less print release) — never dereference directly.
+        var actionType = request.Dataset?.GetSingleValueOrDefault(DicomTag.ActionTypeID, (ushort)0) ?? (ushort)0;
 
         try
         {
@@ -1066,7 +1153,7 @@ public class FocusMedScp : DicomService,
                         }
                     }
                 }
-                else if (sopClassUid == StorageCommitmentSopClassUid)
+                else if (sopClassUid == StorageCommitmentSopClassUid && request.Dataset != null)
                 {
                     var transactionUid = request.Dataset.GetSingleValueOrDefault(DicomTag.TransactionUID, string.Empty);
                     if (request.Dataset.TryGetSequence(DicomTag.ReferencedSOPSequence, out var referencedSopSeq)
@@ -1086,8 +1173,11 @@ public class FocusMedScp : DicomService,
                             Status = StorageCommitmentStatus.Pending
                         };
 
-                        var duplicate = await db.StorageCommitmentJobs
-                            .AnyAsync(j => j.TransactionUid == transactionUid);
+                        // Empty TransactionUID must not dedup-suppress: SCUs that omit
+                        // it would otherwise block each other (first empty wins).
+                        var duplicate = !string.IsNullOrWhiteSpace(transactionUid)
+                            && await db.StorageCommitmentJobs
+                                .AnyAsync(j => j.TransactionUid == transactionUid);
                         if (duplicate)
                         {
                             _logger.LogDebug("Duplicate StorageCommitment TransactionUID {TransactionUid} ignored", transactionUid);
@@ -1140,9 +1230,10 @@ public class FocusMedScp : DicomService,
 
         if (string.IsNullOrEmpty(sopUid))
         {
-            // Some SCUs send N-DELETE without a SOP Instance UID after printing. Rejecting
-            // with InvalidArgumentValue broke their flow; tolerate it and just report Success.
-            _logger.LogWarning("N-DELETE: SOP Instance UID is empty. Returning Success to keep the SCU flow intact.");
+            // Some SCUs (e.g. SonoVision) send N-DELETE without a SOP Instance UID after
+            // printing. Rejecting broke their flow; tolerate it and just report Success.
+            // Information, not Warning: this is the normal teardown for those devices.
+            _logger.LogInformation("N-DELETE: SOP Instance UID is empty from AE={Ae}. Returning Success (normal SCU teardown, nothing deleted).", Association.CallingAE);
 
             var successCmd = new DicomDataset
             {

@@ -52,8 +52,8 @@ public class PngExtractionService
             .Include(i => i.Frames)
             .AsSplitQuery()
             .Where(i => i.Series.StudyId == studyId)
-            .OrderBy(i => i.Series!.SeriesInstanceUid)
-            .ThenBy(i => i.SopInstanceUid)
+            .OrderBy(i => i.SortOrder)
+            .ThenBy(i => i.Id)
             .ToListAsync(ct);
 
         if (images.Count == 0)
@@ -237,7 +237,7 @@ public class PngExtractionService
             }
 
             await db.SaveChangesAsync(ct);
-            _logger.LogInformation("PNG extracted: {SopUid} ({Frames} frames)", fresh.SopInstanceUid, image.NumberOfFrames);
+            _logger.LogDebug("PNG extracted: {SopUid} ({Frames} frames)", fresh.SopInstanceUid, image.NumberOfFrames);
         }
         catch (Exception ex)
         {

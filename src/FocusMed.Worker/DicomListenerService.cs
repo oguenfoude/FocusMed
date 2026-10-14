@@ -34,7 +34,8 @@ public class DicomListenerService : BackgroundService
             var activeListeners = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();
             if (activeListeners.Any(endpoint => endpoint.Port == _port))
             {
-                _logger.LogCritical("FATAL: Port {Port} is already in use. The DICOM listener cannot start.", _port);
+                // Warning here — the catch below logs the single Critical (with stack).
+                _logger.LogWarning("Port {Port} is already in use. The DICOM listener cannot start.", _port);
                 throw new InvalidOperationException($"Port {_port} is already in use. Cannot start DICOM listener.");
             }
 

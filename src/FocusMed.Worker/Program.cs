@@ -29,9 +29,7 @@ try
         .UseSerilog()
         .ConfigureServices((hostContext, services) =>
         {
-            var connectionString = hostContext.Configuration.GetValue<string>("ConnectionString")
-                ?? Environment.GetEnvironmentVariable("FOCUSMED_DB_CONNECTION")
-                ?? $@"Data Source={Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FocusMed", "focusmed.db")}";
+            var connectionString = ConnectionStringHelper.Resolve(hostContext.Configuration.GetValue<string>("ConnectionString"));
 
             // Set env var for downstream services
             Environment.SetEnvironmentVariable("FOCUSMED_DB_CONNECTION", connectionString);
