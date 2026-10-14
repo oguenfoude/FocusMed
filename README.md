@@ -42,7 +42,7 @@ DICOM listener successfully starting on 0.0.0.0:11112 as AE Title 'FOCUSMED'
 
 ```
 src/
-├── FocusMed.Data/               SQLite + EF Core. 11 entities, 4 enums, 2 migrations. No business logic. (net10.0)
+├── FocusMed.Data/               SQLite + EF Core. 11 entities, 4 enums, 6 migrations. No business logic. (net10.0)
 ├── FocusMed.Dicom/              fo-dicom-based SCP. Ingestion, MWL, Print, Storage Commitment, auto-merge. (net10.0)
 ├── FocusMed.Worker/             Top-level Program.cs, Serilog, DI, DICOM listener. (net10.0)
 ├── FocusMed.Dashboard/          Blazor Server UI (HTTP :5000). Browse/archive/delete studies, PDF preview + printing. (net10.0-windows)
@@ -77,7 +77,7 @@ The Dashboard provides:
 
 Other:
 - Enriched association logging to `%LOCALAPPDATA%\FocusMed\logs\dicom_associations.log`
-- Study completion detection via background polling (stable after `StudyStabilizationSeconds`)
+- Manual study termination only: studies stay `Receiving` until the operator clicks Terminé (no auto-complete); `StudyStabilizationSeconds` now only gates PDF prewarm eligibility
 - Graceful shutdown drain for storage forward queue
 - Resume capture: print to the "FocusMed" virtual printer → WPF popup picks a study and attaches the PDF
 - NuGet cache-friendly, zero build warnings
@@ -155,7 +155,7 @@ All non-default config goes in `src/FocusMed.Worker/appsettings.json` (the Launc
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `ConnectionString` | `Data Source=focusmed.db` | SQLite connection string |
-| `StudyStabilizationSeconds` | `60` | Inactivity before study → Complete |
+| `StudyStabilizationSeconds` | `60` | Inactivity before a Receiving study becomes prewarm-eligible (no auto-complete; Terminé is manual) |
 | `PngExtraction:Enabled` | `true` | On-demand PNG extraction toggle |
 
 ### `StorageForwardTargets[]` (C-STORE SCU Auto-Forward)
@@ -184,21 +184,26 @@ dotnet ef migrations add <Name> --project src/FocusMed.Data --startup-project sr
 Existing migrations are auto-applied on app startup. Current set:
 - `20260821215516_InitialSqlite`
 - `20260829135437_PrintMergeSupport`
+- `20260907174140_SourceTracking`
+- `20260929174049_ImageSortOrder`
+- `20260929200000_ImageSelection`
+- `20261005120559_StudyHotPathIndexes`
 
 ## Deployment
 
 ### Quick Install (recommended)
 
-1. Build the distribution:
+1. Build the self-contained distribution (no .NET runtime needed on clients):
    ```powershell
-   dotnet publish src/FocusMed.Worker -c Release -o dist
-   dotnet publish src/FocusMed.Dashboard -c Release -o dist
-   dotnet publish src/FocusMed.Launcher -c Release -o dist
+   dotnet publish src/FocusMed.Worker -c Release -r win-x64 --self-contained true -o deploy
+   dotnet publish src/FocusMed.Dashboard -c Release -r win-x64 --self-contained true -o deploy
+   dotnet publish src/FocusMed.Launcher -c Release -r win-x64 --self-contained true -o deploy
    ```
 
-2. Copy the `dist/` folder to the target PC.
+2. Compile `installer/FocusMed.iss` with Inno Setup → `FocusMedSetup-*.exe`
+   (backs up the live DB pre-upgrade; preserves the operator's `config.json`).
 
-3. Right-click `dist/Install.bat` → **Run as administrator**.
+3. Run the setup **as administrator** on the target PC.
 
 That's it. The Launcher auto-detects:
 - Local IP address
@@ -219,7 +224,8 @@ Everything else (firewall rule, autostart task, virtual printer, database) is se
 
 ### To Uninstall
 
-Right-click `dist/Uninstall.bat` → **Run as administrator**.
+Use **Add/Remove Programs → FocusMed → Uninstall** (stops services, removes the
+autostart task and firewall rule).
 
 ### Manual Development Mode
 

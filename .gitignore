@@ -61,3 +61,16 @@ dist/
 
 # Installer script (.iss) is tracked; the built Setup binary is huge (>100MB, exceeds GitHub limit)
 installer/*.exe
+
+# Runtime data dirs (may appear at repo root during dev; can contain PHI PDFs/PNGs)
+/pdf-cache/
+/images/
+/archive/
+/resumes/
+/covers/
+/backups/
+/config.json
+*.log
+
+# Local AI session memory (duplicates AGENTS.md, goes stale fast)
+MEMORY.md
